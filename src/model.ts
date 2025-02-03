@@ -199,25 +199,6 @@ export interface FunctionDefinition {
 	returnType: FunctionReturnType;
 }
 
-export const DEFAULT_CODE = `terraform {
-    source = "git::git@github.com:foo/bar.git//modules/example?ref=v0.0.1"
-}
-
-include {
-    path = find_in_parent_folders("wewe")
-}
-
-inputs = {
-    environment = "dev"
-    region      = "us-east-1"
-    tags = {
-        Terraform   = "true"
-        Environment = "dev"
-    }
-    subnets = ["subnet-1", "subnet-2"]
-    dsd = 23
-}`;
-
 // Define allowed values for attributes
 export interface ValueDefinition {
 	type: ValueType;

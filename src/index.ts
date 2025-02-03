@@ -203,3 +203,5 @@ export class ParsedDocument {
 
 
 }
+
+export type { Token };
