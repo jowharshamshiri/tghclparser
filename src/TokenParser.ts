@@ -3,6 +3,55 @@ import type { TokenDecorator} from './model.js';
 import { DECORATOR_PATTERNS, Token, TOKEN_PATTERNS    } from './model.js';
 
 export class TokenParser {
+
+	private handleBareToken(line: string, currentRow: number, currentCol: number, tokens: Token[], addToken: (token: Token, tokens: Token[]) => void): [boolean, number] {
+		// Skip leading whitespace
+		while (currentCol < line.length && /\s/.test(line[currentCol])) {
+			currentCol++;
+		}
+	
+		// If we're at the end of the line or hit a comment, return
+		if (currentCol >= line.length || 
+			line[currentCol] === '#' || 
+			line.slice(currentCol).startsWith('//') ||
+			line[currentCol] === '"' ||
+			line[currentCol] === '{' ||
+			line[currentCol] === '}' ||
+			line[currentCol] === '(' ||
+			line[currentCol] === ')') {
+			return [false, currentCol];
+		}
+	
+		// Check if we're part of a larger word/identifier
+		// Look backwards to ensure we're at a word boundary
+		if (currentCol > 0 && /\w/.test(line[currentCol - 1])) {
+			return [false, currentCol];
+		}
+	
+		// Don't treat content inside function calls as bare tokens
+		// Include the function name itself
+		const beforeCursor = line.slice(0, currentCol);
+		const funcCallMatch = beforeCursor.match(/\w+\s*\([^)]*$/);
+		if (funcCallMatch) {
+			return [false, currentCol];
+		}
+	
+		// Look for complete bare words (must be bounded by non-word chars)
+		const match = line.slice(currentCol).match(/^([a-zA-Z_]\w*)(?!\w)/);
+		if (match && !line.slice(currentCol + match[1].length).trim().startsWith('(')) {
+			const bareToken = new Token(
+				'bare_token',
+				match[1],
+				currentRow,
+				currentCol,
+				currentCol + match[1].length
+			);
+			addToken(bareToken, tokens);
+			return [true, currentCol + match[1].length];
+		}
+	
+		return [false, currentCol];
+	}
 	parseLineContent(
 		slice: string,
 		lines: string[],
@@ -14,6 +63,7 @@ export class TokenParser {
 		addToken: (token: Token, tokens: Token[]) => void,
 		expressionParser: ExpressionParser
 	): [boolean, number, number] {
+
 		// Handle blocks with parameters
 		const blockParamMatch = TOKEN_PATTERNS.BLOCK_WITH_PARAM.exec(slice);
 		if (blockParamMatch) {
@@ -150,7 +200,13 @@ export class TokenParser {
 			return [true, currentRow + 1, 0];
 		}
 	
-		// Skip whitespace
+		// Handle bare tokens (invalid syntax)
+		const [handled, newCol] = this.handleBareToken(lines[currentRow], currentRow,currentCol, tokens, addToken);
+		if (handled) {
+			return [true, currentRow, newCol];
+		}
+	
+		// Handle whitespace
 		if (TOKEN_PATTERNS.WHITESPACE.test(slice[0])) {
 			return [true, currentRow, currentCol + 1];
 		}
