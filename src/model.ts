@@ -30,6 +30,7 @@ export type ComplexValueType =
 export type ValueType = PrimitiveValueType | ComplexValueType;
 
 export type TokenType =
+	| 'bare_token'
 	| 'block'
 	| 'identifier'
 	| 'string_lit'

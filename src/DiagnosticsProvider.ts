@@ -25,188 +25,210 @@ export class DiagnosticsProvider {
                 this.validateBlock(token, diagnostics, parsedDocument);
             } else if (token.type === 'function_call') {
                 this.validateFunctionCall(token, diagnostics, parsedDocument);
-            }
+            } else if (token.type === 'bare_token') {
+					diagnostics.push({
+						range: this.tokenToRange(token),
+						message: `Invalid syntax: unexpected bare word "${token.text}". Expected attribute assignment (key = value) or block definition`,
+						severity: DiagnosticSeverity.Error,
+						source: 'terragrunt'
+					});
+				}
+			
 
             if (token.children?.length > 0) {
                 stack.push(...token.children.slice().reverse());
             }
         }
     }
-
 	private validateBlock(token: Token, diagnostics: Diagnostic[], parsedDocument: ParsedDocument) {
-        const parentToken = parsedDocument.findParentBlock(token);
-        const template = parentToken
-            ? parsedDocument.getSchema().findNestedBlockTemplate(parentToken.text, token.text)
-            : parsedDocument.getSchema().getBlockTemplate(token.text);
-
-        if (!template) {
-            // Only validate as unknown block if parent doesn't have arbitraryAttributes
-            const parentTemplate = parentToken 
-                ? parsedDocument.getSchema().getBlockTemplate(parentToken.text)
-                : null;
-
-            if (!parentTemplate?.arbitraryAttributes) {
-                const contextMessage = parentToken ? ` in "${parentToken.text}" block` : '';
-                diagnostics.push({
-                    range: this.tokenToRange(token),
-                    message: `Unknown block type: ${token.text}${contextMessage}`,
-                    severity: DiagnosticSeverity.Error,
-                    source: 'terragrunt'
-                });
-            }
-            return;
-        }
-
-        // Validate block parameters
-        if (template.parameters && template.parameters.length > 0) {
-            const paramToken = token.children.find(child => child.type === 'block_parameter');
-            if (!paramToken && template.parameters.some(p => p.required)) {
-                diagnostics.push({
-                    range: this.tokenToRange(token),
-                    message: `Missing required parameter for block "${token.text}"`,
-                    severity: DiagnosticSeverity.Error,
-                    source: 'terragrunt'
-                });
-            } else if (paramToken && template.parameters[0].pattern) {
-                const pattern = new RegExp(template.parameters[0].pattern);
-                if (!pattern.test(paramToken.text)) {
-                    diagnostics.push({
-                        range: this.tokenToRange(paramToken),
-                        message: `Parameter value must match pattern: ${template.parameters[0].pattern}`,
-                        severity: DiagnosticSeverity.Error,
-                        source: 'terragrunt'
-                    });
-                }
-            }
-        }
-
-        const foundAttrs = new Set(
-            token.children
-                ?.filter(c => c.type === 'identifier')
-                .map(c => c.text) ?? []
-        );
-
-        // Always validate required attributes regardless of arbitraryAttributes flag
-        if (template.attributes) {
-            for (const attr of template.attributes) {
-                if (attr.required && !foundAttrs.has(attr.name)) {
-                    diagnostics.push({
-                        range: this.tokenToRange(token),
-                        message: `Missing required attribute: ${attr.name}`,
-                        severity: DiagnosticSeverity.Error,
-                        source: 'terragrunt'
-                    });
-                }
-            }
-        }
-
-        // Validate attributes and their values
-        for (const child of token.children ?? []) {
-            if (child.type === 'identifier') {
-                const attrDef = template.attributes?.find(attr => attr.name === child.text);
-                
-                if (attrDef) {
-                    // If it's a defined attribute, validate it according to its schema
-                    this.validateAttributeValue(child, attrDef.value, diagnostics, parsedDocument);
-                } else if (!template.arbitraryAttributes) {
-                    // Only report unknown attributes if arbitraryAttributes is false
-                    diagnostics.push({
-                        range: this.tokenToRange(child),
-                        message: `Unknown attribute "${child.text}" in block "${token.text}"`,
-                        severity: DiagnosticSeverity.Error,
-                        source: 'terragrunt'
-                    });
-                } else {
-                    // For arbitrary attributes, still validate that the value is a valid type
-                    const value = child.children[0];
-                    if (!value) {
-                        diagnostics.push({
-                            range: this.tokenToRange(child),
-                            message: `Missing value for attribute "${child.text}"`,
-                            severity: DiagnosticSeverity.Error,
-                            source: 'terragrunt'
-                        });
-                    } else if (!this.isValidValueType(value.type)) {
-                        diagnostics.push({
-                            range: this.tokenToRange(value),
-                            message: `Invalid value type for attribute "${child.text}"`,
-                            severity: DiagnosticSeverity.Error,
-                            source: 'terragrunt'
-                        });
-                    } else {
-                        this.validateValueSyntax(value, child, diagnostics);
-                    }
-                }
-            }
-        }
-
-        // Validate nested blocks only if not in an arbitraryAttributes block
-        if (!template.arbitraryAttributes && template.blocks) {
-            for (const nestedBlock of token.children ?? []) {
-                if (nestedBlock.type === 'block') {
-                    const nestedTemplate = template.blocks.find(b => b.type === nestedBlock.text);
-                    if (!nestedTemplate) {
-                        diagnostics.push({
-                            range: this.tokenToRange(nestedBlock),
-                            message: `Unknown nested block type "${nestedBlock.text}" in "${token.text}"`,
-                            severity: DiagnosticSeverity.Error,
-                            source: 'terragrunt'
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-	private isValidNumber(value: string): boolean {
-        // For integers
-        if (/^-?\d+$/.test(value)) return true;
-        // For floats
-        if (/^-?\d+\.\d+$/.test(value)) return true;
-        // For floats with f suffix
-        if (/^-?\d+\.\d+f$/.test(value)) return true;
-        return false;
-    }
-
-    private validateValueSyntax(value: Token, token: Token, diagnostics: Diagnostic[]) {
-        switch(value.type) {
-            case 'integer_lit':
-            case 'float_lit':
-            case 'float_lit_with_f':
-                if (!this.isValidNumber(value.text)) {
-                    diagnostics.push({
-                        range: this.tokenToRange(value),
-                        message: `Invalid numeric value "${value.text}" for attribute "${token.text}"`,
-                        severity: DiagnosticSeverity.Error,
-                        source: 'terragrunt'
-                    });
-                }
-                break;
-        }
-    }
-
-	private validateArbitraryAttributeValue(token: Token, diagnostics: Diagnostic[], parsedDocument: ParsedDocument) {
-		const value = token.children[0];
-		if (!value) {
-			diagnostics.push({
-				range: this.tokenToRange(token),
-				message: `Missing value for attribute "${token.text}"`,
-				severity: DiagnosticSeverity.Error,
-				source: 'terragrunt'
-			});
+		const parentToken = parsedDocument.findParentBlock(token);
+		const template = parentToken
+			? parsedDocument.getSchema().findNestedBlockTemplate(parentToken.text, token.text)
+			: parsedDocument.getSchema().getBlockTemplate(token.text);
+	
+		if (!template) {
+			// Only validate as unknown block if parent doesn't have arbitraryAttributes
+			const parentTemplate = parentToken 
+				? parsedDocument.getSchema().getBlockTemplate(parentToken.text)
+				: null;
+	
+			if (!parentTemplate?.arbitraryAttributes) {
+				const contextMessage = parentToken ? ` in "${parentToken.text}" block` : '';
+				diagnostics.push({
+					range: this.tokenToRange(token),
+					message: `Unknown block type: ${token.text}${contextMessage}`,
+					severity: DiagnosticSeverity.Error,
+					source: 'terragrunt'
+				});
+			}
 			return;
 		}
-
-		if (!this.isValidValueType(value.type)) {
-			diagnostics.push({
-				range: this.tokenToRange(value),
-				message: `Invalid value type for attribute "${token.text}"`,
-				severity: DiagnosticSeverity.Error,
-				source: 'terragrunt'
-			});
+	
+		// First, validate the overall structure of the block's content
+		for (const child of token.children ?? []) {
+			// Valid tokens are either blocks, identifiers that are part of attribute assignments,
+			// or block parameters
+			if (child.type === 'block') {
+				continue; // Will be validated separately
+			} else if (child.type === 'block_parameter') {
+				continue; // Will be validated as part of parameter validation
+			} else if (child.type === 'identifier') {
+				// An identifier must have exactly one child that represents its value
+				if (child.children.length === 0) {
+					diagnostics.push({
+						range: this.tokenToRange(child),
+						message: `Missing value for attribute "${child.text}"`,
+						severity: DiagnosticSeverity.Error,
+						source: 'terragrunt'
+					});
+				}
+			} else if (child.type === 'inline_comment' || child.type === 'block_comment') {
+				continue; // Ignore comments
+			} else {
+				// Any other token type is invalid in this context
+				diagnostics.push({
+					range: this.tokenToRange(child),
+					message: `Unexpected "${child.type === 'string_lit' ? child.text : child.type}" in block. Expected attribute assignment or block definition`,
+					severity: DiagnosticSeverity.Error,
+					source: 'terragrunt'
+				});
+			}
+		}
+	
+		// Validate block parameters
+		if (template.parameters && template.parameters.length > 0) {
+			const paramToken = token.children.find(child => child.type === 'block_parameter');
+			if (!paramToken && template.parameters.some(p => p.required)) {
+				diagnostics.push({
+					range: this.tokenToRange(token),
+					message: `Missing required parameter for block "${token.text}"`,
+					severity: DiagnosticSeverity.Error,
+					source: 'terragrunt'
+				});
+			} else if (paramToken && template.parameters[0].pattern) {
+				const pattern = new RegExp(template.parameters[0].pattern);
+				if (!pattern.test(paramToken.text)) {
+					diagnostics.push({
+						range: this.tokenToRange(paramToken),
+						message: `Parameter value must match pattern: ${template.parameters[0].pattern}`,
+						severity: DiagnosticSeverity.Error,
+						source: 'terragrunt'
+					});
+				}
+			}
+		}
+	
+		// Collect and validate attributes
+		const foundAttrs = new Set(
+			token.children
+				?.filter(c => c.type === 'identifier')
+				.map(c => c.text) ?? []
+		);
+	
+		// Always validate required attributes regardless of arbitraryAttributes flag
+		if (template.attributes) {
+			for (const attr of template.attributes) {
+				if (attr.required && !foundAttrs.has(attr.name)) {
+					diagnostics.push({
+						range: this.tokenToRange(token),
+						message: `Missing required attribute: ${attr.name}`,
+						severity: DiagnosticSeverity.Error,
+						source: 'terragrunt'
+					});
+				}
+			}
+		}
+	
+		// Validate each identifier-value pair and nested blocks
+		for (const child of token.children ?? []) {
+			if (child.type === 'identifier') {
+				const attrDef = template.attributes?.find(attr => attr.name === child.text);
+				
+				if (attrDef) {
+					// If it's a defined attribute, validate it according to its schema
+					this.validateAttributeValue(child, attrDef.value, diagnostics, parsedDocument);
+				} else if (!template.arbitraryAttributes) {
+					// Only report unknown attributes if arbitraryAttributes is false
+					diagnostics.push({
+						range: this.tokenToRange(child),
+						message: `Unknown attribute "${child.text}" in block "${token.text}"`,
+						severity: DiagnosticSeverity.Error,
+						source: 'terragrunt'
+					});
+				} else {
+					// For arbitrary attributes, validate value and check for trailing content
+					if (child.children.length === 0) {
+						diagnostics.push({
+							range: this.tokenToRange(child),
+							message: `Missing value for attribute "${child.text}"`,
+							severity: DiagnosticSeverity.Error,
+							source: 'terragrunt'
+						});
+					} else if (child.children.length > 1) {
+						// Report error for any token after the first one
+						for (let i = 1; i < child.children.length; i++) {
+							diagnostics.push({
+								range: this.tokenToRange(child.children[i]),
+								message: `Unexpected token after value in attribute "${child.text}"`,
+								severity: DiagnosticSeverity.Error,
+								source: 'terragrunt'
+							});
+						}
+					} else {
+						const value = child.children[0];
+						if (!this.isValidValueType(value.type)) {
+							diagnostics.push({
+								range: this.tokenToRange(value),
+								message: `Invalid value type for attribute "${child.text}"`,
+								severity: DiagnosticSeverity.Error,
+								source: 'terragrunt'
+							});
+						} else {
+							this.validateValueSyntax(value, child, diagnostics);
+						}
+					}
+				}
+			} else if (child.type === 'block' && !template.arbitraryAttributes) {
+				// Only validate nested blocks if not in an arbitraryAttributes block
+				const nestedTemplate = template.blocks?.find(b => b.type === child.text);
+				if (!nestedTemplate) {
+					diagnostics.push({
+						range: this.tokenToRange(child),
+						message: `Unknown nested block type "${child.text}" in "${token.text}"`,
+						severity: DiagnosticSeverity.Error,
+						source: 'terragrunt'
+					});
+				}
+			}
 		}
 	}
 
+	private isValidNumber(value: string): boolean {
+		// For integers
+		if (/^-?\d+$/.test(value)) return true;
+		// For floats
+		if (/^-?\d+\.\d+$/.test(value)) return true;
+		// For floats with f suffix
+		if (/^-?\d+\.\d+f$/.test(value)) return true;
+		return false;
+	}
+	
+	private validateValueSyntax(value: Token, token: Token, diagnostics: Diagnostic[]) {
+		switch(value.type) {
+			case 'integer_lit':
+			case 'float_lit':
+			case 'float_lit_with_f':
+				if (!this.isValidNumber(value.text)) {
+					diagnostics.push({
+						range: this.tokenToRange(value),
+						message: `Invalid numeric value "${value.text}" for attribute "${token.text}"`,
+						severity: DiagnosticSeverity.Error,
+						source: 'terragrunt'
+					});
+				}
+				break;
+		}
+	}
 	private isValidValueType(type: string): boolean {
 		const validTypes = [
 			'string_lit',
@@ -224,27 +246,59 @@ export class DiagnosticsProvider {
 		];
 		return validTypes.includes(type);
 	}
-
 	private validateAttributeValue(token: Token, valueDefinition: ValueDefinition, diagnostics: Diagnostic[], parsedDocument: ParsedDocument) {
-        const value = token.children[0];
-        if (!value) {
-            diagnostics.push({
-                range: this.tokenToRange(token),
-                message: `Missing value for attribute "${token.text}"`,
-                severity: DiagnosticSeverity.Error,
-                source: 'terragrunt'
-            });
-            return;
-        }
-
-        // Skip validation for dynamic values
-        if (value.type === 'function_call' || 
-            value.type === 'property_access' ||
-            (value.type === 'string_lit' && value.children.some(child => child.type === 'interpolation'))) {
-            return;
-        }
-
+		if (token.children.length === 0) {
+			diagnostics.push({
+				range: this.tokenToRange(token),
+				message: `Missing value for attribute "${token.text}"`,
+				severity: DiagnosticSeverity.Error,
+				source: 'terragrunt'
+			});
+			return;
+		}
+	
+		if (token.children.length > 1) {
+			// Report error for any token after the first one
+			for (let i = 1; i < token.children.length; i++) {
+				diagnostics.push({
+					range: this.tokenToRange(token.children[i]),
+					message: `Unexpected token after value in attribute "${token.text}"`,
+					severity: DiagnosticSeverity.Error,
+					source: 'terragrunt'
+				});
+			}
+			return;
+		}
+	
+		const value = token.children[0];
+	
+		// Skip validation for dynamic values
+		if (value.type === 'function_call' || 
+			value.type === 'property_access' ||
+			(value.type === 'string_lit' && value.children.some(child => child.type === 'interpolation'))) {
+			return;
+		}
+	
 		switch (valueDefinition.type) {
+			case 'number': {
+				const validTypes = ['integer_lit', 'float_lit', 'float_lit_with_f'];
+				if (!validTypes.includes(value.type)) {
+					diagnostics.push({
+						range: this.tokenToRange(value),
+						message: `Expected a number value for attribute "${token.text}"`,
+						severity: DiagnosticSeverity.Error,
+						source: 'terragrunt'
+					});
+				} else if (!this.isValidNumber(value.text)) {
+					diagnostics.push({
+						range: this.tokenToRange(value),
+						message: `Invalid numeric value "${value.text}" for attribute "${token.text}"`,
+						severity: DiagnosticSeverity.Error,
+						source: 'terragrunt'
+					});
+				}
+				break;
+			}
 			case 'string': {
 				const validTypes = ['string_lit', 'property_access'];
 				if (!validTypes.includes(value.type)) {
@@ -255,7 +309,6 @@ export class DiagnosticsProvider {
 						source: 'terragrunt'
 					});
 				}
-				// Validate pattern if specified
 				if (valueDefinition.pattern && value.type === 'string_lit') {
 					const pattern = new RegExp(valueDefinition.pattern);
 					if (!pattern.test(value.text)) {
@@ -266,18 +319,6 @@ export class DiagnosticsProvider {
 							source: 'terragrunt'
 						});
 					}
-				}
-				break;
-			}
-			case 'number': {
-				const validTypes = ['integer_lit', 'float_lit', 'float_lit_with_f'];
-				if (!validTypes.includes(value.type)) {
-					diagnostics.push({
-						range: this.tokenToRange(value),
-						message: `Expected a number value for attribute "${token.text}"`,
-						severity: DiagnosticSeverity.Error,
-						source: 'terragrunt'
-					});
 				}
 				break;
 			}
@@ -301,7 +342,6 @@ export class DiagnosticsProvider {
 						source: 'terragrunt'
 					});
 				} else {
-					// Validate array constraints
 					if (valueDefinition.minItems !== undefined && value.children.length < valueDefinition.minItems) {
 						diagnostics.push({
 							range: this.tokenToRange(value),
@@ -318,7 +358,6 @@ export class DiagnosticsProvider {
 							source: 'terragrunt'
 						});
 					}
-					// Validate array element types if specified
 					if (valueDefinition.elementType && value.children) {
 						value.children.forEach(element => {
 							this.validateAttributeValue(
@@ -372,7 +411,7 @@ export class DiagnosticsProvider {
 				break;
 			}
 		}
-
+	
 		if (valueDefinition.enum && value.type === 'string_lit' && !valueDefinition.enum.includes(value.text)) {
 			diagnostics.push({
 				range: this.tokenToRange(value),
