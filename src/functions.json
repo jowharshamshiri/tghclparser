@@ -1,0 +1,416 @@
+{
+	"version": "1.0",
+	"functions": [
+		{
+			"name": "get_terragrunt_dir",
+			"description": "Gets the directory containing the Terragrunt configuration file.\n\n* Returns the absolute path to the directory containing the Terragrunt configuration.\n* Useful for constructing paths relative to the Terragrunt configuration file.",
+			"parameters": [],
+			"returnType": {
+				"type": "string",
+				"description": "Absolute path to the Terragrunt configuration directory"
+			},
+			"example": "locals {\n  config_path = \"${get_terragrunt_dir()}/config.yaml\"\n}"
+		},
+		{
+			"name": "get_parent_terragrunt_dir",
+			"description": "Gets the directory containing the parent Terragrunt configuration file.\n\n* Returns the absolute path to the directory containing the parent Terragrunt configuration.\n* Useful for referencing files relative to the parent configuration.",
+			"parameters": [],
+			"returnType": {
+				"type": "string",
+				"description": "Absolute path to the parent Terragrunt configuration directory"
+			},
+			"example": "include {\n  path = \"${get_parent_terragrunt_dir()}/common.hcl\"\n}"
+		},
+		{
+			"name": "path_relative_to_include",
+			"description": "Gets the path of the current configuration relative to the configuration that included it.\n\n* Returns the relative path from the including configuration to the current configuration.\n* Useful for generating unique identifiers or paths based on directory structure.",
+			"parameters": [],
+			"returnType": {
+				"type": "string",
+				"description": "Relative path from including configuration"
+			},
+			"example": "remote_state {\n  key = \"${path_relative_to_include()}/terraform.tfstate\"\n}"
+		},
+		{
+			"name": "find_in_parent_folders",
+			"description": "Searches parent folders for a specified file.\n\n* Returns the path to the first matching file found in a parent folder.\n* If no file is found, throws an error unless a fallback is provided.",
+			"parameters": [
+				{
+					"name": "filename",
+					"type": "string",
+					"required": false,
+					"description": "Name of the file to find (defaults to terragrunt.hcl)"
+				},
+				{
+					"name": "fallback",
+					"type": "string",
+					"required": false,
+					"description": "Fallback value if the file is not found"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Path to the found file or fallback value"
+			},
+			"example": "include {\n  path = find_in_parent_folders(\"common.hcl\", \"default.hcl\")\n}"
+		},
+		{
+			"name": "get_terraform_commands_that_need_vars",
+			"description": "Gets the list of Terraform commands that accept input variables.\n\n* Returns a list of Terraform commands that can use input variables.\n* Useful for conditionally applying variable files.",
+			"parameters": [],
+			"returnType": {
+				"type": "array",
+				"elementType": "string",
+				"description": "List of Terraform commands that accept variables"
+			},
+			"example": "terraform {\n  extra_arguments \"common_vars\" {\n    commands = get_terraform_commands_that_need_vars()\n    arguments = [\"-var-file=common.tfvars\"]\n  }\n}"
+		},
+		{
+			"name": "get_terraform_commands_that_need_locking",
+			"description": "Gets the list of Terraform commands that use state locking.\n\n* Returns a list of Terraform commands that use state locking.\n* Useful for managing state lock behavior.",
+			"parameters": [],
+			"returnType": {
+				"type": "array",
+				"elementType": "string",
+				"description": "List of Terraform commands that use state locking"
+			},
+			"example": "terraform {\n  extra_arguments \"disable_locking\" {\n    commands = get_terraform_commands_that_need_locking()\n    arguments = [\"-lock=false\"]\n  }\n}"
+		},
+		{
+			"name": "run_cmd",
+			"description": "Executes a shell command and returns its output.\n\n* Runs the specified command and returns its stdout as a string.\n* Useful for incorporating external script outputs into your configuration.",
+			"parameters": [
+				{
+					"name": "command",
+					"type": "string",
+					"required": true,
+					"description": "Command to execute"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Command output"
+			},
+			"example": "locals {\n  git_ref = run_cmd(\"git\", \"rev-parse\", \"--short\", \"HEAD\")\n}"
+		},
+		{
+			"name": "sops_decrypt_file",
+			"description": "Decrypts a file encrypted with SOPS.\n\n* Decrypts the specified file using SOPS and returns its contents.\n* Useful for managing encrypted configuration files.",
+			"parameters": [
+				{
+					"name": "path",
+					"type": "string",
+					"required": true,
+					"description": "Path to the encrypted file"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Decrypted file contents"
+			},
+			"example": "locals {\n  secrets = yamldecode(sops_decrypt_file(\"${get_terragrunt_dir()}/secrets.yaml\"))\n}"
+		},
+		{
+			"name": "read_terragrunt_config",
+			"description": "Reads and parses a Terragrunt configuration file.\n\n* Reads the specified Terragrunt configuration file and returns its contents.\n* Useful for sharing configuration between different Terragrunt files.",
+			"parameters": [
+				{
+					"name": "path",
+					"type": "string",
+					"required": true,
+					"description": "Path to the Terragrunt configuration file"
+				},
+				{
+					"name": "default_value",
+					"type": "any",
+					"required": false,
+					"description": "Default value to return if the file doesn't exist"
+				}
+			],
+			"returnType": {
+				"type": "object",
+				"description": "Parsed configuration"
+			},
+			"example": "locals {\n  common = read_terragrunt_config(find_in_parent_folders(\"common.hcl\"))\n}"
+		},
+		{
+			"name": "get_terraform_command",
+			"description": "Gets the current Terraform command being executed.\n\n* Returns the name of the Terraform command that Terragrunt is running.\n* Useful for conditional logic based on the command being run.",
+			"parameters": [],
+			"returnType": {
+				"type": "string",
+				"description": "Current Terraform command"
+			},
+			"example": "skip = get_terraform_command() == \"destroy\""
+		},
+		{
+			"name": "get_terraform_cli_args",
+			"description": "Gets the command line arguments passed to Terraform.\n\n* Returns the list of arguments that will be passed to Terraform.\n* Useful for inspecting or modifying Terraform command arguments.",
+			"parameters": [],
+			"returnType": {
+				"type": "array",
+				"elementType": "string",
+				"description": "Terraform command line arguments"
+			},
+			"example": "skip = contains(get_terraform_cli_args(), \"-destroy\")"
+		},
+		{
+			"name": "get_env",
+			"description": "Retrieves environment variables with an optional default value.\n\n* Returns the value of the environment variable or the default value if not set.\n* Useful for incorporating environment-specific values into your Terragrunt configurations.",
+			"parameters": [
+				{
+					"name": "name",
+					"type": "string",
+					"required": true,
+					"description": "The name of the environment variable to retrieve"
+				},
+				{
+					"name": "default",
+					"type": "string",
+					"required": false,
+					"description": "The default value to return if the environment variable is not set"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Value of the environment variable or default value"
+			},
+			"example": "inputs = {\n  api_key = get_env(\"API_KEY\", \"default-key\")\n}"
+		},
+		{
+			"name": "get_platform",
+			"description": "Gets the current operating system platform.\n\n* Returns the current operating system platform (e.g., 'windows', 'darwin', 'linux').\n* Useful for platform-specific configurations.",
+			"parameters": [],
+			"returnType": {
+				"type": "string",
+				"description": "Current operating system platform"
+			},
+			"example": "locals {\n  is_windows = get_platform() == \"windows\"\n}"
+		},
+		{
+			"name": "get_repo_root",
+			"description": "Gets the root directory of the Git repository.\n\n* Returns the absolute path to the root of the current Git repository.\n* Useful for referencing files relative to the repository root.",
+			"parameters": [],
+			"returnType": {
+				"type": "string",
+				"description": "Absolute path to Git repository root"
+			},
+			"example": "locals {\n  repo_root = get_repo_root()\n}"
+		},
+		{
+			"name": "regex_replace",
+			"description": "Performs regular expression replacement on a string.\n\n* Replaces all matches of a regular expression with a replacement string.\n* Useful for string manipulation and formatting.",
+			"parameters": [
+				{
+					"name": "string",
+					"type": "string",
+					"required": true,
+					"description": "The input string to perform replacement on"
+				},
+				{
+					"name": "pattern",
+					"type": "string",
+					"required": true,
+					"description": "The regular expression pattern to match"
+				},
+				{
+					"name": "replacement",
+					"type": "string",
+					"required": true,
+					"description": "The string to replace matches with"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "String with replacements applied"
+			},
+			"example": "locals {\n  cleaned_path = regex_replace(path_relative_to_include(), \"/\", \"-\")\n}"
+		},
+		{
+			"name": "yamldecode",
+			"description": "Decodes a YAML string into a value.\n\n* Parses a YAML-formatted string and returns the resulting value.\n* Useful for reading YAML configuration files.",
+			"parameters": [
+				{
+					"name": "yaml",
+					"type": "string",
+					"required": true,
+					"description": "The YAML string to decode"
+				}
+			],
+			"returnType": {
+				"type": "any",
+				"description": "Decoded YAML value"
+			},
+			"example": "locals {\n  config = yamldecode(file(\"${get_terragrunt_dir()}/config.yaml\"))\n}"
+		},
+		{
+			"name": "yamlencode",
+			"description": "Encodes a value as a YAML string.\n\n* Converts a value into a YAML-formatted string.\n* Useful for generating YAML configuration files.",
+			"parameters": [
+				{
+					"name": "value",
+					"type": "any",
+					"required": true,
+					"description": "The value to encode as YAML"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "YAML-encoded string"
+			},
+			"example": "generate \"config\" {\n  contents = yamlencode(local.config)\n}"
+		},
+		{
+			"name": "jsondecode",
+			"description": "Decodes a JSON string into a value.\n\n* Parses a JSON-formatted string and returns the resulting value.\n* Useful for reading JSON configuration files.",
+			"parameters": [
+				{
+					"name": "json",
+					"type": "string",
+					"required": true,
+					"description": "The JSON string to decode"
+				}
+			],
+			"returnType": {
+				"type": "any",
+				"description": "Decoded JSON value"
+			},
+			"example": "locals {\n  config = jsondecode(file(\"${get_terragrunt_dir()}/config.json\"))\n}"
+		},
+		{
+			"name": "jsonencode",
+			"description": "Encodes a value as a JSON string.\n\n* Converts a value into a JSON-formatted string.\n* Useful for generating JSON configuration files.",
+			"parameters": [
+				{
+					"name": "value",
+					"type": "any",
+					"required": true,
+					"description": "The value to encode as JSON"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "JSON-encoded string"
+			},
+			"example": "generate \"config\" {\n  contents = jsonencode(local.config)\n}"
+		},
+		{
+			"name": "read_tfvars_file",
+			"description": "Reads and parses a tfvars file.\n\n* Reads the contents of a .tfvars file and returns the parsed variables.\n* Useful for incorporating existing Terraform variable files.",
+			"parameters": [
+				{
+					"name": "path",
+					"type": "string",
+					"required": true,
+					"description": "Path to the .tfvars file"
+				}
+			],
+			"returnType": {
+				"type": "object",
+				"description": "Parsed tfvars contents"
+			},
+			"example": "locals {\n  env_vars = read_tfvars_file(\"${get_terragrunt_dir()}/env.tfvars\")\n}"
+		},
+		{
+			"name": "get_terraform_commands_that_need_retry",
+			"description": "Gets Terraform commands that should be retried on certain errors.\n\n* Returns a list of Terraform commands that should be retried if they fail with certain errors.\n* Useful for handling transient failures.",
+			"parameters": [],
+			"returnType": {
+				"type": "array",
+				"elementType": "string",
+				"description": "List of Terraform commands that support retry"
+			},
+			"example": "retryable_errors = [\".*Error.*\"]"
+		},
+		{
+			"name": "get_path_from_repo_root",
+			"description": "Gets the path relative to the repository root.\n\n* Returns the relative path from the repository root to the current configuration.\n* Useful for generating paths based on repository structure.",
+			"parameters": [],
+			"returnType": {
+				"type": "string",
+				"description": "Relative path from repository root"
+			},
+			"example": "locals {\n  module_path = get_path_from_repo_root()\n}"
+		},
+		{
+			"name": "get_path_to_repo_root",
+			"description": "Gets the path to the repository root.\n\n* Returns the relative path from the current configuration to the repository root.\n* Useful for referencing files at the repository root.",
+			"parameters": [],
+			"returnType": {
+				"type": "string",
+				"description": "Relative path to repository root"
+			},
+			"example": "locals {\n  root_path = get_path_to_repo_root()\n}"
+		},
+		{
+			"name": "basename",
+			"description": "Gets the last element of a path.\n\n* Returns the last element of a file path or URL.\n* Useful for extracting filenames or final path components.",
+			"parameters": [
+				{
+					"name": "path",
+					"type": "string",
+					"required": true,
+					"description": "The path to extract the basename from"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Last element of the path"
+			},
+			"example": "locals {\n  filename = basename(\"/path/to/file.txt\")\n}"
+		},
+		{
+			"name": "dirname",
+			"description": "Gets all but the last element of a path.\n\n* Returns the directory path containing the specified path.\n* Useful for getting parent directories.",
+			"parameters": [
+				{
+					"name": "path",
+					"type": "string",
+					"required": true,
+					"description": "The path to extract the directory from"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Directory containing the path"
+			},
+			"example": "locals {\n  parent_dir = dirname(\"/path/to/file.txt\")\n}"
+		},
+		{
+			"name": "merge",
+			"description": "Merges multiple maps into a single map.\n\n* Combines multiple maps into a single map, with later values taking precedence.\n* Useful for combining multiple configuration objects.",
+			"parameters": [
+				{
+					"name": "maps",
+					"type": "object",
+					"required": true,
+					"description": "Two or more maps to merge",
+					"variadic": true
+				}
+			],
+			"returnType": {
+				"type": "object",
+				"description": "Merged map"
+			},
+			"example": "locals {\n  combined_config = merge(local.base_config, local.override_config)\n}"
+		},
+		{
+			"name": "coalesce",
+			"description": "Returns the first non-null value from a list of values.\n\n* Takes multiple arguments and returns the first non-null value.\n* Useful for providing fallback values.",
+			"parameters": [
+				{
+					"name": "values",
+					"type": "any",
+					"required": true,
+					"description": "List of values to check",
+					"variadic": true
+				}
+			],
+			"returnType": {
+				"type": "any",
+				"description": "First non-null value"
+			},
+			"example": "locals {\n  region = coalesce(get_env(\"AWS_REGION\"), local.default_region)\n}"
+		}
+	]
+}

@@ -1,0 +1,648 @@
+{
+	"version": "1.0",
+	"blocks": [
+		{
+			"type": "terraform",
+			"description": "Defines Terraform configurations within a Terragrunt file.\n\n* Use this block to specify Terraform settings, including the source of your Terraform code and any provider configurations.\n* You can set the source of your Terraform module, define provider versions, and configure backend settings.",
+			"examples": [
+				{
+					"description": "Basic terraform configuration",
+					"code": "terraform {\n  source = \"git::https://github.com/example/modules.git//networking?ref=v0.13.0\"\n  \n  extra_arguments \"common_vars\" {\n    commands = [\"plan\", \"apply\"]\n    arguments = [\"-var-file=common.tfvars\"]\n  }\n}"
+				}
+			],
+			"attributes": [
+				{
+					"name": "source",
+					"description": "The source of the Terraform module to be used.",
+					"required": true,
+					"value": {
+						"type": "string",
+						"pattern": "^(git::)?(https?://|git@)[\\w.-]+(/[\\w.-]+)*(\\.git)?(//?[\\w.-]+)*(\\?ref=[\\w.-]+)?$"
+					}
+				},
+				{
+					"name": "before_hook",
+					"description": "Commands to run before Terraform commands.",
+					"required": false,
+					"value": {
+						"type": "object"
+					}
+				},
+				{
+					"name": "after_hook",
+					"description": "Commands to run after Terraform commands.",
+					"required": false,
+					"value": {
+						"type": "object"
+					}
+				}
+			],
+			"blocks": [
+				{
+					"type": "extra_arguments",
+					"min": 0,
+					"description": "Additional arguments to pass to Terraform commands.",
+					"parameters": [
+						{
+							"name": "name",
+							"type": "string",
+							"required": true,
+							"description": "Name of the extra_arguments block"
+						}
+					],
+					"attributes": [
+						{
+							"name": "commands",
+							"required": true,
+							"value": {
+								"type": "array",
+								"elementType": "string",
+								"minItems": 1
+							}
+						},
+						{
+							"name": "arguments",
+							"required": true,
+							"value": {
+								"type": "array",
+								"elementType": "string",
+								"minItems": 1
+							}
+						},
+						{
+							"name": "required_var_files",
+							"required": false,
+							"value": {
+								"type": "array",
+								"elementType": "string"
+							}
+						},
+						{
+							"name": "optional_var_files",
+							"required": false,
+							"value": {
+								"type": "array",
+								"elementType": "string"
+							}
+						},
+						{
+							"name": "env_vars",
+							"required": false,
+							"value": {
+								"type": "object"
+							}
+						}
+					]
+				}
+			]
+		},
+		{
+			"type": "include",
+			"description": "Includes other Terragrunt configurations, allowing for modular and reusable configurations.",
+			"examples": [
+				{
+					"description": "Basic include configuration",
+					"code": "include {\n  path = find_in_parent_folders()\n}"
+				}
+			],
+			"attributes": [
+				{
+					"name": "path",
+					"description": "The path to the Terragrunt configuration file to include.",
+					"required": true,
+					"value": {
+						"type": "string"
+					}
+				},
+				{
+					"name": "expose",
+					"description": "Whether to expose the included configuration to other configurations that include this one.",
+					"required": false,
+					"value": {
+						"type": "boolean"
+					}
+				},
+				{
+					"name": "merge_strategy",
+					"description": "Strategy to use when merging configurations.",
+					"required": false,
+					"value": {
+						"type": "string",
+						"enum": [
+							"no_merge",
+							"deep_merge",
+							"shallow_merge"
+						]
+					}
+				}
+			]
+		},
+		{
+			"type": "locals",
+			"description": "Defines local variables that can be used throughout the Terragrunt configuration.",
+			"arbitraryAttributes": true,
+			"examples": [
+				{
+					"description": "Local variables configuration",
+					"code": "locals {\n  env = \"prod\"\n  region = \"us-west-2\"\n  vpc_cidr = \"10.0.0.0/16\"\n}"
+				}
+			]
+		},
+		{
+			"type": "dependency",
+			"description": "Declares dependencies on other Terragrunt configurations.",
+			"examples": [
+				{
+					"description": "Dependency configuration",
+					"code": "dependency \"vpc\" {\n  config_path = \"../vpc\"\n  mock_outputs = {\n    vpc_id = \"temporary-dummy-id\"\n  }\n}"
+				}
+			],
+			"parameters": [
+				{
+					"name": "name",
+					"type": "string",
+					"required": true,
+					"description": "Name of the dependency"
+				}
+			],
+			"attributes": [
+				{
+					"name": "config_path",
+					"description": "The path to the dependent Terragrunt configuration.",
+					"required": true,
+					"value": {
+						"type": "string"
+					}
+				},
+				{
+					"name": "mock_outputs",
+					"description": "Mock outputs for the dependency when the actual outputs are not available.",
+					"required": false,
+					"value": {
+						"type": "object"
+					}
+				},
+				{
+					"name": "mock_outputs_allowed_terraform_commands",
+					"description": "List of Terraform commands where mock outputs are allowed.",
+					"required": false,
+					"value": {
+						"type": "array",
+						"elementType": "string"
+					}
+				},
+				{
+					"name": "skip_outputs",
+					"description": "Whether to skip fetching outputs from this dependency.",
+					"required": false,
+					"value": {
+						"type": "boolean"
+					}
+				}
+			]
+		},
+		{
+			"type": "generate",
+			"description": "Dynamically generates files that can be used in your Terraform configurations.",
+			"parameters": [
+				{
+					"name": "name",
+					"type": "string",
+					"required": true,
+					"description": "Name of the generated configuration"
+				}
+			],
+			"attributes": [
+				{
+					"name": "path",
+					"description": "The path where the generated file will be created.",
+					"required": true,
+					"value": {
+						"type": "string"
+					}
+				},
+				{
+					"name": "if_exists",
+					"description": "Specifies the behavior if the file already exists.",
+					"required": true,
+					"value": {
+						"type": "string",
+						"enum": [
+							"overwrite",
+							"overwrite_terragrunt",
+							"skip"
+						]
+					}
+				},
+				{
+					"name": "contents",
+					"description": "The contents of the generated file.",
+					"required": true,
+					"value": {
+						"type": "string"
+					}
+				},
+				{
+					"name": "disable",
+					"description": "Whether to disable generation of this file.",
+					"required": false,
+					"value": {
+						"type": "boolean"
+					}
+				},
+				{
+					"name": "comment_prefix",
+					"description": "Comment prefix to use in the generated file.",
+					"required": false,
+					"value": {
+						"type": "string"
+					}
+				}
+			]
+		},
+		{
+			"type": "remote_state",
+			"description": "Configures Terraform remote state storage and retrieval.",
+			"examples": [
+				{
+					"description": "Remote state configuration",
+					"code": "remote_state {\n  backend = \"s3\"\n  config = {\n    bucket = \"my-terraform-state\"\n    key    = \"${path_relative_to_include()}/terraform.tfstate\"\n    region = \"us-west-2\"\n    encrypt = true\n  }\n}"
+				}
+			],
+			"attributes": [
+				{
+					"name": "backend",
+					"description": "The backend type for remote state storage.",
+					"required": true,
+					"value": {
+						"type": "string",
+						"enum": [
+							"s3",
+							"gcs",
+							"azurerm"
+						]
+					}
+				},
+				{
+					"name": "config",
+					"description": "Configuration settings for the backend.",
+					"required": true,
+					"value": {
+						"type": "object"
+					}
+				},
+				{
+					"name": "generate",
+					"description": "Configuration for generating backend configuration.",
+					"required": false,
+					"value": {
+						"type": "object"
+					}
+				}
+			]
+		},
+		{
+			"type": "inputs",
+			"description": "Specifies input variables for Terraform modules.",
+			"arbitraryAttributes": true,
+			"examples": [
+				{
+					"description": "Input variables configuration",
+					"code": "inputs = {\n  vpc_cidr = local.vpc_cidr\n  environment = local.env\n  region = local.region\n}"
+				}
+			]
+		},
+		{
+			"type": "provider",
+			"description": "Configures provider settings for Terraform.",
+			"parameters": [
+				{
+					"name": "name",
+					"type": "string",
+					"required": true,
+					"description": "Name of the provider"
+				}
+			],
+			"arbitraryAttributes": true,
+			"examples": [
+				{
+					"description": "Provider configuration",
+					"code": "provider \"aws\" {\n  region = local.region\n  allowed_account_ids = [local.account_id]\n}"
+				}
+			]
+		}
+	],
+	"globalAttributes": [
+		{
+			"name": "depends_on",
+			"required": false,
+			"value": {
+				"type": "array",
+				"elementType": "string"
+			}
+		},
+		{
+			"name": "terraform_version_constraint",
+			"description": "Specifies the required Terraform version for the configuration.",
+			"required": false,
+			"value": {
+				"type": "string",
+				"pattern": "^(>=|<=|>|<|~>|=)\\s*\\d+\\.\\d+(\\.\\d+)?([\\s,]+(?:>=|<=|>|<|~>|=)\\s*\\d+\\.\\d+(\\.\\d+)?)*$"
+			}
+		},
+		{
+			"name": "terragrunt_version_constraint",
+			"description": "Specifies the required Terragrunt version for the configuration.",
+			"required": false,
+			"value": {
+				"type": "string",
+				"pattern": "^(>=|<=|>|<|~>|=)\\s*\\d+\\.\\d+(\\.\\d+)?([\\s,]+(?:>=|<=|>|<|~>|=)\\s*\\d+\\.\\d+(\\.\\d+)?)*$"
+			}
+		},
+		{
+			"name": "download_dir",
+			"description": "Specifies the directory for downloaded Terraform configurations.",
+			"required": false,
+			"value": {
+				"type": "string"
+			}
+		},
+		{
+			"name": "prevent_destroy",
+			"description": "Prevents the destruction of resources.",
+			"required": false,
+			"value": {
+				"type": "boolean"
+			}
+		},
+		{
+			"name": "skip",
+			"description": "Skips certain Terragrunt functionality.",
+			"required": false,
+			"value": {
+				"type": "boolean"
+			}
+		},
+		{
+			"name": "iam_role",
+			"description": "IAM role to assume when running Terraform.",
+			"required": false,
+			"value": {
+				"type": "string"
+			}
+		},
+		{
+			"name": "retryable_errors",
+			"description": "List of error messages that should trigger a retry.",
+			"required": false,
+			"value": {
+				"type": "array",
+				"elementType": "string"
+			}
+		},
+		{
+			"type": "retry",
+			"description": "Configures retry behavior for Terragrunt operations.\n\n* Use this block to specify retry settings for failed operations.\n* Allows customization of retry attempts, error patterns, and delay between retries.",
+			"examples": [
+				{
+					"description": "Basic retry configuration",
+					"code": "retry {\n  max_attempts = 3\n  sleep_interval_sec = 5\n  error_regex_patterns = [\n    \"(?s).*Error creating*\",\n    \"(?s).*NetworkException.*\"\n  ]\n}"
+				}
+			],
+			"attributes": [
+				{
+					"name": "max_attempts",
+					"description": "Maximum number of retry attempts.",
+					"required": false,
+					"value": {
+						"type": "number"
+					}
+				},
+				{
+					"name": "sleep_interval_sec",
+					"description": "Number of seconds to wait between retry attempts.",
+					"required": false,
+					"value": {
+						"type": "number"
+					}
+				},
+				{
+					"name": "error_regex_patterns",
+					"description": "List of regex patterns to match against error messages for retry.",
+					"required": false,
+					"value": {
+						"type": "array",
+						"elementType": "string"
+					}
+				}
+			]
+		},
+		{
+			"type": "terraform_binary",
+			"description": "Specifies custom Terraform binary settings.\n\n* Use this block to configure a specific Terraform binary to use.\n* Allows specifying custom download URLs and binary names.",
+			"examples": [
+				{
+					"description": "Custom Terraform binary configuration",
+					"code": "terraform_binary {\n  source = \"https://releases.hashicorp.com/terraform/1.0.0/terraform_1.0.0_linux_amd64.zip\"\n  version = \"1.0.0\"\n}"
+				}
+			],
+			"attributes": [
+				{
+					"name": "source",
+					"description": "URL or path to the Terraform binary.",
+					"required": false,
+					"value": {
+						"type": "string"
+					}
+				},
+				{
+					"name": "version",
+					"description": "Version of Terraform to use.",
+					"required": false,
+					"value": {
+						"type": "string"
+					}
+				}
+			]
+		},
+		{
+			"type": "download_dir",
+			"description": "Configures the download directory for Terraform modules.\n\n* Use this block to specify where Terraform modules should be downloaded.\n* Allows customizing the download location and cleanup behavior.",
+			"examples": [
+				{
+					"description": "Download directory configuration",
+					"code": "download_dir {\n  path = \"${get_terragrunt_dir()}/.terragrunt-cache\"\n  clean = true\n}"
+				}
+			],
+			"attributes": [
+				{
+					"name": "path",
+					"description": "Path where modules should be downloaded.",
+					"required": true,
+					"value": {
+						"type": "string"
+					}
+				},
+				{
+					"name": "clean",
+					"description": "Whether to clean the directory before downloads.",
+					"required": false,
+					"value": {
+						"type": "boolean"
+					}
+				}
+			]
+		},
+		{
+			"type": "before_hook",
+			"description": "Defines commands to run before Terraform operations.\n\n* Use this block to execute commands before specific Terraform commands.\n* Supports multiple hooks with different triggers and commands.",
+			"parameters": [
+				{
+					"name": "name",
+					"type": "string",
+					"required": true,
+					"description": "Name of the hook"
+				}
+			],
+			"attributes": [
+				{
+					"name": "commands",
+					"description": "List of Terraform commands that trigger this hook.",
+					"required": true,
+					"value": {
+						"type": "array",
+						"elementType": "string"
+					}
+				},
+				{
+					"name": "execute",
+					"description": "Command to execute.",
+					"required": true,
+					"value": {
+						"type": "array",
+						"elementType": "string"
+					}
+				},
+				{
+					"name": "working_dir",
+					"description": "Working directory for the command.",
+					"required": false,
+					"value": {
+						"type": "string"
+					}
+				},
+				{
+					"name": "run_on_error",
+					"description": "Whether to run the hook even if previous hooks failed.",
+					"required": false,
+					"value": {
+						"type": "boolean"
+					}
+				}
+			]
+		},
+		{
+			"type": "after_hook",
+			"description": "Defines commands to run after Terraform operations.\n\n* Use this block to execute commands after specific Terraform commands.\n* Supports multiple hooks with different triggers and commands.",
+			"parameters": [
+				{
+					"name": "name",
+					"type": "string",
+					"required": true,
+					"description": "Name of the hook"
+				}
+			],
+			"attributes": [
+				{
+					"name": "commands",
+					"description": "List of Terraform commands that trigger this hook.",
+					"required": true,
+					"value": {
+						"type": "array",
+						"elementType": "string"
+					}
+				},
+				{
+					"name": "execute",
+					"description": "Command to execute.",
+					"required": true,
+					"value": {
+						"type": "array",
+						"elementType": "string"
+					}
+				},
+				{
+					"name": "working_dir",
+					"description": "Working directory for the command.",
+					"required": false,
+					"value": {
+						"type": "string"
+					}
+				},
+				{
+					"name": "run_on_error",
+					"description": "Whether to run the hook even if Terraform command failed.",
+					"required": false,
+					"value": {
+						"type": "boolean"
+					}
+				}
+			]
+		},
+		{
+			"type": "iam_assume_role_duration",
+			"description": "Configures the duration for assumed IAM roles.\n\n* Use this block to specify how long assumed IAM roles should remain valid.\n* Helpful for long-running Terraform operations.",
+			"examples": [
+				{
+					"description": "IAM role duration configuration",
+					"code": "iam_assume_role_duration {\n  duration = \"2h\"\n}"
+				}
+			],
+			"attributes": [
+				{
+					"name": "duration",
+					"description": "Duration for the assumed role session.",
+					"required": true,
+					"value": {
+						"type": "string",
+						"pattern": "^\\d+[hms]$"
+					}
+				}
+			]
+		},
+		{
+			"type": "sops",
+			"description": "Configures SOPS encryption settings.\n\n* Use this block to specify SOPS configuration for encrypted files.\n* Supports various encryption providers and key configurations.",
+			"examples": [
+				{
+					"description": "SOPS configuration",
+					"code": "sops {\n  source = \"file.yaml\"\n  provider = \"aws\"\n}"
+				}
+			],
+			"attributes": [
+				{
+					"name": "source",
+					"description": "Path to the SOPS configuration file.",
+					"required": true,
+					"value": {
+						"type": "string"
+					}
+				},
+				{
+					"name": "provider",
+					"description": "The encryption provider to use.",
+					"required": false,
+					"value": {
+						"type": "string",
+						"enum": [
+							"aws",
+							"gcp",
+							"azure",
+							"pgp"
+						]
+					}
+				}
+			]
+		}
+	]
+}
