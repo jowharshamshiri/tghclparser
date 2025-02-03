@@ -116,9 +116,27 @@ export class DiagnosticsProvider {
                         severity: DiagnosticSeverity.Error,
                         source: 'terragrunt'
                     });
+                } else {
+                    // For arbitrary attributes, still validate that the value is a valid type
+                    const value = child.children[0];
+                    if (!value) {
+                        diagnostics.push({
+                            range: this.tokenToRange(child),
+                            message: `Missing value for attribute "${child.text}"`,
+                            severity: DiagnosticSeverity.Error,
+                            source: 'terragrunt'
+                        });
+                    } else if (!this.isValidValueType(value.type)) {
+                        diagnostics.push({
+                            range: this.tokenToRange(value),
+                            message: `Invalid value type for attribute "${child.text}"`,
+                            severity: DiagnosticSeverity.Error,
+                            source: 'terragrunt'
+                        });
+                    } else {
+                        this.validateValueSyntax(value, child, diagnostics);
+                    }
                 }
-                // If template.arbitraryAttributes is true, we don't validate the attribute value
-                // This allows object literals and other values in arbitrary attribute blocks
             }
         }
 
@@ -137,6 +155,33 @@ export class DiagnosticsProvider {
                     }
                 }
             }
+        }
+    }
+
+	private isValidNumber(value: string): boolean {
+        // For integers
+        if (/^-?\d+$/.test(value)) return true;
+        // For floats
+        if (/^-?\d+\.\d+$/.test(value)) return true;
+        // For floats with f suffix
+        if (/^-?\d+\.\d+f$/.test(value)) return true;
+        return false;
+    }
+
+    private validateValueSyntax(value: Token, token: Token, diagnostics: Diagnostic[]) {
+        switch(value.type) {
+            case 'integer_lit':
+            case 'float_lit':
+            case 'float_lit_with_f':
+                if (!this.isValidNumber(value.text)) {
+                    diagnostics.push({
+                        range: this.tokenToRange(value),
+                        message: `Invalid numeric value "${value.text}" for attribute "${token.text}"`,
+                        severity: DiagnosticSeverity.Error,
+                        source: 'terragrunt'
+                    });
+                }
+                break;
         }
     }
 
