@@ -1,0 +1,57 @@
+{
+  "name": "tghclparser",
+  "type": "module",
+  "version": "0.1.1",
+  "packageManager": "pnpm@9.6.0",
+  "repository": {
+    "type": "git",
+    "url": "https://"
+  },
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --external vscode-languageserver-types --external vscode-languageserver",
+    "test": "mocha -r ts-node/register 'tests/**/*.test.ts'",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "lint": "eslint --fix",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm test && npm run lint"
+  },
+  "dependencies": {
+    "lodash-es": "4.17.21",
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-types": "^3.17.5"
+  },
+  "devDependencies": {
+    "@types/lodash-es": "4.17.12",
+    "@types/mocha": "^10.0.6",
+    "@types/node": "22.9.3",
+    "eslint": "9.15.0",
+    "eslint-config-hyoban": "3.1.13",
+    "lint-staged": "15.2.10",
+    "mocha": "^10.3.0",
+    "prettier": "3.3.3",
+    "simple-git-hooks": "2.11.1",
+    "ts-node": "^10.9.2",
+    "tsup": "^8.0.2",
+    "typescript": "5.7.2"
+  },
+  "peerDependencies": {
+    "typescript": ">=4.7.0"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "pnpm exec lint-staged"
+  },
+  "lint-staged": {
+    "*.{js,jsx,ts,tsx}": [
+      "prettier --ignore-path ./.gitignore --write "
+    ],
+    "*.{js,ts,cjs,mjs}": [
+      "eslint --fix"
+    ]
+  }
+}
