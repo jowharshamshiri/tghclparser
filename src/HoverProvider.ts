@@ -3,7 +3,7 @@ import type {
 } from 'vscode-languageserver';
 
 import type { AttributeDefinition, BlockTemplate, FunctionDefinition, Token } from './model';
-import type { ParsedDocument } from './ParsedDocument';
+import type { ParsedDocument } from './index';
 import type { Schema } from './Schema';
 
 export class HoverProvider {

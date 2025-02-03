@@ -5,7 +5,7 @@ import type {
 import { CompletionItemKind } from 'vscode-languageserver';
 
 import { PositionContext } from './model';
-import type { ParsedDocument } from './ParsedDocument';
+import type { ParsedDocument } from './index';
 
 export class CompletionsProvider {
 	getCompletionsAtPosition(position: Position, parsedDocument:ParsedDocument): CompletionItem[] {
