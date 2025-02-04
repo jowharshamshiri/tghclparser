@@ -12,49 +12,6 @@
 			"example": "locals {\n  config_path = \"${get_terragrunt_dir()}/config.yaml\"\n}"
 		},
 		{
-			"name": "get_parent_terragrunt_dir",
-			"description": "Gets the directory containing the parent Terragrunt configuration file.\n\n* Returns the absolute path to the directory containing the parent Terragrunt configuration.\n* Useful for referencing files relative to the parent configuration.",
-			"parameters": [],
-			"returnType": {
-				"type": "string",
-				"description": "Absolute path to the parent Terragrunt configuration directory"
-			},
-			"example": "include {\n  path = \"${get_parent_terragrunt_dir()}/common.hcl\"\n}"
-		},
-		{
-			"name": "path_relative_to_include",
-			"description": "Gets the path of the current configuration relative to the configuration that included it.\n\n* Returns the relative path from the including configuration to the current configuration.\n* Useful for generating unique identifiers or paths based on directory structure.",
-			"parameters": [],
-			"returnType": {
-				"type": "string",
-				"description": "Relative path from including configuration"
-			},
-			"example": "remote_state {\n  key = \"${path_relative_to_include()}/terraform.tfstate\"\n}"
-		},
-		{
-			"name": "find_in_parent_folders",
-			"description": "Searches parent folders for a specified file.\n\n* Returns the path to the first matching file found in a parent folder.\n* If no file is found, throws an error unless a fallback is provided.",
-			"parameters": [
-				{
-					"name": "filename",
-					"type": "string",
-					"required": false,
-					"description": "Name of the file to find (defaults to terragrunt.hcl)"
-				},
-				{
-					"name": "fallback",
-					"type": "string",
-					"required": false,
-					"description": "Fallback value if the file is not found"
-				}
-			],
-			"returnType": {
-				"type": "string",
-				"description": "Path to the found file or fallback value"
-			},
-			"example": "include {\n  path = find_in_parent_folders(\"common.hcl\", \"default.hcl\")\n}"
-		},
-		{
 			"name": "get_terraform_commands_that_need_vars",
 			"description": "Gets the list of Terraform commands that accept input variables.\n\n* Returns a list of Terraform commands that can use input variables.\n* Useful for conditionally applying variable files.",
 			"parameters": [],
@@ -391,8 +348,7 @@
 			"returnType": {
 				"type": "object",
 				"description": "Merged map"
-			},
-			"example": "locals {\n  combined_config = merge(local.base_config, local.override_config)\n}"
+			}
 		},
 		{
 			"name": "coalesce",
@@ -411,6 +367,198 @@
 				"description": "First non-null value"
 			},
 			"example": "locals {\n  region = coalesce(get_env(\"AWS_REGION\"), local.default_region)\n}"
+		},
+		{
+			"name": "find_in_parent_folders",
+			"description": "Searches up the directory tree from the current terragrunt.hcl file and returns the absolute path to the first file or folder with a given name.\n\n* Returns the path to the first matching file found in a parent folder.\n* If no file is found, throws an error unless a fallback is provided.\n* Can be used to find both files and folders.\n* Searches relative to the child terragrunt.hcl config when called from a parent config.",
+			"parameters": [
+				{
+					"name": "filename",
+					"type": "string",
+					"required": false,
+					"description": "Name of the file or folder to find (defaults to terragrunt.hcl)"
+				},
+				{
+					"name": "fallback",
+					"type": "string",
+					"required": false,
+					"description": "Fallback value if the file is not found"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Path to the found file/folder or fallback value"
+			},
+			"example": "include {\n  path = find_in_parent_folders(\"common.hcl\", \"default.hcl\")\n}"
+		},
+		{
+			"name": "path_relative_to_include",
+			"description": "Returns the relative path between the current terragrunt.hcl file and the path specified in its include block.\n\n* Returns the relative path from the including configuration to the current configuration.\n* Useful for generating unique identifiers or paths based on directory structure.\n* If multiple include blocks exist, requires a name parameter to specify which include block to base the relative path on.",
+			"parameters": [
+				{
+					"name": "name",
+					"type": "string",
+					"required": false,
+					"description": "Name of the include block to base the relative path on (required if multiple include blocks exist)"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Relative path from including configuration"
+			},
+			"example": "remote_state {\n  key = \"${path_relative_to_include()}/terraform.tfstate\"\n}"
+		},
+		{
+			"name": "get_parent_terragrunt_dir",
+			"description": "Gets the directory containing the parent Terragrunt configuration file.\n\n* Returns the absolute path to the directory containing the parent Terragrunt configuration.\n* Useful for referencing files relative to the parent configuration.\n* For configurations with multiple include blocks, requires a name parameter to specify which include block to use as the parent.\n* Returns the root instead of the leaf of your terragrunt configurations.",
+			"parameters": [
+				{
+					"name": "name",
+					"type": "string",
+					"required": false,
+					"description": "Name of the include block to base the parent directory on (required if multiple include blocks exist)"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Absolute path to the parent Terragrunt configuration directory"
+			},
+			"example": "include {\n  path = \"${get_parent_terragrunt_dir()}/common.hcl\"\n}"
+		},
+		{
+			"name": "get_original_terragrunt_dir",
+			"description": "Returns the directory where the original Terragrunt configuration file lives. This is primarily useful when one Terragrunt config is being read from another.\n\n* Returns the absolute path to where the original terragrunt.hcl file lives.\n* Useful when one Terragrunt config is being read from another config file.",
+			"parameters": [],
+			"returnType": {
+				"type": "string",
+				"description": "Absolute path to original Terragrunt configuration directory"
+			}
+		},
+		{
+			"name": "get_terraform_commands_that_need_input",
+			"description": "Gets the list of Terraform commands that accept the -input parameter.\n\n* Returns a list of Terraform commands that accept the -input=(true or false) parameter.\n* Useful for configuring commands that should run non-interactively.",
+			"parameters": [],
+			"returnType": {
+				"type": "array",
+				"elementType": "string",
+				"description": "List of Terraform commands that accept -input parameter"
+			}
+		},
+		{
+			"name": "get_terraform_commands_that_need_parallelism",
+			"description": "Gets the list of Terraform commands that accept the -parallelism parameter.\n\n* Returns a list of Terraform commands that can have their parallelism modified.\n* Useful for controlling resource creation parallelism.",
+			"parameters": [],
+			"returnType": {
+				"type": "array",
+				"elementType": "string",
+				"description": "List of Terraform commands that accept -parallelism parameter"
+			}
+		},
+		{
+			"name": "get_aws_account_alias",
+			"description": "Returns the AWS account alias associated with the current credentials.\n\n* Returns the alias of the current AWS account.\n* Returns empty string if alias cannot be found.\n* Value can change during parsing of HCL code.",
+			"parameters": [],
+			"returnType": {
+				"type": "string",
+				"description": "AWS account alias or empty string"
+			}
+		},
+		{
+			"name": "get_aws_account_id",
+			"description": "Returns the AWS account ID associated with the current credentials.\n\n* Returns the ID of the current AWS account.\n* Value can change during parsing of HCL code, for example after evaluation of iam_role attribute.",
+			"parameters": [],
+			"returnType": {
+				"type": "string",
+				"description": "AWS account ID"
+			}
+		},
+		{
+			"name": "get_aws_caller_identity_arn",
+			"description": "Returns the ARN of the AWS identity associated with the current credentials.\n\n* Returns the ARN of the current AWS identity.\n* Value can change during parsing of HCL code, for example after evaluation of iam_role attribute.",
+			"parameters": [],
+			"returnType": {
+				"type": "string",
+				"description": "AWS caller identity ARN"
+			}
+		},
+		{
+			"name": "get_aws_caller_identity_user_id",
+			"description": "Returns the UserId of the AWS identity associated with the current credentials.\n\n* Returns the UserId of the current AWS identity.\n* Value can change during parsing of HCL code, for example after evaluation of iam_role attribute.",
+			"parameters": [],
+			"returnType": {
+				"type": "string",
+				"description": "AWS caller identity UserId"
+			}
+		},
+		{
+			"name": "get_working_dir",
+			"description": "Returns the absolute path where Terragrunt runs Terraform commands.\n\n* Returns the absolute path to the working directory.\n* Useful when you need to manage substitutions of vars inside a *.tfvars file located in terragrunt's tmp dir.",
+			"parameters": [],
+			"returnType": {
+				"type": "string",
+				"description": "Absolute path to working directory"
+			}
+		},
+		{
+			"name": "mark_as_read",
+			"description": "Marks a file as read for inclusion by the queue-include-units-reading flag.\n\n* Marks the specified file as being read by the configuration.\n* Useful for situations when you want to mark a file as read but are not reading it using a native Terragrunt HCL function.",
+			"parameters": [
+				{
+					"name": "file_path",
+					"type": "string",
+					"required": true,
+					"description": "Path to the file to mark as read"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Path to the marked file"
+			}
+		},
+		{
+			"name": "get_default_retryable_errors",
+			"description": "Returns the list of default retryable errors.\n\n* Returns a list of error patterns that Terragrunt will retry by default.\n* Useful for extending the default retry behavior.",
+			"parameters": [],
+			"returnType": {
+				"type": "array",
+				"elementType": "string",
+				"description": "List of default retryable error patterns"
+			}
+		},
+		{
+			"name": "get_terragrunt_source_cli_flag",
+			"description": "Returns the value passed via --terragrunt-source flag or TERRAGRUNT_SOURCE environment variable.\n\n* Returns the source override value if specified.\n* Returns empty string if neither the flag nor environment variable is set.\n* Useful for constructing hooks or flags that only apply to local development.",
+			"parameters": [],
+			"returnType": {
+				"type": "string",
+				"description": "Source override value or empty string"
+			}
+		},
+		{
+			"name": "path_relative_from_include",
+			"description": "Returns the relative path between the path specified in its include block and the current terragrunt.hcl file.\n\n* Counterpart to path_relative_to_include().\n* Useful for constructing relative paths from included configurations.",
+			"parameters": [
+				{
+					"name": "name",
+					"type": "string",
+					"required": false,
+					"description": "Name of the include block to base the relative path on (required if multiple include blocks exist)"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Relative path from include to current configuration"
+			}
+		},
+		{
+			"name": "get_terraform_commands_that_need_vars",
+			"description": "Gets the list of Terraform commands that accept -var and -var-file parameters.\n\n* Returns a list of Terraform commands that can use input variables.\n* Useful for conditionally applying variable files.",
+			"parameters": [],
+			"returnType": {
+				"type": "array",
+				"elementType": "string",
+				"description": "List of Terraform commands that accept variables"
+			}
 		}
 	]
 }
