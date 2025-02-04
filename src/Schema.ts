@@ -4,7 +4,8 @@ import type { AttributeDefinition, BlockTemplate, FunctionDefinition } from './m
 
 export class Schema {
 	private static instance: Schema;
-	private constructor() { }
+	private constructor() {
+	}
 	static getInstance(): Schema {
 		if (!Schema.instance) {
 			Schema.instance = new Schema();
