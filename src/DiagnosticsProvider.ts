@@ -5,6 +5,7 @@ import type { BlockTemplate, BlockDelimiter, Token, ValueDefinition, ValueType }
 import type { ParsedDocument } from './index';
 
 export class DiagnosticsProvider {
+	
 	private validateTokensIterative(tokens: Token[], parsedDocument: ParsedDocument, diagnostics: Diagnostic[]) {
 		const stack: Token[] = [...tokens];
 		const processedTokens = new Set<Token>();
@@ -20,6 +21,7 @@ export class DiagnosticsProvider {
 			} else if (token.type === 'function_call') {
 				this.validateFunctionCall(token, diagnostics, parsedDocument);
 			} else if (token.type === 'boolean_lit' && !token.parent) {
+				console.log(`token: ${token.text} parent: ${token.parent}`, token);
 				// Detect loose boolean literals not attached to any parent context
 				diagnostics.push({
 					range: this.tokenToRange(token),
