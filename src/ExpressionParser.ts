@@ -763,7 +763,7 @@ export class ExpressionParser {
 
 		return content;
 	}
-	// In ExpressionParser class, add parseObject method
+	
 	parseObject(value: string, row: number, startCol: number): [Token, number] {
 		const objectToken = new Token('object_lit', 'obj', row, startCol, startCol + 1);
 		let currentPos = 1; // Skip opening brace
