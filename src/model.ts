@@ -30,6 +30,7 @@ export type ComplexValueType =
 export type ValueType = PrimitiveValueType | ComplexValueType;
 
 export type TokenType =
+	| 'conditional'
 	| 'bare_token'
 	| 'block'
 	| 'identifier'
@@ -53,25 +54,28 @@ export type TokenType =
 	| 'array_lit'
 	| 'object_lit';
 
-export class Token {
-	type: TokenType;
-	text: string;
-	startPosition: Position;
-	endPosition: Position;
-	depth: number;
-	children: Token[];
-	decorators?: TokenDecorator[];
-
-	constructor(type: TokenType, text: string, line: number, startChar: number, endChar: number) {
-		this.type = type;
-		this.text = text;
-		this.startPosition = { line, character: startChar };
-		this.endPosition = { line, character: endChar };
-		this.depth = 0;
-		this.children = [];
-		this.decorators = [];
+	export class Token {
+		type: TokenType;
+		text: string;
+		startPosition: Position;
+		endPosition: Position;
+		depth: number;
+		children: Token[];
+		parent: Token | null; 
+		decorators?: TokenDecorator[];
+	
+		constructor(type: TokenType, text: string, line: number, startChar: number, endChar: number) {
+			this.type = type;
+			this.text = text;
+			this.startPosition = { line, character: startChar };
+			this.endPosition = { line, character: endChar };
+			this.depth = 0;
+			this.children = [];
+			this.parent = null;
+			this.decorators = [];
+		}
 	}
-}
+	
 
 export interface TokenTypePatterns {
 	BLOCK: RegExp;
