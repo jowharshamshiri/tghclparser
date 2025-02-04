@@ -433,12 +433,12 @@ export class DiagnosticsProvider {
 			});
 			return;
 		}
-
+	
 		// Check minimum required parameters
 		const requiredParams = func.parameters.filter(p => p.required);
-		const hasVariadicParam = func.parameters.some(p => p.type === 'array');
+		const hasVariadicParam = func.parameters.some(p => p.variadic);
 		const maxParams = hasVariadicParam ? Infinity : func.parameters.length;
-
+	
 		if (!token.children || token.children.length < requiredParams.length) {
 			diagnostics.push({
 				range: this.tokenToRange(token),
@@ -448,7 +448,7 @@ export class DiagnosticsProvider {
 			});
 			return;
 		}
-
+	
 		if (!hasVariadicParam && token.children.length > maxParams) {
 			diagnostics.push({
 				range: this.tokenToRange(token),
@@ -458,7 +458,7 @@ export class DiagnosticsProvider {
 			});
 			return;
 		}
-
+	
 		// Validate each argument
 		token.children.forEach((arg, index) => {
 			const param = func.parameters[hasVariadicParam ? Math.min(index, func.parameters.length - 1) : index];

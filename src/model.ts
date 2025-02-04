@@ -182,10 +182,11 @@ export interface BlockTemplate {
 }
 
 export interface FunctionParameter {
-	name: string;
-	type: string;
-	required: boolean;
-	description?: string;
+    name: string;
+    type: string;
+    required: boolean;
+    description?: string;
+    variadic?: boolean;
 }
 
 export interface FunctionReturnType {
@@ -199,6 +200,7 @@ export interface FunctionDefinition {
 	parameters: FunctionParameter[];
 	returnType: FunctionReturnType;
 }
+
 
 // Define allowed values for attributes
 export interface ValueDefinition {

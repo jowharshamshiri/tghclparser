@@ -3,45 +3,48 @@
 	"blocks": [
 		{
 			"type": "terraform",
-			"description": "Defines Terraform configurations within a Terragrunt file.\n\n* Use this block to specify Terraform settings, including the source of your Terraform code and any provider configurations.\n* You can set the source of your Terraform module, define provider versions, and configure backend settings.",
-			"examples": [
-				{
-					"description": "Basic terraform configuration",
-					"code": "terraform {\n  source = \"git::https://github.com/example/modules.git//networking?ref=v0.13.0\"\n  \n  extra_arguments \"common_vars\" {\n    commands = [\"plan\", \"apply\"]\n    arguments = [\"-var-file=common.tfvars\"]\n  }\n}"
-				}
-			],
+			"description": "Used to configure how Terragrunt will interact with OpenTofu/Terraform. This includes specifying source location, extra arguments, and command hooks.",
 			"attributes": [
 				{
 					"name": "source",
-					"description": "The source of the Terraform module to be used.",
-					"required": true,
+					"description": "Specifies where to find OpenTofu/Terraform configuration files. Supports local paths, Git URLs, and registry modules using tfr protocol",
+					"required": false,
 					"value": {
 						"type": "string",
-						"pattern": "^(git::)?(https?://|git@)[\\w.-]+(/[\\w.-]+)*(\\.git)?(//?[\\w.-]+)*(\\?ref=[\\w.-]+)?$"
+						"pattern": "^(git::)?([^/]+/)*[^/]+(//?[^/]+)*|tfr://[^/]*/[^?]+\\?version=[0-9.]+$"
 					}
 				},
 				{
-					"name": "before_hook",
-					"description": "Commands to run before Terraform commands.",
+					"name": "include_in_copy",
+					"description": "List of glob patterns that should always be copied into the OpenTofu/Terraform working directory",
 					"required": false,
 					"value": {
-						"type": "object"
+						"type": "array",
+						"elementType": "string"
 					}
 				},
 				{
-					"name": "after_hook",
-					"description": "Commands to run after Terraform commands.",
+					"name": "exclude_from_copy",
+					"description": "List of glob patterns that should always be skipped when copying into the OpenTofu/Terraform working directory",
 					"required": false,
 					"value": {
-						"type": "object"
+						"type": "array",
+						"elementType": "string"
+					}
+				},
+				{
+					"name": "copy_terraform_lock_file",
+					"description": "Whether to copy the generated or existing .terraform.lock.hcl from the temp folder into the working directory",
+					"required": false,
+					"value": {
+						"type": "boolean"
 					}
 				}
 			],
 			"blocks": [
 				{
 					"type": "extra_arguments",
-					"min": 0,
-					"description": "Additional arguments to pass to Terraform commands.",
+					"description": "Specify extra CLI arguments to pass to the terraform binary",
 					"parameters": [
 						{
 							"name": "name",
@@ -52,25 +55,34 @@
 					],
 					"attributes": [
 						{
-							"name": "commands",
+							"name": "arguments",
+							"description": "List of CLI arguments to pass to terraform",
 							"required": true,
 							"value": {
 								"type": "array",
-								"elementType": "string",
-								"minItems": 1
+								"elementType": "string"
 							}
 						},
 						{
-							"name": "arguments",
+							"name": "commands",
+							"description": "List of terraform sub commands that the arguments will be passed to",
 							"required": true,
 							"value": {
 								"type": "array",
-								"elementType": "string",
-								"minItems": 1
+								"elementType": "string"
+							}
+						},
+						{
+							"name": "env_vars",
+							"description": "Map of key value pairs to set as environment variables",
+							"required": false,
+							"value": {
+								"type": "object"
 							}
 						},
 						{
 							"name": "required_var_files",
+							"description": "List of file paths to Terraform vars files that will be passed as -var-file",
 							"required": false,
 							"value": {
 								"type": "array",
@@ -79,20 +91,193 @@
 						},
 						{
 							"name": "optional_var_files",
+							"description": "Like required_var_files, but any files that do not exist are ignored",
 							"required": false,
+							"value": {
+								"type": "array",
+								"elementType": "string"
+							}
+						}
+					]
+				},
+				{
+					"type": "before_hook",
+					"description": "Command hooks that should run before terraform is called",
+					"parameters": [
+						{
+							"name": "name",
+							"type": "string",
+							"required": true,
+							"description": "Name of the hook"
+						}
+					],
+					"attributes": [
+						{
+							"name": "commands",
+							"description": "List of terraform sub commands for which the hook should run before",
+							"required": true,
 							"value": {
 								"type": "array",
 								"elementType": "string"
 							}
 						},
 						{
-							"name": "env_vars",
+							"name": "execute",
+							"description": "List of command and arguments that should be run as the hook",
+							"required": true,
+							"value": {
+								"type": "array",
+								"elementType": "string"
+							}
+						},
+						{
+							"name": "working_dir",
+							"description": "The path to set as the working directory of the hook",
 							"required": false,
 							"value": {
-								"type": "object"
+								"type": "string"
+							}
+						},
+						{
+							"name": "run_on_error",
+							"description": "If true, this hook will run even if a previous hook hit an error",
+							"required": false,
+							"value": {
+								"type": "boolean"
+							}
+						},
+						{
+							"name": "suppress_stdout",
+							"description": "If true, the stdout output of the executed commands will be suppressed",
+							"required": false,
+							"value": {
+								"type": "boolean"
 							}
 						}
 					]
+				},
+				{
+					"type": "after_hook",
+					"description": "Command hooks that should run after terraform is called",
+					"parameters": [
+						{
+							"name": "name",
+							"type": "string",
+							"required": true,
+							"description": "Name of the hook"
+						}
+					],
+					"attributes": [
+						{
+							"name": "commands",
+							"description": "List of terraform sub commands for which the hook should run after",
+							"required": true,
+							"value": {
+								"type": "array",
+								"elementType": "string"
+							}
+						},
+						{
+							"name": "execute",
+							"description": "List of command and arguments that should be run as the hook",
+							"required": true,
+							"value": {
+								"type": "array",
+								"elementType": "string"
+							}
+						},
+						{
+							"name": "working_dir",
+							"description": "The path to set as the working directory of the hook",
+							"required": false,
+							"value": {
+								"type": "string"
+							}
+						},
+						{
+							"name": "run_on_error",
+							"description": "If true, this hook will run even if terraform command hit an error",
+							"required": false,
+							"value": {
+								"type": "boolean"
+							}
+						},
+						{
+							"name": "suppress_stdout",
+							"description": "If true, the stdout output of the executed commands will be suppressed",
+							"required": false,
+							"value": {
+								"type": "boolean"
+							}
+						}
+					]
+				},
+				{
+					"type": "error_hook",
+					"description": "Command hooks that run when an error is thrown",
+					"parameters": [
+						{
+							"name": "name",
+							"type": "string",
+							"required": true,
+							"description": "Name of the hook"
+						}
+					],
+					"attributes": [
+						{
+							"name": "commands",
+							"description": "List of terraform sub commands for which the hook should run on error",
+							"required": true,
+							"value": {
+								"type": "array",
+								"elementType": "string"
+							}
+						},
+						{
+							"name": "execute",
+							"description": "List of command and arguments that should be run as the hook",
+							"required": true,
+							"value": {
+								"type": "array",
+								"elementType": "string"
+							}
+						},
+						{
+							"name": "on_errors",
+							"description": "List of error expressions that will trigger this hook",
+							"required": true,
+							"value": {
+								"type": "array",
+								"elementType": "string"
+							}
+						},
+						{
+							"name": "working_dir",
+							"description": "The path to set as the working directory of the hook",
+							"required": false,
+							"value": {
+								"type": "string"
+							}
+						},
+						{
+							"name": "suppress_stdout",
+							"description": "If true, the stdout output of the executed commands will be suppressed",
+							"required": false,
+							"value": {
+								"type": "boolean"
+							}
+						}
+					]
+				}
+			],
+			"examples": [
+				{
+					"description": "Basic terraform configuration with source",
+					"code": "terraform {\n  source = \"git::git@github.com:acme/modules.git//networking/vpc?ref=v0.0.1\"\n}"
+				},
+				{
+					"description": "Configuration with hooks",
+					"code": "terraform {\n  before_hook \"before_hook\" {\n    commands = [\"apply\", \"plan\"]\n    execute = [\"echo\", \"Running before hook\"]\n  }\n\n  after_hook \"after_hook\" {\n    commands = [\"apply\"]\n    execute = [\"echo\", \"Running after hook\"]\n    run_on_error = true\n  }\n}"
 				}
 			]
 		},
@@ -139,177 +324,199 @@
 		},
 		{
 			"type": "locals",
-			"description": "Defines local variables that can be used throughout the Terragrunt configuration.",
+			"description": "Used to define aliases for Terragrunt expressions that can be referenced elsewhere in configuration. Local variables can be simple values or complex types like lists and maps, and are available under the reference local.<local name> throughout the file where the locals block is defined.",
 			"arbitraryAttributes": true,
 			"examples": [
 				{
-					"description": "Local variables configuration",
-					"code": "locals {\n  env = \"prod\"\n  region = \"us-west-2\"\n  vpc_cidr = \"10.0.0.0/16\"\n}"
-				}
-			]
-		},
-		{
-			"type": "dependency",
-			"description": "Declares dependencies on other Terragrunt configurations.",
-			"examples": [
+					"description": "Simple locals with string value",
+					"code": "locals {\n  aws_region = \"us-east-1\"\n}"
+				},
 				{
-					"description": "Dependency configuration",
-					"code": "dependency \"vpc\" {\n  config_path = \"../vpc\"\n  mock_outputs = {\n    vpc_id = \"temporary-dummy-id\"\n  }\n}"
+					"description": "Complex locals with lists and maps",
+					"code": "locals {\n  regions = [\"us-east-1\", \"us-west-2\", \"eu-west-1\"]\n  region_to_bucket_name = {\n    us-east-1 = \"east-bucket\"\n    us-west-2 = \"west-bucket\"\n    eu-west-1 = \"eu-bucket\"\n  }\n}"
+				},
+				{
+					"description": "Locals with file reading and computation",
+					"code": "locals {\n  region_hcl = read_terragrunt_config(find_in_parent_folders(\"region.hcl\"))\n  region = local.region_hcl.locals.region\n  computed_value = run_cmd(\"--terragrunt-quiet\", \"python3\", \"-c\", \"print('Hello,')\")\n}"
 				}
 			],
-			"parameters": [
-				{
-					"name": "name",
-					"type": "string",
-					"required": true,
-					"description": "Name of the dependency"
-				}
-			],
-			"attributes": [
-				{
-					"name": "config_path",
-					"description": "The path to the dependent Terragrunt configuration.",
-					"required": true,
-					"value": {
-						"type": "string"
-					}
-				},
-				{
-					"name": "mock_outputs",
-					"description": "Mock outputs for the dependency when the actual outputs are not available.",
-					"required": false,
-					"value": {
-						"type": "object"
-					}
-				},
-				{
-					"name": "mock_outputs_allowed_terraform_commands",
-					"description": "List of Terraform commands where mock outputs are allowed.",
-					"required": false,
-					"value": {
-						"type": "array",
-						"elementType": "string"
-					}
-				},
-				{
-					"name": "skip_outputs",
-					"description": "Whether to skip fetching outputs from this dependency.",
-					"required": false,
-					"value": {
-						"type": "boolean"
-					}
-				}
-			]
-		},
-		{
-			"type": "generate",
-			"description": "Dynamically generates files that can be used in your Terraform configurations.",
-			"parameters": [
-				{
-					"name": "name",
-					"type": "string",
-					"required": true,
-					"description": "Name of the generated configuration"
-				}
-			],
-			"attributes": [
-				{
-					"name": "path",
-					"description": "The path where the generated file will be created.",
-					"required": true,
-					"value": {
-						"type": "string"
-					}
-				},
-				{
-					"name": "if_exists",
-					"description": "Specifies the behavior if the file already exists.",
-					"required": true,
-					"value": {
-						"type": "string",
-						"enum": [
-							"overwrite",
-							"overwrite_terragrunt",
-							"skip"
-						]
-					}
-				},
-				{
-					"name": "contents",
-					"description": "The contents of the generated file.",
-					"required": true,
-					"value": {
-						"type": "string"
-					}
-				},
-				{
-					"name": "disable",
-					"description": "Whether to disable generation of this file.",
-					"required": false,
-					"value": {
-						"type": "boolean"
-					}
-				},
-				{
-					"name": "comment_prefix",
-					"description": "Comment prefix to use in the generated file.",
-					"required": false,
-					"value": {
-						"type": "string"
-					}
-				}
-			]
+			"attributes": []
 		},
 		{
 			"type": "remote_state",
-			"description": "Configures Terraform remote state storage and retrieval.",
-			"examples": [
-				{
-					"description": "Remote state configuration",
-					"code": "remote_state {\n  backend = \"s3\"\n  config = {\n    bucket = \"my-terraform-state\"\n    key    = \"${path_relative_to_include()}/terraform.tfstate\"\n    region = \"us-west-2\"\n    encrypt = true\n  }\n}"
-				}
-			],
+			"description": "Used to configure how Terragrunt will set up the remote state configuration of your OpenTofu/Terraform code. Supports special processing of config attributes for s3 and gcs backends.",
 			"attributes": [
 				{
 					"name": "backend",
-					"description": "The backend type for remote state storage.",
+					"description": "Specifies which remote state backend will be configured. Should be one of the available backends that OpenTofu/Terraform supports",
 					"required": true,
 					"value": {
 						"type": "string",
 						"enum": [
 							"s3",
 							"gcs",
-							"azurerm"
+							"azurerm",
+							"local",
+							"remote"
 						]
 					}
 				},
 				{
-					"name": "config",
-					"description": "Configuration settings for the backend.",
-					"required": true,
+					"name": "disable_init",
+					"description": "When true, skip automatic initialization of the backend by Terragrunt. Currently s3 and gcs are the two backends with support for automatic creation",
+					"required": false,
 					"value": {
-						"type": "object"
+						"type": "boolean"
+					}
+				},
+				{
+					"name": "disable_dependency_optimization",
+					"description": "When true, disable optimized dependency fetching for terragrunt modules using this remote_state block",
+					"required": false,
+					"value": {
+						"type": "boolean"
 					}
 				},
 				{
 					"name": "generate",
-					"description": "Configuration for generating backend configuration.",
+					"description": "Configure Terragrunt to automatically generate a .tf file that configures the remote state backend",
 					"required": false,
 					"value": {
-						"type": "object"
+						"type": "object",
+						"properties": {
+							"path": {
+								"type": "string",
+								"description": "The path where the generated file should be written"
+							},
+							"if_exists": {
+								"type": "string",
+								"enum": [
+									"overwrite",
+									"overwrite_terragrunt",
+									"skip",
+									"error"
+								],
+								"description": "What to do if a file already exists at path"
+							}
+						}
 					}
+				},
+				{
+					"name": "config",
+					"description": "Map used to fill in the backend configuration in OpenTofu/Terraform. For s3 and gcs backends, supports additional properties for automatic initialization",
+					"required": true,
+					"value": {
+						"type": "object",
+						"properties": {
+							"s3": {
+								"region": "string",
+								"profile": "string",
+								"endpoint": "string",
+								"endpoints": "object",
+								"encrypt": "boolean",
+								"role_arn": "string",
+								"shared_credentials_file": "string",
+								"external_id": "string",
+								"session_name": "string",
+								"dynamodb_table": "string",
+								"skip_bucket_versioning": "boolean",
+								"skip_bucket_ssencryption": "boolean",
+								"skip_bucket_root_access": "boolean",
+								"skip_bucket_enforced_tls": "boolean",
+								"skip_bucket_public_access_blocking": "boolean",
+								"disable_bucket_update": "boolean",
+								"enable_lock_table_ssencryption": "boolean",
+								"s3_bucket_tags": "object",
+								"dynamodb_table_tags": "object",
+								"accesslogging_bucket_tags": "object",
+								"disable_aws_client_checksums": "boolean",
+								"accesslogging_bucket_name": "string",
+								"accesslogging_target_prefix": "string",
+								"skip_accesslogging_bucket_acl": "boolean",
+								"skip_accesslogging_bucket_enforced_tls": "boolean",
+								"skip_accesslogging_bucket_public_access_blocking": "boolean",
+								"skip_accesslogging_bucket_ssencryption": "boolean",
+								"bucket_sse_algorithm": "string",
+								"bucket_sse_kms_key_id": "string",
+								"assume_role": "object"
+							},
+							"gcs": {
+								"skip_bucket_creation": "boolean",
+								"skip_bucket_versioning": "boolean",
+								"enable_bucket_policy_only": "boolean",
+								"project": "string",
+								"location": "string",
+								"gcs_bucket_labels": "object",
+								"credentials": "string",
+								"access_token": "string"
+							}
+						}
+					}
+				},
+				{
+					"name": "encryption",
+					"description": "Map used to configure state and plan encryption in OpenTofu",
+					"required": false,
+					"value": {
+						"type": "object",
+						"properties": {
+							"key_provider": {
+								"type": "string",
+								"enum": [
+									"pbkdf2",
+									"aws_kms",
+									"gcp_kms"
+								]
+							},
+							"passphrase": "string",
+							"kms_key_id": "string"
+						}
+					}
+				}
+			],
+			"arbitraryAttributes": true,
+			"examples": [
+				{
+					"description": "S3 backend configuration",
+					"code": "remote_state {\n  backend = \"s3\"\n  config = {\n    bucket = \"my-terraform-state\"\n    key    = \"${path_relative_to_include()}/terraform.tfstate\"\n    region = \"us-east-1\"\n    encrypt = true\n    dynamodb_table = \"my-lock-table\"\n  }\n}"
+				},
+				{
+					"description": "GCS backend configuration",
+					"code": "remote_state {\n  backend = \"gcs\"\n  config = {\n    project = \"my-project\"\n    location = \"eu\"\n    bucket = \"my-terraform-state\"\n    prefix = \"${path_relative_to_include()}/terraform.tfstate\"\n  }\n}"
 				}
 			]
 		},
 		{
 			"type": "inputs",
-			"description": "Specifies input variables for Terraform modules.",
+			"description": "A map used to specify input variables and their values to pass to OpenTofu/Terraform. Each entry is passed using TF_VAR_ environment variables with json-encoded values. Note: The actual type information must be correctly specified in the Terraform variable declarations.",
 			"arbitraryAttributes": true,
 			"examples": [
 				{
-					"description": "Input variables configuration",
-					"code": "inputs = {\n  vpc_cidr = local.vpc_cidr\n  environment = local.env\n  region = local.region\n}"
+					"description": "Basic scalar type inputs",
+					"code": "inputs = {\n  string = \"string\"\n  number = 42\n  bool   = true\n}"
+				},
+				{
+					"description": "List type inputs",
+					"code": "inputs = {\n  list_string = [\"a\", \"b\", \"c\"]\n  list_number = [1, 2, 3]\n  list_bool   = [true, false]\n}"
+				},
+				{
+					"description": "Map type inputs",
+					"code": "inputs = {\n  map_string = {\n    foo = \"bar\"\n  }\n  map_number = {\n    foo = 42\n    bar = 12345\n  }\n}"
+				},
+				{
+					"description": "Complex object type inputs",
+					"code": "inputs = {\n  object = {\n    str  = \"string\"\n    num  = 42\n    list = [1, 2, 3]\n    map = {\n      foo = \"bar\"\n    }\n  }\n}"
+				},
+				{
+					"description": "Environment variable inputs",
+					"code": "inputs = {\n  from_env = get_env(\"FROM_ENV\", \"default\")\n}"
 				}
+			],
+			"notes": [
+				"Variables set through inputs block will have lower precedence than explicit TF_VAR_ environment variables",
+				"Variables set through inputs will have higher precedence than terraform.tfvars files",
+				"Variables set through inputs will have higher precedence than *.auto.tfvars files",
+				"Variables set through inputs will have higher precedence than -var and -var-file options"
 			]
 		},
 		{
@@ -361,44 +568,32 @@
 		},
 		{
 			"name": "download_dir",
-			"description": "Specifies the directory for downloaded Terraform configurations.",
+			"description": "Specifies the directory for downloaded Terraform configurations.\n\n* Used to override the default download directory.\n* Precedence (highest to lowest):\n  1. --terragrunt-download-dir command line option\n  2. TERRAGRUNT_DOWNLOAD environment variable\n  3. download_dir attribute in module's terragrunt.hcl\n  4. download_dir attribute in included terragrunt.hcl\n* Supports all terragrunt functions (e.g., path_relative_from_include())",
 			"required": false,
 			"value": {
-				"type": "string"
+				"type": "string",
+				"description": "Path to the download directory. Can include terragrunt function calls."
 			}
 		},
 		{
 			"name": "prevent_destroy",
-			"description": "Prevents the destruction of resources.",
+			"description": "Prevents the destruction of resources in protected modules.\n\n* When set to true, prevents terraform destroy and destroy-all commands from destroying the module's resources\n* Useful for protecting critical infrastructure components like databases or authentication systems\n* Acts as a safety mechanism to prevent accidental destruction of important resources",
 			"required": false,
 			"value": {
-				"type": "boolean"
+				"type": "boolean",
+				"description": "When true, prevents destruction of the module's resources"
 			}
 		},
 		{
 			"name": "skip",
-			"description": "Skips certain Terragrunt functionality.",
+			"description": "DEPRECATED: Use exclude instead.\n\n* When set to true, all terragrunt commands will skip the selected module\n* Useful for:\n  - Modules you don't want any changes to\n  - Modules that don't define any infrastructure by themselves\n  - Root level terragrunt.hcl files used only for configuration reuse\n* Can be inherited from included terragrunt.hcl files\n* Inheritance can be overridden by explicitly redefining skip in the current module",
 			"required": false,
 			"value": {
-				"type": "boolean"
-			}
-		},
-		{
-			"name": "iam_role",
-			"description": "IAM role to assume when running Terraform.",
-			"required": false,
-			"value": {
-				"type": "string"
-			}
-		},
-		{
-			"name": "retryable_errors",
-			"description": "List of error messages that should trigger a retry.",
-			"required": false,
-			"value": {
-				"type": "array",
-				"elementType": "string"
-			}
+				"type": "boolean",
+				"description": "When true, terragrunt will skip processing this module for all commands"
+			},
+			"deprecated": true,
+			"deprecationMessage": "Use exclude block instead of skip"
 		},
 		{
 			"type": "retry",
@@ -433,34 +628,6 @@
 					"value": {
 						"type": "array",
 						"elementType": "string"
-					}
-				}
-			]
-		},
-		{
-			"type": "terraform_binary",
-			"description": "Specifies custom Terraform binary settings.\n\n* Use this block to configure a specific Terraform binary to use.\n* Allows specifying custom download URLs and binary names.",
-			"examples": [
-				{
-					"description": "Custom Terraform binary configuration",
-					"code": "terraform_binary {\n  source = \"https://releases.hashicorp.com/terraform/1.0.0/terraform_1.0.0_linux_amd64.zip\"\n  version = \"1.0.0\"\n}"
-				}
-			],
-			"attributes": [
-				{
-					"name": "source",
-					"description": "URL or path to the Terraform binary.",
-					"required": false,
-					"value": {
-						"type": "string"
-					}
-				},
-				{
-					"name": "version",
-					"description": "Version of Terraform to use.",
-					"required": false,
-					"value": {
-						"type": "string"
 					}
 				}
 			]
@@ -643,6 +810,438 @@
 					}
 				}
 			]
+		},
+		{
+			"type": "errors",
+			"description": "Contains all the configurations for handling errors. Supports different nested configuration blocks like retry and ignore to define specific error-handling strategies.",
+			"blocks": [
+				{
+					"type": "retry",
+					"description": "Defines rules for retrying operations when specific errors occur. Useful for handling intermittent errors that may resolve after a short delay or multiple attempts.",
+					"parameters": [
+						{
+							"name": "name",
+							"type": "string",
+							"required": true,
+							"description": "Name of the retry configuration block"
+						}
+					],
+					"attributes": [
+						{
+							"name": "retryable_errors",
+							"description": "A list of regex patterns to match errors that are eligible to be retried",
+							"required": true,
+							"value": {
+								"type": "array",
+								"elementType": "string",
+								"minItems": 1
+							}
+						},
+						{
+							"name": "max_attempts",
+							"description": "The maximum number of retry attempts",
+							"required": true,
+							"value": {
+								"type": "number"
+							}
+						},
+						{
+							"name": "sleep_interval_sec",
+							"description": "Time (in seconds) to wait between retries",
+							"required": true,
+							"value": {
+								"type": "number"
+							}
+						}
+					]
+				},
+				{
+					"type": "ignore",
+					"description": "Defines rules for ignoring specific errors. Useful when certain errors are known to be safe and should not prevent the run from proceeding.",
+					"parameters": [
+						{
+							"name": "name",
+							"type": "string",
+							"required": true,
+							"description": "Name of the ignore configuration block"
+						}
+					],
+					"attributes": [
+						{
+							"name": "ignorable_errors",
+							"description": "A list of regex patterns to define errors to ignore. Patterns starting with ! indicate errors that should not be ignored",
+							"required": true,
+							"value": {
+								"type": "array",
+								"elementType": "string",
+								"minItems": 1
+							}
+						},
+						{
+							"name": "message",
+							"description": "A warning message displayed when an error is ignored",
+							"required": false,
+							"value": {
+								"type": "string"
+							}
+						},
+						{
+							"name": "signals",
+							"description": "Key-value pairs used to emit signals to external systems. Results in a JSON file named error-signals.json being emitted on failure",
+							"required": false,
+							"value": {
+								"type": "object"
+							}
+						}
+					]
+				}
+			]
+		},
+		{
+			"type": "exclude",
+			"description": "Provides advanced configuration options to dynamically determine when and how specific units in the Terragrunt dependency graph are excluded. This feature allows for fine-grained control over which actions are executed and can conditionally exclude dependencies.",
+			"attributes": [
+				{
+					"name": "if",
+					"description": "Condition to dynamically determine whether the unit should be excluded",
+					"required": true,
+					"value": {
+						"type": "boolean"
+					}
+				},
+				{
+					"name": "actions",
+					"description": "Specifies which actions to exclude when the condition is met",
+					"required": true,
+					"value": {
+						"type": "array",
+						"elementType": "string",
+						"minItems": 1,
+						"enum": [
+							"plan",
+							"apply",
+							"all",
+							"all_except_output",
+							"destroy",
+							"refresh",
+							"validate"
+						]
+					}
+				},
+				{
+					"name": "exclude_dependencies",
+					"description": "Indicates whether the dependencies of the excluded unit should also be excluded (default: false)",
+					"required": false,
+					"value": {
+						"type": "boolean"
+					}
+				}
+			]
+		},
+		{
+			"type": "feature",
+			"description": "Configures feature flags in HCL for a specific Terragrunt Unit. Each feature flag must include a default value. Feature flags can be overridden via the --feature CLI option or TERRAGRUNT_FEATURE environment variable.",
+			"parameters": [
+				{
+					"name": "name",
+					"type": "string",
+					"required": true,
+					"description": "The name of the feature flag"
+				}
+			],
+			"attributes": [
+				{
+					"name": "default",
+					"description": "The default value of the feature flag. This value is evaluated as an expression dynamically at runtime.",
+					"required": true,
+					"value": {
+						"type": "any"
+					}
+				}
+			],
+			"examples": [
+				{
+					"description": "Boolean feature flag",
+					"code": "feature \"run_hook\" {\n  default = false\n}"
+				},
+				{
+					"description": "String feature flag",
+					"code": "feature \"string_flag\" {\n  default = \"test\"\n}"
+				},
+				{
+					"description": "Dynamic feature flag using external command",
+					"code": "feature \"feature_name\" {\n  default = run_cmd(\"--terragrunt-quiet\", \"<command-to-fetch-feature-flag-value>\")\n}"
+				}
+			]
+		},
+		{
+			"type": "generate",
+			"description": "Used to arbitrarily generate a file in the terragrunt working directory. This can be used to generate common OpenTofu/Terraform configurations that are shared across multiple OpenTofu/Terraform modules.",
+			"parameters": [
+				{
+					"name": "name",
+					"type": "string",
+					"required": true,
+					"description": "Name to differentiate between multiple generate blocks"
+				}
+			],
+			"attributes": [
+				{
+					"name": "path",
+					"description": "The path where the generated file should be written. If a relative path, it'll be relative to the Terragrunt working dir",
+					"required": true,
+					"value": {
+						"type": "string"
+					}
+				},
+				{
+					"name": "if_exists",
+					"description": "What to do if a file already exists at path",
+					"required": true,
+					"value": {
+						"type": "string",
+						"enum": [
+							"overwrite",
+							"overwrite_terragrunt",
+							"skip",
+							"error"
+						]
+					}
+				},
+				{
+					"name": "if_disabled",
+					"description": "What to do if a file already exists at path and disable is set to true (skip by default)",
+					"required": false,
+					"value": {
+						"type": "string",
+						"enum": [
+							"remove",
+							"remove_terragrunt",
+							"skip"
+						]
+					}
+				},
+				{
+					"name": "comment_prefix",
+					"description": "A prefix that can be used to indicate comments in the generated file. Used by terragrunt to write out a signature for knowing which files were generated by terragrunt. Defaults to #",
+					"required": false,
+					"value": {
+						"type": "string"
+					}
+				},
+				{
+					"name": "disable_signature",
+					"description": "When true, disables including a signature in the generated file. This means that there will be no difference between overwrite_terragrunt and overwrite for the if_exists setting. Defaults to false",
+					"required": false,
+					"value": {
+						"type": "boolean"
+					}
+				},
+				{
+					"name": "contents",
+					"description": "The contents of the generated file",
+					"required": true,
+					"value": {
+						"type": "string"
+					}
+				},
+				{
+					"name": "disable",
+					"description": "Disables this generate block",
+					"required": false,
+					"value": {
+						"type": "boolean"
+					}
+				}
+			],
+			"arbitraryAttributes": true,
+			"examples": [
+				{
+					"description": "Generate an AWS provider configuration",
+					"code": "generate \"provider\" {\n  path      = \"provider.tf\"\n  if_exists = \"overwrite\"\n  contents = <<EOF\nprovider \"aws\" {\n  region              = \"us-east-1\"\n  version             = \"= 2.3.1\"\n  allowed_account_ids = [\"1234567890\"]\n}\nEOF\n}"
+				}
+			]
+		},
+		{
+			"type": "dependencies",
+			"description": "Used to enumerate all the Terragrunt modules that need to be applied in order for this module to be able to apply. This is purely for ordering the operations when using run-all commands of OpenTofu/Terraform. This does not expose or pull in the outputs like dependency blocks.",
+			"attributes": [
+				{
+					"name": "paths",
+					"description": "A list of paths to modules that should be marked as a dependency",
+					"required": true,
+					"value": {
+						"type": "array",
+						"elementType": "string",
+						"minItems": 1
+					}
+				}
+			],
+			"examples": [
+				{
+					"description": "Basic dependencies configuration",
+					"code": "dependencies {\n  paths = [\"../vpc\", \"../rds\"]\n}"
+				}
+			]
+		},
+		{
+			"type": "dependency",
+			"description": "Used to configure module dependencies. Each dependency block exports the outputs of the target module as block attributes you can reference throughout the configuration.",
+			"parameters": [
+				{
+					"name": "name",
+					"type": "string",
+					"required": true,
+					"description": "Name to differentiate between dependency blocks. Can be referenced using dependency.<name>.outputs"
+				}
+			],
+			"attributes": [
+				{
+					"name": "config_path",
+					"description": "Path to a Terragrunt module (folder with a terragrunt.hcl file) that should be included as a dependency in this configuration",
+					"required": true,
+					"value": {
+						"type": "string"
+					}
+				},
+				{
+					"name": "enabled",
+					"description": "When false, excludes the dependency from execution. Defaults to true",
+					"required": false,
+					"value": {
+						"type": "boolean"
+					}
+				},
+				{
+					"name": "skip_outputs",
+					"description": "When true, skip calling terragrunt output when processing this dependency. If mock_outputs is configured, set outputs to the value of mock_outputs. Otherwise, outputs will be set to an empty map",
+					"required": false,
+					"value": {
+						"type": "boolean"
+					}
+				},
+				{
+					"name": "mock_outputs",
+					"description": "A map of arbitrary key value pairs to use as the outputs attribute when no outputs are available from the target module, or if skip_outputs is true",
+					"required": false,
+					"value": {
+						"type": "object"
+					}
+				},
+				{
+					"name": "mock_outputs_allowed_terraform_commands",
+					"description": "A list of Terraform commands for which mock_outputs are allowed",
+					"required": false,
+					"value": {
+						"type": "array",
+						"elementType": "string"
+					}
+				},
+				{
+					"name": "mock_outputs_merge_with_state",
+					"description": "DEPRECATED. Use mock_outputs_merge_strategy_with_state. When true, mock_outputs and the state outputs will be merged",
+					"required": false,
+					"value": {
+						"type": "boolean"
+					}
+				},
+				{
+					"name": "mock_outputs_merge_strategy_with_state",
+					"description": "Specifies how any existing state should be merged into the mocks",
+					"required": false,
+					"value": {
+						"type": "string",
+						"enum": [
+							"no_merge",
+							"shallow",
+							"deep_map_only"
+						]
+					}
+				}
+			],
+			"examples": [
+				{
+					"description": "Basic dependency with mock outputs",
+					"code": "dependency \"vpc\" {\n  config_path = \"../vpc\"\n  mock_outputs_allowed_terraform_commands = [\"validate\"]\n  mock_outputs = {\n    vpc_id = \"fake-vpc-id\"\n  }\n}"
+				}
+			]
+		},
+		{
+			"name": "iam_role",
+			"description": "Specifies an IAM role that Terragrunt should assume before invoking OpenTofu/Terraform.\n\n* Precedence (highest to lowest):\n  1. --terragrunt-iam-role command line option\n  2. TERRAGRUNT_IAM_ROLE env variable\n  3. iam_role attribute in module's terragrunt.hcl\n  4. iam_role attribute in included terragrunt.hcl\n* Can reference local variables\n* Can be included from other HCL files through include",
+			"required": false,
+			"value": {
+				"type": "string",
+				"description": "ARN of the IAM role to assume"
+			}
+		},
+		{
+			"name": "iam_assume_role_duration",
+			"description": "Specifies the STS session duration (in seconds) for the assumed IAM role.\n\n* Precedence (highest to lowest):\n  1. --terragrunt-iam-assume-role-duration command line option\n  2. TERRAGRUNT_IAM_ASSUME_ROLE_DURATION env variable\n  3. iam_assume_role_duration attribute in module's terragrunt.hcl\n  4. iam_assume_role_duration attribute in included terragrunt.hcl",
+			"required": false,
+			"value": {
+				"type": "number",
+				"description": "Duration in seconds for the assumed role session"
+			}
+		},
+		{
+			"name": "iam_assume_role_session_name",
+			"description": "Specifies the STS session name for the assumed IAM role.\n\n* Precedence (highest to lowest):\n  1. --terragrunt-iam-assume-role-session-name command line option\n  2. TERRAGRUNT_IAM_ASSUME_ROLE_SESSION_NAME env variable\n  3. iam_assume_role_session_name attribute in module's terragrunt.hcl\n  4. iam_assume_role_session_name attribute in included terragrunt.hcl",
+			"required": false,
+			"value": {
+				"type": "string",
+				"description": "Session name for the assumed role"
+			}
+		},
+		{
+			"name": "iam_web_identity_token",
+			"description": "Used with iam_role to assume a role using AssumeRoleWithWebIdentity.\n\n* Can be set to either a token value or path to a token file\n* Enables running terragrunt in CI/CD pipelines without static AWS credentials\n* Precedence (highest to lowest):\n  1. --terragrunt-iam-web-identity-token command line option\n  2. TERRAGRUNT_IAM_ASSUME_ROLE_WEB_IDENTITY_TOKEN env variable\n  3. iam_web_identity_token attribute in module's terragrunt.hcl\n  4. iam_web_identity_token attribute in included terragrunt.hcl",
+			"required": false,
+			"value": {
+				"type": "string",
+				"description": "Either the web identity token value or path to the token file"
+			}
+		},
+		{
+			"name": "terraform_binary",
+			"description": "Overrides the default binary Terragrunt calls (which is tofu).\n\n* Precedence (highest to lowest):\n  1. --terragrunt-tfpath command line option\n  2. TERRAGRUNT_TFPATH env variable\n  3. terragrunt.hcl in module directory\n  4. included terragrunt.hcl",
+			"required": false,
+			"value": {
+				"type": "string",
+				"description": "Path or name of the terraform binary to use"
+			}
+		},
+		{
+			"name": "terraform_version_constraint",
+			"description": "Overrides the default minimum supported version of OpenTofu/Terraform.\n\n* Useful when an older version of OpenTofu/Terraform is needed\n* Terragrunt usually only officially supports the latest version",
+			"required": false,
+			"value": {
+				"type": "string",
+				"pattern": "^(>=|<=|>|<|~>|=)\\s*\\d+\\.\\d+(\\.\\d+)?([\\s,]+(?:>=|<=|>|<|~>|=)\\s*\\d+\\.\\d+(\\.\\d+)?)*$",
+				"description": "Version constraint string (e.g., '>= 0.11')"
+			}
+		},
+		{
+			"name": "terragrunt_version_constraint",
+			"description": "Specifies which versions of the Terragrunt CLI can be used with your configuration.\n\n* Terragrunt will exit with an error if the running version doesn't match the constraints",
+			"required": false,
+			"value": {
+				"type": "string",
+				"pattern": "^(>=|<=|>|<|~>|=)\\s*\\d+\\.\\d+(\\.\\d+)?([\\s,]+(?:>=|<=|>|<|~>|=)\\s*\\d+\\.\\d+(\\.\\d+)?)*$",
+				"description": "Version constraint string (e.g., '>= 0.23')"
+			}
+		},
+		{
+			"name": "retryable_errors",
+			"description": "DEPRECATED: Use errors instead.\n\n* Overrides the default list of retryable errors with a custom list\n* Uses regex patterns to match error messages\n* Includes a comprehensive default list of common retryable errors",
+			"required": false,
+			"deprecated": true,
+			"deprecationMessage": "Use errors block instead of retryable_errors",
+			"value": {
+				"type": "array",
+				"elementType": "string",
+				"description": "List of regex patterns matching retryable errors"
+			}
 		}
 	]
 }
