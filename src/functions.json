@@ -559,6 +559,1869 @@
 				"elementType": "string",
 				"description": "List of Terraform commands that accept variables"
 			}
+		},
+		{
+			"name": "abs",
+			"description": "Returns the absolute value of a number.\n\n* Returns the absolute value of the given number.\n* If the number is 0 or positive, returns as-is.\n* If the number is negative, returns its positive counterpart.",
+			"parameters": [
+				{
+					"name": "number",
+					"type": "number",
+					"required": true,
+					"description": "The number to get the absolute value of"
+				}
+			],
+			"returnType": {
+				"type": "number",
+				"description": "Absolute value of the input number"
+			},
+			"example": "locals { absolute = abs(-42) }"
+		},
+		{
+			"name": "abspath",
+			"description": "Converts a relative path to an absolute path.\n\n* Takes a string containing a relative path and converts it to an absolute path.\n* The path is relative to the current working directory.\n* Does not verify that the resulting path exists.",
+			"parameters": [
+				{
+					"name": "path",
+					"type": "string",
+					"required": true,
+					"description": "Relative path to convert to absolute"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Absolute path"
+			},
+			"example": "locals { full_path = abspath(\"../config\") }"
+		},
+		{
+			"name": "alltrue",
+			"description": "Returns true if all elements in a list are true or \"true\".\n\n* Takes a list of boolean values.\n* Returns true if all elements are true.\n* Returns false if any element is false.",
+			"parameters": [
+				{
+					"name": "list",
+					"type": "array",
+					"required": true,
+					"description": "List of boolean values to check"
+				}
+			],
+			"returnType": {
+				"type": "boolean",
+				"description": "True if all elements are true, false otherwise"
+			},
+			"example": "locals { all_enabled = alltrue([true, true, true]) }"
+		},
+		{
+			"name": "anytrue",
+			"description": "Returns true if any element in a list is true or \"true\".\n\n* Takes a list of boolean values.\n* Returns true if any element is true.\n* Returns false if all elements are false.",
+			"parameters": [
+				{
+					"name": "list",
+					"type": "array",
+					"required": true,
+					"description": "List of boolean values to check"
+				}
+			],
+			"returnType": {
+				"type": "boolean",
+				"description": "True if any element is true, false otherwise"
+			},
+			"example": "locals { any_enabled = anytrue([false, true, false]) }"
+		},
+		{
+			"name": "base64decode",
+			"description": "Decodes a base64-encoded string.\n\n* Takes a base64-encoded string and returns the decoded value.\n* Returns an error if the input is not valid base64.",
+			"parameters": [
+				{
+					"name": "str",
+					"type": "string",
+					"required": true,
+					"description": "Base64-encoded string to decode"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Decoded string"
+			},
+			"example": "locals { decoded = base64decode(\"SGVsbG8=\") }"
+		},
+		{
+			"name": "base64encode",
+			"description": "Encodes a string in base64.\n\n* Takes a regular string and returns the base64-encoded value.",
+			"parameters": [
+				{
+					"name": "str",
+					"type": "string",
+					"required": true,
+					"description": "String to encode in base64"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Base64-encoded string"
+			},
+			"example": "locals { encoded = base64encode(\"Hello\") }"
+		},
+		{
+			"name": "base64gunzip",
+			"description": "Decodes a base64-encoded string and un-gzips the result.\n\n* Takes a base64-encoded gzipped string and returns the decoded, uncompressed value.\n* Returns an error if the input is not valid base64 or gzip data.",
+			"parameters": [
+				{
+					"name": "str",
+					"type": "string",
+					"required": true,
+					"description": "Base64-encoded gzipped string to decode"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Decoded and uncompressed string"
+			},
+			"example": "locals { uncompressed = base64gunzip(var.compressed_data) }"
+		},
+		{
+			"name": "base64gzip",
+			"description": "Compresses a string with gzip and base64-encodes the result.\n\n* Takes a string, compresses it with gzip, and returns the base64-encoded result.",
+			"parameters": [
+				{
+					"name": "str",
+					"type": "string",
+					"required": true,
+					"description": "String to compress and encode"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Base64-encoded gzipped string"
+			},
+			"example": "locals { compressed = base64gzip(\"Hello World\") }"
+		},
+		{
+			"name": "base64sha256",
+			"description": "Returns a base64-encoded SHA256 hash of the given string.\n\n* Computes the SHA256 hash of the input and returns it base64-encoded.",
+			"parameters": [
+				{
+					"name": "str",
+					"type": "string",
+					"required": true,
+					"description": "String to hash"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Base64-encoded SHA256 hash"
+			},
+			"example": "locals { hash = base64sha256(\"Hello World\") }"
+		},
+		{
+			"name": "base64sha512",
+			"description": "Returns a base64-encoded SHA512 hash of the given string.\n\n* Computes the SHA512 hash of the input and returns it base64-encoded.",
+			"parameters": [
+				{
+					"name": "str",
+					"type": "string",
+					"required": true,
+					"description": "String to hash"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Base64-encoded SHA512 hash"
+			},
+			"example": "locals { hash = base64sha512(\"Hello World\") }"
+		},
+		{
+			"name": "bcrypt",
+			"description": "Returns a bcrypt hash of the given string.\n\n* Generates a bcrypt hash of the input string.\n* Cost parameter determines the computational complexity.",
+			"parameters": [
+				{
+					"name": "str",
+					"type": "string",
+					"required": true,
+					"description": "String to hash"
+				},
+				{
+					"name": "cost",
+					"type": "number",
+					"required": false,
+					"description": "Cost parameter for bcrypt (default: 10)"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Bcrypt hash of the input string"
+			},
+			"example": "locals { password_hash = bcrypt(\"mypassword\", 12) }"
+		},
+		{
+			"name": "can",
+			"description": "Tests whether an expression can be evaluated without error.\n\n* Returns true if the expression can be evaluated.\n* Returns false if evaluating the expression would produce an error.",
+			"parameters": [
+				{
+					"name": "expression",
+					"type": "any",
+					"required": true,
+					"description": "Expression to test"
+				}
+			],
+			"returnType": {
+				"type": "boolean",
+				"description": "True if expression can be evaluated, false otherwise"
+			},
+			"example": "locals { safe = can(var.map[\"key\"]) }"
+		},
+		{
+			"name": "ceil",
+			"description": "Returns the smallest integer greater than or equal to the given number.\n\n* Rounds a number up to the nearest integer.\n* Returns the input unchanged if it's already an integer.",
+			"parameters": [
+				{
+					"name": "number",
+					"type": "number",
+					"required": true,
+					"description": "Number to round up"
+				}
+			],
+			"returnType": {
+				"type": "number",
+				"description": "Smallest integer greater than or equal to the input"
+			},
+			"example": "locals { rounded = ceil(1.1) } # Returns 2"
+		},
+		{
+			"name": "chomp",
+			"description": "Removes trailing newline characters from a string.\n\n* Removes both Unix-style (LF) and Windows-style (CRLF) line endings.\n* Returns the string unchanged if it has no trailing newlines.",
+			"parameters": [
+				{
+					"name": "str",
+					"type": "string",
+					"required": true,
+					"description": "String to chomp"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "String with trailing newlines removed"
+			},
+			"example": "locals { cleaned = chomp(\"hello\\n\") }"
+		},
+		{
+			"name": "chunklist",
+			"description": "Splits a list into fixed-size chunks.\n\n* Splits a list into smaller lists of the specified size.\n* The last chunk may be smaller if the list length is not divisible by the chunk size.",
+			"parameters": [
+				{
+					"name": "list",
+					"type": "array",
+					"required": true,
+					"description": "List to split into chunks"
+				},
+				{
+					"name": "chunk_size",
+					"type": "number",
+					"required": true,
+					"description": "Size of each chunk"
+				}
+			],
+			"returnType": {
+				"type": "array",
+				"description": "List of chunks"
+			},
+			"example": "locals { chunks = chunklist([1, 2, 3, 4, 5], 2) } # Returns [[1, 2], [3, 4], [5]]"
+		},
+		{
+			"name": "cidrcontains",
+			"description": "Checks whether a given IP address belongs to a given CIDR network address range.\n\n* Returns true if the IP address is within the specified CIDR range.\n* Returns false otherwise.",
+			"parameters": [
+				{
+					"name": "prefix",
+					"type": "string",
+					"required": true,
+					"description": "CIDR range to check against"
+				},
+				{
+					"name": "ip",
+					"type": "string",
+					"required": true,
+					"description": "IP address to check"
+				}
+			],
+			"returnType": {
+				"type": "boolean",
+				"description": "True if IP is in CIDR range"
+			},
+			"example": "locals { in_range = cidrcontains(\"10.0.0.0/8\", \"10.0.0.1\") }"
+		},
+		{
+			"name": "cidrhost",
+			"description": "Calculates a full IP address within a CIDR range.\n\n* Takes a CIDR prefix and host number.\n* Returns the IP address that corresponds to that host number within the CIDR range.",
+			"parameters": [
+				{
+					"name": "prefix",
+					"type": "string",
+					"required": true,
+					"description": "CIDR range"
+				},
+				{
+					"name": "hostnum",
+					"type": "number",
+					"required": true,
+					"description": "Host number within the CIDR range"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "IP address for the specified host"
+			},
+			"example": "locals { ip = cidrhost(\"10.0.0.0/8\", 2) }"
+		},
+		{
+			"name": "cidrnetmask",
+			"description": "Converts an IPv4 CIDR prefix length to its netmask address.\n\n* Converts a CIDR prefix length (like /24) to a subnet mask address.\n* Works only with IPv4 addresses.",
+			"parameters": [
+				{
+					"name": "prefix",
+					"type": "string",
+					"required": true,
+					"description": "CIDR prefix"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Subnet mask address"
+			},
+			"example": "locals { netmask = cidrnetmask(\"10.0.0.0/24\") } # Returns 255.255.255.0"
+		},
+		{
+			"name": "cidrsubnet",
+			"description": "Calculates a subnet address within a larger CIDR range.\n\n* Takes a CIDR prefix and extends its prefix length by a given number of bits.\n* Returns a subnet address within the given CIDR range.",
+			"parameters": [
+				{
+					"name": "prefix",
+					"type": "string",
+					"required": true,
+					"description": "CIDR range"
+				},
+				{
+					"name": "newbits",
+					"type": "number",
+					"required": true,
+					"description": "Number of additional bits for the subnet prefix"
+				},
+				{
+					"name": "netnum",
+					"type": "number",
+					"required": true,
+					"description": "Subnet number within the prefix"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Subnet CIDR range"
+			},
+			"example": "locals { subnet = cidrsubnet(\"10.0.0.0/16\", 8, 2) }"
+		},
+		{
+			"name": "cidrsubnets",
+			"description": "Calculates multiple consecutive subnet addresses within a CIDR range.\n\n* Takes a CIDR prefix and list of subnet sizes.\n* Returns a list of consecutive subnet CIDR ranges.",
+			"parameters": [
+				{
+					"name": "prefix",
+					"type": "string",
+					"required": true,
+					"description": "CIDR range"
+				},
+				{
+					"name": "newbits",
+					"type": "array",
+					"required": true,
+					"description": "List of numbers of new bits for each subnet",
+					"variadic": true
+				}
+			],
+			"returnType": {
+				"type": "array",
+				"description": "List of subnet CIDR ranges"
+			},
+			"example": "locals { subnets = cidrsubnets(\"10.0.0.0/16\", 4, 4, 8) }"
+		},
+		{
+			"name": "compact",
+			"description": "Removes null or empty string elements from a list.\n\n* Takes a list and returns a new list with all null and \"\" elements removed.\n* Preserves the order of the remaining elements.",
+			"parameters": [
+				{
+					"name": "list",
+					"type": "array",
+					"required": true,
+					"description": "List to compact"
+				}
+			],
+			"returnType": {
+				"type": "array",
+				"description": "List with null and empty string elements removed"
+			},
+			"example": "locals { cleaned = compact([\"a\", \"\", \"b\", null, \"c\"]) }"
+		},
+		{
+			"name": "concat",
+			"description": "Combines multiple lists into a single list.\n\n* Takes two or more lists and combines them into a single list.\n* Maintains the order of elements from the input lists.",
+			"parameters": [
+				{
+					"name": "lists",
+					"type": "array",
+					"required": true,
+					"description": "Lists to concatenate",
+					"variadic": true
+				}
+			],
+			"returnType": {
+				"type": "array",
+				"description": "Combined list"
+			},
+			"example": "locals { combined = concat([1, 2], [3, 4], [5]) }"
+		},
+		{
+			"name": "contains",
+			"description": "Determines whether a list contains a given element.\n\n* Returns true if the list contains the given value.\n* Returns false otherwise.",
+			"parameters": [
+				{
+					"name": "list",
+					"type": "array",
+					"required": true,
+					"description": "List to search"
+				},
+				{
+					"name": "value",
+					"type": "any",
+					"required": true,
+					"description": "Value to find"
+				}
+			],
+			"returnType": {
+				"type": "boolean",
+				"description": "True if value is in list"
+			},
+			"example": "locals { has_element = contains([\"a\", \"b\", \"c\"], \"b\") }"
+		},
+		{
+			"name": "csvdecode",
+			"description": "Decodes CSV-formatted data into a list of maps.\n\n* Takes a string containing CSV data.\n* Returns a list of maps where each map's keys are from the header row.",
+			"parameters": [
+				{
+					"name": "str",
+					"type": "string",
+					"required": true,
+					"description": "CSV-formatted string to decode"
+				}
+			],
+			"returnType": {
+				"type": "array",
+				"description": "List of maps representing CSV rows"
+			},
+			"example": "locals { data = csvdecode(file(\"data.csv\")) }"
+		},
+		{
+			"name": "distinct",
+			"description": "Removes duplicate elements from a list.\n\n* Takes a list and returns a new list with duplicate elements removed.\n* Preserves the order of first occurrence of each element.",
+			"parameters": [
+				{
+					"name": "list",
+					"type": "array",
+					"required": true,
+					"description": "List to deduplicate"
+				}
+			],
+			"returnType": {
+				"type": "array",
+				"description": "List with duplicates removed"
+			},
+			"example": "locals { unique = distinct([\"a\", \"b\", \"a\", \"c\", \"b\"]) }"
+		},
+		{
+			"name": "element",
+			"description": "Retrieves a single element from a list by its index.\n\n* Returns the element at the specified index.\n* If index is greater than the list length, wraps around using modulo.",
+			"parameters": [
+				{
+					"name": "list",
+					"type": "array",
+					"required": true,
+					"description": "List to get element from"
+				},
+				{
+					"name": "index",
+					"type": "number",
+					"required": true,
+					"description": "Index to retrieve"
+				}
+			],
+			"returnType": {
+				"type": "any",
+				"description": "Element at the specified index"
+			},
+			"example": "locals { item = element([\"a\", \"b\", \"c\"], 1) }"
+		},
+		{
+			"name": "endswith",
+			"description": "Checks if a string ends with a specified suffix.\n\n* Returns true if the string ends with the suffix.\n* Returns false otherwise.",
+			"parameters": [
+				{
+					"name": "str",
+					"type": "string",
+					"required": true,
+					"description": "String to check"
+				},
+				{
+					"name": "suffix",
+					"type": "string",
+					"required": true,
+					"description": "Suffix to look for"
+				}
+			],
+			"returnType": {
+				"type": "boolean",
+				"description": "True if string ends with suffix"
+			},
+			"example": "locals { has_suffix = endswith(\"hello.txt\", \".txt\") }"
+		},
+		{
+			"name": "file",
+			"description": "Reads the contents of a file.\n\n* Reads and returns the contents of the file at the given path.\n* Path is relative to the configuration file.",
+			"parameters": [
+				{
+					"name": "path",
+					"type": "string",
+					"required": true,
+					"description": "Path to the file to read"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Contents of the file"
+			},
+			"example": "locals { content = file(\"${path.module}/file.txt\") }"
+		},
+		{
+			"name": "filebase64",
+			"description": "Reads and base64-encodes the contents of a file.\n\n* Reads a file and returns its contents as a base64-encoded string.\n* Path is relative to the configuration file.",
+			"parameters": [
+				{
+					"name": "path",
+					"type": "string",
+					"required": true,
+					"description": "Path to the file to read"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Base64-encoded contents of the file"
+			},
+			"example": "locals { encoded = filebase64(\"${path.module}/cert.pem\") }"
+		},
+		{
+			"name": "filebase64sha256",
+			"description": "Returns a base64-encoded SHA256 hash of a file's contents.\n\n* Computes the SHA256 hash of the file's contents and returns it base64-encoded.\n* Path is relative to the configuration file.",
+			"parameters": [
+				{
+					"name": "path",
+					"type": "string",
+					"required": true,
+					"description": "Path to the file to hash"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Base64-encoded SHA256 hash of the file"
+			},
+			"example": "locals { hash = filebase64sha256(\"${path.module}/data.bin\") }"
+		},
+		{
+			"name": "filebase64sha512",
+			"description": "Returns a base64-encoded SHA512 hash of a file's contents.\n\n* Computes the SHA512 hash of the file's contents and returns it base64-encoded.\n* Path is relative to the configuration file.",
+			"parameters": [
+				{
+					"name": "path",
+					"type": "string",
+					"required": true,
+					"description": "Path to the file to hash"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Base64-encoded SHA512 hash of the file"
+			},
+			"example": "locals { hash = filebase64sha512(\"${path.module}/data.bin\") }"
+		},
+		{
+			"name": "fileexists",
+			"description": "Determines whether a file exists at a given path.\n\n* Returns true if a file exists at the specified path.\n* Returns false if the file does not exist or is a directory.\n* Path is relative to the configuration file.",
+			"parameters": [
+				{
+					"name": "path",
+					"type": "string",
+					"required": true,
+					"description": "Path to check for file existence"
+				}
+			],
+			"returnType": {
+				"type": "boolean",
+				"description": "True if file exists"
+			},
+			"example": "locals { exists = fileexists(\"${path.module}/config.json\") }"
+		},
+		{
+			"name": "filemd5",
+			"description": "Returns the MD5 hash of a file's contents.\n\n* Computes and returns the MD5 hash of the file's contents.\n* Path is relative to the configuration file.",
+			"parameters": [
+				{
+					"name": "path",
+					"type": "string",
+					"required": true,
+					"description": "Path to the file to hash"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "MD5 hash of the file"
+			},
+			"example": "locals { hash = filemd5(\"${path.module}/data.txt\") }"
+		},
+		{
+			"name": "fileset",
+			"description": "Enumerates files that match a glob pattern.\n\n* Returns a list of files that match the specified pattern.\n* Supports standard glob syntax.\n* Path is relative to the configuration file.",
+			"parameters": [
+				{
+					"name": "path",
+					"type": "string",
+					"required": true,
+					"description": "Base directory for the search"
+				},
+				{
+					"name": "pattern",
+					"type": "string",
+					"required": true,
+					"description": "Glob pattern to match files"
+				}
+			],
+			"returnType": {
+				"type": "array",
+				"description": "List of matching file paths"
+			},
+			"example": "locals { files = fileset(path.module, \"*.txt\") }"
+		},
+		{
+			"name": "filesha1",
+			"description": "Returns the SHA1 hash of a file's contents.\n\n* Computes and returns the SHA1 hash of the file's contents.\n* Path is relative to the configuration file.",
+			"parameters": [
+				{
+					"name": "path",
+					"type": "string",
+					"required": true,
+					"description": "Path to the file to hash"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "SHA1 hash of the file"
+			},
+			"example": "locals { hash = filesha1(\"${path.module}/data.bin\") }"
+		},
+		{
+			"name": "filesha256",
+			"description": "Returns the SHA256 hash of a file's contents.\n\n* Computes and returns the SHA256 hash of the file's contents.\n* Path is relative to the configuration file.",
+			"parameters": [
+				{
+					"name": "path",
+					"type": "string",
+					"required": true,
+					"description": "Path to the file to hash"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "SHA256 hash of the file"
+			},
+			"example": "locals { hash = filesha256(\"${path.module}/data.bin\") }"
+		},
+		{
+			"name": "filesha512",
+			"description": "Returns the SHA512 hash of a file's contents.\n\n* Computes and returns the SHA512 hash of the file's contents.\n* Path is relative to the configuration file.",
+			"parameters": [
+				{
+					"name": "path",
+					"type": "string",
+					"required": true,
+					"description": "Path to the file to hash"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "SHA512 hash of the file"
+			},
+			"example": "locals { hash = filesha512(\"${path.module}/data.bin\") }"
+		},
+		{
+			"name": "flatten",
+			"description": "Flattens nested lists into a single list.\n\n* Takes a list that may contain other lists and flattens it into a single list.\n* Removes all nesting levels.\n* Preserves the order of elements.",
+			"parameters": [
+				{
+					"name": "list",
+					"type": "array",
+					"required": true,
+					"description": "Nested list to flatten"
+				}
+			],
+			"returnType": {
+				"type": "array",
+				"description": "Flattened list with no nesting"
+			},
+			"example": "locals { flat = flatten([[1, 2], [3], [4, [5, 6]]]) }"
+		},
+		{
+			"name": "floor",
+			"description": "Returns the largest integer less than or equal to the given number.\n\n* Rounds a number down to the nearest integer.\n* Returns the input unchanged if it's already an integer.",
+			"parameters": [
+				{
+					"name": "number",
+					"type": "number",
+					"required": true,
+					"description": "Number to round down"
+				}
+			],
+			"returnType": {
+				"type": "number",
+				"description": "Largest integer less than or equal to the input"
+			},
+			"example": "locals { rounded = floor(1.7) }"
+		},
+		{
+			"name": "format",
+			"description": "Creates a string by formatting a number of values according to a format string.\n\n* Similar to sprintf in other languages.\n* Supports various format verbs (%s, %d, %g, etc.).",
+			"parameters": [
+				{
+					"name": "format",
+					"type": "string",
+					"required": true,
+					"description": "Format string"
+				},
+				{
+					"name": "args",
+					"type": "any",
+					"required": true,
+					"variadic": true,
+					"description": "Values to format"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Formatted string"
+			},
+			"example": "locals { message = format(\"Hello, %s!\", var.name) }"
+		},
+		{
+			"name": "formatdate",
+			"description": "Converts a timestamp into a different time format.\n\n* Formats a timestamp string into the specified format.\n* Uses strftime-style format specifiers.",
+			"parameters": [
+				{
+					"name": "format",
+					"type": "string",
+					"required": true,
+					"description": "Format specification"
+				},
+				{
+					"name": "timestamp",
+					"type": "string",
+					"required": true,
+					"description": "Timestamp to format"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Formatted timestamp"
+			},
+			"example": "locals { date = formatdate(\"YYYY-MM-DD\", \"2024-02-04T12:34:56Z\") }"
+		},
+		{
+			"name": "formatlist",
+			"description": "Creates a list of strings by formatting each of several collections of values.\n\n* Like format, but applies the format string to each element of a list.\n* Returns a list of formatted strings.",
+			"parameters": [
+				{
+					"name": "format",
+					"type": "string",
+					"required": true,
+					"description": "Format string"
+				},
+				{
+					"name": "args",
+					"type": "array",
+					"required": true,
+					"variadic": true,
+					"description": "Lists of values to format"
+				}
+			],
+			"returnType": {
+				"type": "array",
+				"description": "List of formatted strings"
+			},
+			"example": "locals { names = formatlist(\"user-%s\", [\"a\", \"b\", \"c\"]) }"
+		},
+		{
+			"name": "indent",
+			"description": "Adds a prefix to all but the first line of a multi-line string.\n\n* Adds the specified number of spaces to the beginning of all lines except the first.\n* Useful for formatting multi-line strings.",
+			"parameters": [
+				{
+					"name": "spaces",
+					"type": "number",
+					"required": true,
+					"description": "Number of spaces to indent"
+				},
+				{
+					"name": "str",
+					"type": "string",
+					"required": true,
+					"description": "String to indent"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Indented string"
+			},
+			"example": "locals { indented = indent(2, \"first\\nsecond\\nthird\") }"
+		},
+		{
+			"name": "index",
+			"description": "Finds the index of a given value in a list.\n\n* Returns the index of the first occurrence of a value in a list.\n* Returns an error if the value is not found.",
+			"parameters": [
+				{
+					"name": "list",
+					"type": "array",
+					"required": true,
+					"description": "List to search"
+				},
+				{
+					"name": "value",
+					"type": "any",
+					"required": true,
+					"description": "Value to find"
+				}
+			],
+			"returnType": {
+				"type": "number",
+				"description": "Index of the value in the list"
+			},
+			"example": "locals { pos = index([\"a\", \"b\", \"c\"], \"b\") }"
+		},
+		{
+			"name": "log",
+			"description": "Returns the logarithm of a number in a given base.\n\n* Calculates the logarithm of a number using the specified base.\n* Returns an error if either argument is <= 0.",
+			"parameters": [
+				{
+					"name": "number",
+					"type": "number",
+					"required": true,
+					"description": "Number to calculate logarithm of"
+				},
+				{
+					"name": "base",
+					"type": "number",
+					"required": true,
+					"description": "Base of the logarithm"
+				}
+			],
+			"returnType": {
+				"type": "number",
+				"description": "Logarithm of the number"
+			},
+			"example": "locals { result = log(16, 2) } # Returns 4"
+		},
+		{
+			"name": "lookup",
+			"description": "Retrieves the value of a given key from a map.\n\n* Looks up the value for a given key in a map.\n* Can provide a default value if the key doesn't exist.\n* Returns an error if key not found and no default provided.",
+			"parameters": [
+				{
+					"name": "map",
+					"type": "object",
+					"required": true,
+					"description": "Map to look up value in"
+				},
+				{
+					"name": "key",
+					"type": "string",
+					"required": true,
+					"description": "Key to look up"
+				},
+				{
+					"name": "default",
+					"type": "any",
+					"required": false,
+					"description": "Default value if key not found"
+				}
+			],
+			"returnType": {
+				"type": "any",
+				"description": "Value from map or default"
+			},
+			"example": "locals { value = lookup(var.map, \"key\", \"default\") }"
+		},
+		{
+			"name": "lower",
+			"description": "Converts all characters in a string to lowercase.\n\n* Converts string to lowercase.\n* Returns an empty string if given an empty string.",
+			"parameters": [
+				{
+					"name": "str",
+					"type": "string",
+					"required": true,
+					"description": "String to convert to lowercase"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Lowercase string"
+			},
+			"example": "locals { result = lower(\"HELLO\") }"
+		},
+		{
+			"name": "matchkeys",
+			"description": "Returns a list of values from the first list whose corresponding values in the second list match a given value.\n\n* Takes two lists of equal length and a search value.\n* Returns elements from first list where corresponding elements in second list match search value.",
+			"parameters": [
+				{
+					"name": "values",
+					"type": "array",
+					"required": true,
+					"description": "List of values to select from"
+				},
+				{
+					"name": "keys",
+					"type": "array",
+					"required": true,
+					"description": "List to match against"
+				},
+				{
+					"name": "searchset",
+					"type": "array",
+					"required": true,
+					"description": "Values to search for"
+				}
+			],
+			"returnType": {
+				"type": "array",
+				"description": "List of matched values"
+			},
+			"example": "locals { matched = matchkeys([\"a\", \"b\", \"c\"], [1, 2, 1], [1]) }"
+		},
+		{
+			"name": "max",
+			"description": "Returns the largest value from a list of numbers.\n\n* Takes one or more numbers and returns the highest value.\n* Returns an error if any argument is not a number.",
+			"parameters": [
+				{
+					"name": "numbers",
+					"type": "array",
+					"required": true,
+					"description": "Numbers to compare",
+					"variadic": true
+				}
+			],
+			"returnType": {
+				"type": "number",
+				"description": "Largest number from the input"
+			},
+			"example": "locals { highest = max(5, 12, 9) }"
+		},
+		{
+			"name": "min",
+			"description": "Returns the smallest value from a list of numbers.\n\n* Takes one or more numbers and returns the lowest value.\n* Returns an error if any argument is not a number.",
+			"parameters": [
+				{
+					"name": "numbers",
+					"type": "array",
+					"required": true,
+					"description": "Numbers to compare",
+					"variadic": true
+				}
+			],
+			"returnType": {
+				"type": "number",
+				"description": "Smallest number from the input"
+			},
+			"example": "locals { lowest = min(5, 12, 9) }"
+		},
+		{
+			"name": "one",
+			"description": "Returns either the first non-null value or the last value from a list.\n\n* Takes list of values and returns first non-null value.\n* If all values are null, returns the last value.\n* If list is empty, returns null.",
+			"parameters": [
+				{
+					"name": "list",
+					"type": "array",
+					"required": true,
+					"description": "List of values"
+				}
+			],
+			"returnType": {
+				"type": "any",
+				"description": "First non-null value or last value"
+			},
+			"example": "locals { result = one([null, \"\", \"a\", \"b\"]) }"
+		},
+		{
+			"name": "parseint",
+			"description": "Parses a string as a number in the specified base.\n\n* Converts a string representation of an integer to a number.\n* Supports bases 2 through 62.",
+			"parameters": [
+				{
+					"name": "number",
+					"type": "string",
+					"required": true,
+					"description": "String to parse"
+				},
+				{
+					"name": "base",
+					"type": "number",
+					"required": false,
+					"description": "Base to parse in (default 10)"
+				}
+			],
+			"returnType": {
+				"type": "number",
+				"description": "Parsed integer value"
+			},
+			"example": "locals { value = parseint(\"FF\", 16) }"
+		},
+		{
+			"name": "pow",
+			"description": "Returns the given number raised to the given power.\n\n* Raises base number to specified exponent.\n* Returns an error if result would be imaginary.",
+			"parameters": [
+				{
+					"name": "base",
+					"type": "number",
+					"required": true,
+					"description": "Base number"
+				},
+				{
+					"name": "exponent",
+					"type": "number",
+					"required": true,
+					"description": "Power to raise to"
+				}
+			],
+			"returnType": {
+				"type": "number",
+				"description": "Result of the power operation"
+			},
+			"example": "locals { squared = pow(2, 3) }"
+		},
+		{
+			"name": "range",
+			"description": "Generates a list of numbers from start to end (inclusive).\n\n* Creates a sequence of numbers with optional step value.\n* Can count up or down based on start and end values.",
+			"parameters": [
+				{
+					"name": "start",
+					"type": "number",
+					"required": true,
+					"description": "First number in range"
+				},
+				{
+					"name": "end",
+					"type": "number",
+					"required": true,
+					"description": "Last number in range"
+				},
+				{
+					"name": "step",
+					"type": "number",
+					"required": false,
+					"description": "Increment between numbers"
+				}
+			],
+			"returnType": {
+				"type": "array",
+				"description": "List of numbers in the range"
+			},
+			"example": "locals { numbers = range(0, 10, 2) }"
+		},
+		{
+			"name": "regex",
+			"description": "Applies a regular expression to a string and returns the first match.\n\n* Returns the first match found in the string.\n* Returns an error if the pattern is invalid.",
+			"parameters": [
+				{
+					"name": "pattern",
+					"type": "string",
+					"required": true,
+					"description": "Regular expression pattern"
+				},
+				{
+					"name": "string",
+					"type": "string",
+					"required": true,
+					"description": "String to search"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "First matching substring"
+			},
+			"example": "locals { match = regex(\"[0-9]+\", \"abc123def\") }"
+		},
+		{
+			"name": "regexall",
+			"description": "Applies a regular expression to a string and returns all matches.\n\n* Returns a list of all non-overlapping matches in the string.\n* Returns an error if the pattern is invalid.",
+			"parameters": [
+				{
+					"name": "pattern",
+					"type": "string",
+					"required": true,
+					"description": "Regular expression pattern"
+				},
+				{
+					"name": "string",
+					"type": "string",
+					"required": true,
+					"description": "String to search"
+				}
+			],
+			"returnType": {
+				"type": "array",
+				"description": "List of all matching substrings"
+			},
+			"example": "locals { matches = regexall(\"[0-9]+\", \"abc123def456\") }"
+		},
+		{
+			"name": "replace",
+			"description": "Replaces all occurrences of a substring in a string.\n\n* Replaces each occurrence of search string with replace string.\n* Case-sensitive replacement.",
+			"parameters": [
+				{
+					"name": "string",
+					"type": "string",
+					"required": true,
+					"description": "String to perform replacement in"
+				},
+				{
+					"name": "search",
+					"type": "string",
+					"required": true,
+					"description": "String to search for"
+				},
+				{
+					"name": "replace",
+					"type": "string",
+					"required": true,
+					"description": "String to replace with"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "String with replacements"
+			},
+			"example": "locals { result = replace(\"Hello World\", \"World\", \"Terraform\") }"
+		},
+		{
+			"name": "reverse",
+			"description": "Reverses a list of elements.\n\n* Creates a new list with all elements in reverse order.\n* Works with lists of any element type.",
+			"parameters": [
+				{
+					"name": "list",
+					"type": "array",
+					"required": true,
+					"description": "List to reverse"
+				}
+			],
+			"returnType": {
+				"type": "array",
+				"description": "Reversed list"
+			},
+			"example": "locals { reversed = reverse([1, 2, 3, 4, 5]) }"
+		},
+		{
+			"name": "rsadecrypt",
+			"description": "Decrypts an RSA-encrypted message.\n\n* Decrypts ciphertext using provided private key.\n* Expects base64-encoded ciphertext.",
+			"parameters": [
+				{
+					"name": "ciphertext",
+					"type": "string",
+					"required": true,
+					"description": "Base64-encoded encrypted message"
+				},
+				{
+					"name": "privatekey",
+					"type": "string",
+					"required": true,
+					"description": "RSA private key in PEM format"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Decrypted message"
+			},
+			"example": "locals { decrypted = rsadecrypt(var.encrypted_message, file(\"private.pem\")) }"
+		},
+		{
+			"name": "setintersection",
+			"description": "Takes multiple sets and returns a new set containing only elements that appear in all of the given sets.\n\n* Returns the intersection of all given sets.\n* Returns empty list if no common elements exist.\n* Sets are represented as lists.",
+			"parameters": [
+				{
+					"name": "sets",
+					"type": "array",
+					"required": true,
+					"description": "Sets to intersect",
+					"variadic": true
+				}
+			],
+			"returnType": {
+				"type": "array",
+				"description": "Set of elements common to all input sets"
+			},
+			"example": "locals { common = setintersection([\"a\", \"b\"], [\"b\", \"c\"]) }"
+		},
+		{
+			"name": "setproduct",
+			"description": "Takes multiple sets and returns a new set containing all possible combinations of elements from each set.\n\n* Returns the Cartesian product of the given sets.\n* Sets are represented as lists.",
+			"parameters": [
+				{
+					"name": "sets",
+					"type": "array",
+					"required": true,
+					"description": "Sets to combine",
+					"variadic": true
+				}
+			],
+			"returnType": {
+				"type": "array",
+				"description": "List of all possible combinations"
+			},
+			"example": "locals { combinations = setproduct([\"a\", \"b\"], [1, 2]) }"
+		},
+		{
+			"name": "setsubtract",
+			"description": "Takes two sets and returns a new set containing elements from the first set that are not present in the second set.\n\n* Returns elements unique to the first set.\n* Sets are represented as lists.",
+			"parameters": [
+				{
+					"name": "a",
+					"type": "array",
+					"required": true,
+					"description": "First set"
+				},
+				{
+					"name": "b",
+					"type": "array",
+					"required": true,
+					"description": "Set to subtract"
+				}
+			],
+			"returnType": {
+				"type": "array",
+				"description": "Set of elements in first set but not in second"
+			},
+			"example": "locals { difference = setsubtract([\"a\", \"b\", \"c\"], [\"b\", \"c\", \"d\"]) }"
+		},
+		{
+			"name": "setunion",
+			"description": "Takes multiple sets and returns a new set containing all unique elements from all sets.\n\n* Returns the union of all given sets.\n* Removes duplicate elements.\n* Sets are represented as lists.",
+			"parameters": [
+				{
+					"name": "sets",
+					"type": "array",
+					"required": true,
+					"description": "Sets to unite",
+					"variadic": true
+				}
+			],
+			"returnType": {
+				"type": "array",
+				"description": "Set of all unique elements"
+			},
+			"example": "locals { all = setunion([\"a\", \"b\"], [\"b\", \"c\"]) }"
+		},
+		{
+			"name": "slice",
+			"description": "Extracts a portion of a list between two indices.\n\n* Returns a subset of a list from start index up to but not including end index.\n* Indices can be negative to count from end of list.",
+			"parameters": [
+				{
+					"name": "list",
+					"type": "array",
+					"required": true,
+					"description": "List to slice"
+				},
+				{
+					"name": "start_index",
+					"type": "number",
+					"required": true,
+					"description": "Starting index"
+				},
+				{
+					"name": "end_index",
+					"type": "number",
+					"required": true,
+					"description": "Ending index (exclusive)"
+				}
+			],
+			"returnType": {
+				"type": "array",
+				"description": "Sliced portion of the list"
+			},
+			"example": "locals { portion = slice([\"a\", \"b\", \"c\", \"d\"], 1, 3) }"
+		},
+		{
+			"name": "sort",
+			"description": "Sorts a list of strings lexicographically.\n\n* Returns a new list with all elements sorted.\n* Only works with lists of strings.\n* Case-sensitive sorting.",
+			"parameters": [
+				{
+					"name": "list",
+					"type": "array",
+					"required": true,
+					"description": "List of strings to sort"
+				}
+			],
+			"returnType": {
+				"type": "array",
+				"description": "Sorted list"
+			},
+			"example": "locals { sorted = sort([\"c\", \"a\", \"b\"]) }"
+		},
+		{
+			"name": "split",
+			"description": "Splits a string by a given separator.\n\n* Returns a list of substrings.\n* If separator is empty, splits into individual characters.\n* If no separator found, returns single-element list.",
+			"parameters": [
+				{
+					"name": "separator",
+					"type": "string",
+					"required": true,
+					"description": "String to separate on"
+				},
+				{
+					"name": "string",
+					"type": "string",
+					"required": true,
+					"description": "String to split"
+				}
+			],
+			"returnType": {
+				"type": "array",
+				"description": "List of substrings"
+			},
+			"example": "locals { parts = split(\",\", \"foo,bar,baz\") }"
+		},
+		{
+			"name": "strcontains",
+			"description": "Checks if a string contains a given substring.\n\n* Returns true if the string contains the given substring.\n* Case-sensitive comparison.",
+			"parameters": [
+				{
+					"name": "string",
+					"type": "string",
+					"required": true,
+					"description": "String to search in"
+				},
+				{
+					"name": "substr",
+					"type": "string",
+					"required": true,
+					"description": "Substring to search for"
+				}
+			],
+			"returnType": {
+				"type": "boolean",
+				"description": "True if substring is found"
+			},
+			"example": "locals { contains = strcontains(\"Hello World\", \"World\") }"
+		},
+		{
+			"name": "strrev",
+			"description": "Reverses a string.\n\n* Returns a new string with characters in reverse order.\n* Works with Unicode strings.",
+			"parameters": [
+				{
+					"name": "string",
+					"type": "string",
+					"required": true,
+					"description": "String to reverse"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Reversed string"
+			},
+			"example": "locals { reversed = strrev(\"Hello\") }"
+		},
+		{
+			"name": "substr",
+			"description": "Extracts a substring from a string.\n\n* Returns part of a string based on offset and length.\n* If length is not specified, returns rest of string from offset.\n* Offset can be negative to count from end of string.",
+			"parameters": [
+				{
+					"name": "string",
+					"type": "string",
+					"required": true,
+					"description": "String to extract from"
+				},
+				{
+					"name": "offset",
+					"type": "number",
+					"required": true,
+					"description": "Starting position"
+				},
+				{
+					"name": "length",
+					"type": "number",
+					"required": false,
+					"description": "Length of substring to extract"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Extracted substring"
+			},
+			"example": "locals { part = substr(\"Hello World\", 6, 5) }"
+		},
+		{
+			"name": "tobool",
+			"description": "Converts a value to boolean.\n\n* Converts its argument to a boolean value.\n* Accepts various string representations like \"true\", \"false\", \"1\", \"0\".\n* Returns error if conversion not possible.",
+			"parameters": [
+				{
+					"name": "value",
+					"type": "any",
+					"required": true,
+					"description": "Value to convert"
+				}
+			],
+			"returnType": {
+				"type": "boolean",
+				"description": "Boolean representation of value"
+			},
+			"example": "locals { bool_value = tobool(\"true\") }"
+		},
+		{
+			"name": "tolist",
+			"description": "Converts a value to list.\n\n* Converts its argument to a list.\n* If given a list, returns it unchanged.\n* Can convert sets and tuples to lists.",
+			"parameters": [
+				{
+					"name": "value",
+					"type": "any",
+					"required": true,
+					"description": "Value to convert"
+				}
+			],
+			"returnType": {
+				"type": "array",
+				"description": "List representation of value"
+			},
+			"example": "locals { list_value = tolist(var.set) }"
+		},
+		{
+			"name": "tomap",
+			"description": "Converts a value to map.\n\n* Converts its argument to a map.\n* If given a map, returns it unchanged.\n* Returns error if conversion not possible.",
+			"parameters": [
+				{
+					"name": "value",
+					"type": "any",
+					"required": true,
+					"description": "Value to convert"
+				}
+			],
+			"returnType": {
+				"type": "object",
+				"description": "Map representation of value"
+			},
+			"example": "locals { map_value = tomap(var.object) }"
+		},
+		{
+			"name": "tonumber",
+			"description": "Converts a value to number.\n\n* Converts its argument to a number.\n* Can convert string representations of numbers.\n* Returns error if conversion not possible.",
+			"parameters": [
+				{
+					"name": "value",
+					"type": "any",
+					"required": true,
+					"description": "Value to convert"
+				}
+			],
+			"returnType": {
+				"type": "number",
+				"description": "Numeric representation of value"
+			},
+			"example": "locals { num_value = tonumber(\"42\") }"
+		},
+		{
+			"name": "toset",
+			"description": "Converts a value to set.\n\n* Converts its argument to a set.\n* Removes duplicate elements.\n* Most commonly used with lists.",
+			"parameters": [
+				{
+					"name": "value",
+					"type": "any",
+					"required": true,
+					"description": "Value to convert"
+				}
+			],
+			"returnType": {
+				"type": "array",
+				"description": "Set representation of value"
+			},
+			"example": "locals { set_value = toset([\"a\", \"b\", \"a\"]) }"
+		},
+		{
+			"name": "tostring",
+			"description": "Converts a value to string.\n\n* Converts its argument to a string.\n* Works with numbers, bools, and other primitive types.\n* Returns error if conversion not possible.",
+			"parameters": [
+				{
+					"name": "value",
+					"type": "any",
+					"required": true,
+					"description": "Value to convert"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "String representation of value"
+			},
+			"example": "locals { str_value = tostring(42) }"
+		},
+		{
+			"name": "textdecodebase64",
+			"description": "Decodes a Base64-encoded string into UTF-8 text.\n\n* Decodes base64 string into UTF-8 text.\n* Returns error if input is not valid base64 or UTF-8.\n* Useful for decoding stored credentials or certificates.",
+			"parameters": [
+				{
+					"name": "str",
+					"type": "string",
+					"required": true,
+					"description": "Base64-encoded string to decode"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Decoded UTF-8 text"
+			},
+			"example": "locals { text = textdecodebase64(var.encoded_data) }"
+		},
+		{
+			"name": "textencodebase64",
+			"description": "Encodes UTF-8 text as a Base64 string.\n\n* Encodes UTF-8 text into base64 string.\n* Useful for storing text in formats that require base64.\n* Returns error if input is not valid UTF-8.",
+			"parameters": [
+				{
+					"name": "str",
+					"type": "string",
+					"required": true,
+					"description": "UTF-8 text to encode"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Base64-encoded string"
+			},
+			"example": "locals { encoded = textencodebase64(\"Hello, World!\") }"
+		},
+		{
+			"name": "timeadd",
+			"description": "Adds a duration to a timestamp.\n\n* Adds specified duration to timestamp.\n* Supports various duration units (s, m, h).\n* Returns RFC 3339 formatted timestamp.",
+			"parameters": [
+				{
+					"name": "timestamp",
+					"type": "string",
+					"required": true,
+					"description": "Timestamp string to add to"
+				},
+				{
+					"name": "duration",
+					"type": "string",
+					"required": true,
+					"description": "Duration to add (e.g., \"30m\", \"24h\")"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "New timestamp"
+			},
+			"example": "locals { future = timeadd(timestamp(), \"24h\") }"
+		},
+		{
+			"name": "timecmp",
+			"description": "Compares two timestamps.\n\n* Returns -1 if first timestamp is earlier.\n* Returns 0 if timestamps are equal.\n* Returns 1 if first timestamp is later.",
+			"parameters": [
+				{
+					"name": "timestamp_a",
+					"type": "string",
+					"required": true,
+					"description": "First timestamp to compare"
+				},
+				{
+					"name": "timestamp_b",
+					"type": "string",
+					"required": true,
+					"description": "Second timestamp to compare"
+				}
+			],
+			"returnType": {
+				"type": "number",
+				"description": "Comparison result (-1, 0, or 1)"
+			},
+			"example": "locals { is_later = timecmp(timestamp(), timeadd(timestamp(), \"1h\")) }"
+		},
+		{
+			"name": "timestamp",
+			"description": "Returns the current timestamp.\n\n* Returns current time in RFC 3339 format.\n* Time is in UTC.\n* Precision is to seconds.",
+			"parameters": [],
+			"returnType": {
+				"type": "string",
+				"description": "Current timestamp"
+			},
+			"example": "locals { now = timestamp() }"
+		},
+		{
+			"name": "trim",
+			"description": "Removes specified characters from start and end of string.\n\n* Removes all instances of specified characters from both ends.\n* If no characters specified, removes whitespace.\n* Case-sensitive matching.",
+			"parameters": [
+				{
+					"name": "string",
+					"type": "string",
+					"required": true,
+					"description": "String to trim"
+				},
+				{
+					"name": "chars",
+					"type": "string",
+					"required": false,
+					"description": "Characters to trim (defaults to whitespace)"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Trimmed string"
+			},
+			"example": "locals { cleaned = trim(\"  Hello!  \") }"
+		},
+		{
+			"name": "trimprefix",
+			"description": "Removes specified prefix from start of string.\n\n* Removes prefix if string starts with it.\n* Returns string unchanged if it doesn't start with prefix.\n* Case-sensitive matching.",
+			"parameters": [
+				{
+					"name": "string",
+					"type": "string",
+					"required": true,
+					"description": "String to trim"
+				},
+				{
+					"name": "prefix",
+					"type": "string",
+					"required": true,
+					"description": "Prefix to remove"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "String with prefix removed"
+			},
+			"example": "locals { name = trimprefix(\"prefix_name\", \"prefix_\") }"
+		},
+		{
+			"name": "trimspace",
+			"description": "Removes all leading and trailing whitespace.\n\n* Removes spaces, tabs, newlines from both ends.\n* Similar to trim() but specifically for whitespace.\n* Doesn't affect whitespace inside string.",
+			"parameters": [
+				{
+					"name": "string",
+					"type": "string",
+					"required": true,
+					"description": "String to trim"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "String with whitespace removed from ends"
+			},
+			"example": "locals { cleaned = trimspace(\"\\n  Hello World\\t  \") }"
+		},
+		{
+			"name": "trimsuffix",
+			"description": "Removes specified suffix from end of string.\n\n* Removes suffix if string ends with it.\n* Returns string unchanged if it doesn't end with suffix.\n* Case-sensitive matching.",
+			"parameters": [
+				{
+					"name": "string",
+					"type": "string",
+					"required": true,
+					"description": "String to trim"
+				},
+				{
+					"name": "suffix",
+					"type": "string",
+					"required": true,
+					"description": "Suffix to remove"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "String with suffix removed"
+			},
+			"example": "locals { name = trimsuffix(\"name_suffix\", \"_suffix\") }"
+		},
+		{
+			"name": "transpose",
+			"description": "Takes a map of lists of strings and swaps the keys and values.\n\n* Creates new map with keys from list values and values from list of keys.\n* All lists must have same length.\n* Values must be strings.",
+			"parameters": [
+				{
+					"name": "map",
+					"type": "object",
+					"required": true,
+					"description": "Map of lists to transpose"
+				}
+			],
+			"returnType": {
+				"type": "object",
+				"description": "Transposed map"
+			},
+			"example": "locals { transposed = transpose({\"a\"=[1,2], \"b\"=[3,4]}) }"
+		},
+		{
+			"name": "try",
+			"description": "Attempts to evaluate an expression and returns a default value if it fails.\n\n* Returns the expression's value if evaluation succeeds.\n* Returns the default value if evaluation fails.\n* Useful for handling potential errors gracefully.",
+			"parameters": [
+				{
+					"name": "expression",
+					"type": "any",
+					"required": true,
+					"description": "Expression to try evaluating"
+				},
+				{
+					"name": "default",
+					"type": "any",
+					"required": true,
+					"description": "Value to return if evaluation fails"
+				}
+			],
+			"returnType": {
+				"type": "any",
+				"description": "Result of expression or default value"
+			},
+			"example": "locals { value = try(var.map[\"key\"], \"default\") }"
+		},
+		{
+			"name": "type",
+			"description": "Returns the type of a value.\n\n* Returns a string describing the type.\n* Useful for conditional logic based on value types.\n* Possible return values include: string, number, bool, list, map, null.",
+			"parameters": [
+				{
+					"name": "value",
+					"type": "any",
+					"required": true,
+					"description": "Value to check type of"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Type of the value"
+			},
+			"example": "locals { value_type = type(var.input) }"
+		},
+		{
+			"name": "upper",
+			"description": "Converts all characters in a string to uppercase.\n\n* Converts string to uppercase.\n* Works with Unicode characters.\n* Returns empty string if given empty string.",
+			"parameters": [
+				{
+					"name": "string",
+					"type": "string",
+					"required": true,
+					"description": "String to convert to uppercase"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Uppercase string"
+			},
+			"example": "locals { upper_case = upper(\"Hello\") }"
+		},
+		{
+			"name": "urlencode",
+			"description": "Encodes a string according to URL encoding rules.\n\n* URL-encodes the given string.\n* Replaces special characters with percent-encoded values.\n* Safe for use in URLs.",
+			"parameters": [
+				{
+					"name": "string",
+					"type": "string",
+					"required": true,
+					"description": "String to URL-encode"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "URL-encoded string"
+			},
+			"example": "locals { encoded = urlencode(\"Hello World\") }"
+		},
+		{
+			"name": "urldecode",
+			"description": "Decodes a URL-encoded string.\n\n* Decodes a URL-encoded string.\n* Converts percent-encoded sequences to original characters.\n* Returns error if input is not valid URL-encoded string.",
+			"parameters": [
+				{
+					"name": "string",
+					"type": "string",
+					"required": true,
+					"description": "URL-encoded string to decode"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Decoded string"
+			},
+			"example": "locals { decoded = urldecode(\"%20Hello%20World%20\") }"
+		},
+		{
+			"name": "uuid",
+			"description": "Generates a random UUID.\n\n* Generates a random UUID v4.\n* Returns a new UUID each time it's called.\n* Useful for creating unique identifiers.",
+			"parameters": [],
+			"returnType": {
+				"type": "string",
+				"description": "Random UUID"
+			},
+			"example": "locals { id = uuid() }"
+		},
+		{
+			"name": "uuidv5",
+			"description": "Generates a UUID v5 from a namespace UUID and name.\n\n* Generates deterministic UUID based on namespace and name.\n* Uses SHA-1 hashing.\n* Returns same UUID for same inputs.",
+			"parameters": [
+				{
+					"name": "namespace",
+					"type": "string",
+					"required": true,
+					"description": "UUID defining the namespace"
+				},
+				{
+					"name": "name",
+					"type": "string",
+					"required": true,
+					"description": "Name to generate UUID from"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Generated UUID"
+			},
+			"example": "locals { id = uuidv5(\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", \"example\") }"
+		},
+		{
+			"name": "values",
+			"description": "Returns a list of the values in a map.\n\n* Extracts all values from a map into a list.\n* Order of values is not guaranteed.\n* Useful for iterating over map values.",
+			"parameters": [
+				{
+					"name": "map",
+					"type": "object",
+					"required": true,
+					"description": "Map to extract values from"
+				}
+			],
+			"returnType": {
+				"type": "array",
+				"description": "List of map values"
+			},
+			"example": "locals { map_values = values({a = 1, b = 2, c = 3}) }"
+		},
+		{
+			"name": "zipmap",
+			"description": "Creates a map from a list of keys and a list of values.\n\n* Combines two lists into a map.\n* First list provides keys, second list provides values.\n* Lists must be same length.",
+			"parameters": [
+				{
+					"name": "keys",
+					"type": "array",
+					"required": true,
+					"description": "List of keys"
+				},
+				{
+					"name": "values",
+					"type": "array",
+					"required": true,
+					"description": "List of values"
+				}
+			],
+			"returnType": {
+				"type": "object",
+				"description": "Map combining the keys and values"
+			},
+			"example": "locals { map = zipmap([\"a\", \"b\"], [1, 2]) }"
 		}
 	]
 }

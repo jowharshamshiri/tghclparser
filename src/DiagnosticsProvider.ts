@@ -1,26 +1,26 @@
 import type { Diagnostic, Range } from 'vscode-languageserver';
 import { DiagnosticSeverity } from 'vscode-languageserver';
 
-import type { Token, ValueDefinition, ValueType } from './model';
+import type { BlockTemplate, Token, ValueDefinition, ValueType } from './model';
 import type { ParsedDocument } from './index';
 
 export class DiagnosticsProvider {
 	getDiagnostics(parsedDocument: ParsedDocument): Diagnostic[] {
-        const diagnostics: Diagnostic[] = [];
-        this.validateTokensIterative(parsedDocument.getTokens(), parsedDocument, diagnostics);
-        return diagnostics;
-    }
+		const diagnostics: Diagnostic[] = [];
+		this.validateTokensIterative(parsedDocument.getTokens(), parsedDocument, diagnostics);
+		return diagnostics;
+	}
 
-    private validateTokensIterative(tokens: Token[], parsedDocument: ParsedDocument, diagnostics: Diagnostic[]) {
+	private validateTokensIterative(tokens: Token[], parsedDocument: ParsedDocument, diagnostics: Diagnostic[]) {
 		const stack: Token[] = [...tokens];
 		const processedTokens = new Set<Token>();
-	
+
 		while (stack.length > 0) {
 			const token = stack.pop();
 			if (!token || processedTokens.has(token)) continue;
-	
+
 			processedTokens.add(token);
-	
+
 			if (token.type === 'block') {
 				this.validateBlock(token, diagnostics, parsedDocument);
 			} else if (token.type === 'function_call') {
@@ -41,7 +41,7 @@ export class DiagnosticsProvider {
 					source: 'terragrunt'
 				});
 			}
-	
+
 			if (token.children?.length > 0) {
 				stack.push(...token.children.slice().reverse());
 			}
@@ -49,28 +49,27 @@ export class DiagnosticsProvider {
 	}
 	private validateBlock(token: Token, diagnostics: Diagnostic[], parsedDocument: ParsedDocument) {
 		const parentToken = parsedDocument.findParentBlock(token);
-		const template = parentToken
-			? parsedDocument.getSchema().findNestedBlockTemplate(parentToken.text, token.text)
-			: parsedDocument.getSchema().getBlockTemplate(token.text);
-	
-		if (!template) {
-			// Only validate as unknown block if parent doesn't have arbitraryAttributes
-			const parentTemplate = parentToken 
-				? parsedDocument.getSchema().getBlockTemplate(parentToken.text)
-				: null;
-	
-			if (!parentTemplate?.arbitraryAttributes) {
-				const contextMessage = parentToken ? ` in "${parentToken.text}" block` : '';
-				diagnostics.push({
-					range: this.tokenToRange(token),
-					message: `Unknown block type: ${token.text}${contextMessage}`,
-					severity: DiagnosticSeverity.Error,
-					source: 'terragrunt'
-				});
-			}
-			return;
-		}
-	
+    const template = parentToken
+        ? parsedDocument.getSchema().findNestedBlockTemplate(parentToken.text, token.text)
+        : parsedDocument.getSchema().getBlockTemplate(token.text);
+
+    if (!template) {
+        const parentTemplate = parentToken 
+            ? parsedDocument.getSchema().getBlockTemplate(parentToken.text)
+            : null;
+
+        if (!parentTemplate?.arbitraryAttributes) {
+            const contextMessage = parentToken ? ` in "${parentToken.text}" block` : '';
+            diagnostics.push({
+                range: this.tokenToRange(token),
+                message: `Unknown block type: ${token.text}${contextMessage}`,
+                severity: DiagnosticSeverity.Error,
+                source: 'terragrunt'
+            });
+        }
+        return;
+    }
+
 		// First, validate the overall structure of the block's content
 		for (const child of token.children ?? []) {
 			// Valid tokens are either blocks, identifiers that are part of attribute assignments,
@@ -101,7 +100,7 @@ export class DiagnosticsProvider {
 				});
 			}
 		}
-	
+
 		// Validate block parameters
 		if (template.parameters && template.parameters.length > 0) {
 			const paramToken = token.children.find(child => child.type === 'block_parameter');
@@ -124,15 +123,15 @@ export class DiagnosticsProvider {
 				}
 			}
 		}
-	
-		// Collect and validate attributes
+
+		// Collect both identifier and block tokens as attributes
 		const foundAttrs = new Set(
 			token.children
-				?.filter(c => c.type === 'identifier')
+				?.filter(c => c.type === 'identifier' || (c.type === 'block' && !this.isNestedBlockType(c.text, template)))
 				.map(c => c.text) ?? []
 		);
 	
-		// Always validate required attributes regardless of arbitraryAttributes flag
+		// Check required attributes
 		if (template.attributes) {
 			for (const attr of template.attributes) {
 				if (attr.required && !foundAttrs.has(attr.name)) {
@@ -145,12 +144,12 @@ export class DiagnosticsProvider {
 				}
 			}
 		}
-	
+
 		// Validate each identifier-value pair and nested blocks
 		for (const child of token.children ?? []) {
 			if (child.type === 'identifier') {
 				const attrDef = template.attributes?.find(attr => attr.name === child.text);
-				
+
 				if (attrDef) {
 					// If it's a defined attribute, validate it according to its schema
 					this.validateAttributeValue(child, attrDef.value, diagnostics, parsedDocument);
@@ -219,9 +218,9 @@ export class DiagnosticsProvider {
 		if (/^-?\d+\.\d+f$/.test(value)) return true;
 		return false;
 	}
-	
+
 	private validateValueSyntax(value: Token, token: Token, diagnostics: Diagnostic[]) {
-		switch(value.type) {
+		switch (value.type) {
 			case 'integer_lit':
 			case 'float_lit':
 			case 'float_lit_with_f':
@@ -263,7 +262,7 @@ export class DiagnosticsProvider {
 			});
 			return;
 		}
-	
+
 		if (token.children.length > 1) {
 			// Report error for any token after the first one
 			for (let i = 1; i < token.children.length; i++) {
@@ -276,14 +275,38 @@ export class DiagnosticsProvider {
 			}
 			return;
 		}
-	
+
 		const value = token.children[0];
-	
-		// Skip validation for dynamic values
-		if (value.type === 'function_call' || 
+
+		// Skip validation for dynamic values and heredoc
+		if (value.type === 'function_call' ||
 			value.type === 'property_access' ||
+			value.type === 'heredoc' ||
 			(value.type === 'string_lit' && value.children.some(child => child.type === 'interpolation'))) {
 			return;
+		}
+
+		if (valueDefinition.type === 'string') {
+			const validTypes = ['string_lit', 'heredoc'];
+			if (!validTypes.includes(value.type)) {
+				diagnostics.push({
+					range: this.tokenToRange(value),
+					message: `Expected a string value for attribute "${token.text}"`,
+					severity: DiagnosticSeverity.Error,
+					source: 'terragrunt'
+				});
+			}
+			if (valueDefinition.pattern && value.type === 'string_lit') {
+				const pattern = new RegExp(valueDefinition.pattern);
+				if (!pattern.test(value.text)) {
+					diagnostics.push({
+						range: this.tokenToRange(value),
+						message: `Value must match pattern ${valueDefinition.pattern}`,
+						severity: DiagnosticSeverity.Error,
+						source: 'terragrunt'
+					});
+				}
+			}
 		}
 
 		// Special handling for boolean values in complex expressions
@@ -312,7 +335,7 @@ export class DiagnosticsProvider {
 				}
 			}
 		}
-	
+
 		switch (valueDefinition.type) {
 			case 'number': {
 				const validTypes = ['integer_lit', 'float_lit', 'float_lit_with_f'];
@@ -406,7 +429,8 @@ export class DiagnosticsProvider {
 				break;
 			}
 			case 'object': {
-				if (!['object_lit', 'block'].includes(value.type)) {
+				const validTypes = ['object_lit', 'block'];
+				if (!validTypes.includes(value.type)) {
 					diagnostics.push({
 						range: this.tokenToRange(value),
 						message: `Expected an object value for attribute "${token.text}"`,
@@ -414,10 +438,10 @@ export class DiagnosticsProvider {
 						source: 'terragrunt'
 					});
 				} else if (valueDefinition.properties) {
+					// Only validate properties if they're defined in the schema
+					const properties = value.children.filter(child => child.type === 'identifier');
 					for (const [propName, propDef] of Object.entries(valueDefinition.properties)) {
-						const propToken = value.children.find(
-							child => child.type === 'identifier' && child.text === propName
-						);
+						const propToken = properties.find(p => p.text === propName);
 						if (propDef.required && !propToken) {
 							diagnostics.push({
 								range: this.tokenToRange(value),
@@ -445,7 +469,7 @@ export class DiagnosticsProvider {
 				break;
 			}
 		}
-	
+
 		if (valueDefinition.enum && value.type === 'string_lit' && !valueDefinition.enum.includes(value.text)) {
 			diagnostics.push({
 				range: this.tokenToRange(value),
@@ -467,12 +491,12 @@ export class DiagnosticsProvider {
 			});
 			return;
 		}
-	
+
 		// Check minimum required parameters
 		const requiredParams = func.parameters.filter(p => p.required);
 		const hasVariadicParam = func.parameters.some(p => p.variadic);
 		const maxParams = hasVariadicParam ? Infinity : func.parameters.length;
-	
+
 		if (!token.children || token.children.length < requiredParams.length) {
 			diagnostics.push({
 				range: this.tokenToRange(token),
@@ -482,7 +506,7 @@ export class DiagnosticsProvider {
 			});
 			return;
 		}
-	
+
 		if (!hasVariadicParam && token.children.length > maxParams) {
 			diagnostics.push({
 				range: this.tokenToRange(token),
@@ -492,7 +516,7 @@ export class DiagnosticsProvider {
 			});
 			return;
 		}
-	
+
 		// Validate each argument
 		token.children.forEach((arg, index) => {
 			const param = func.parameters[hasVariadicParam ? Math.min(index, func.parameters.length - 1) : index];
@@ -500,6 +524,10 @@ export class DiagnosticsProvider {
 				this.validateArgumentType(arg, param.type, token.text, diagnostics);
 			}
 		});
+	}
+
+	private isNestedBlockType(blockName: string, template: BlockTemplate): boolean {
+		return template.blocks?.some(block => block.type === blockName) ?? false;
 	}
 
 	private validateArgumentType(arg: Token, expectedType: string, funcName: string, diagnostics: Diagnostic[]) {
