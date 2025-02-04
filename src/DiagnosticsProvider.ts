@@ -595,112 +595,85 @@ export class DiagnosticsProvider {
     }
 
 	private validateObjectSeparators(parsedDocument: ParsedDocument, diagnostics: Diagnostic[]): void {
-        const lines = parsedDocument.getLines();
-        let inObject = 0; // Track nested object depth
-        let expectingProperty = false;
-
-        for (let lineNum = 0; lineNum < lines.length; lineNum++) {
-            const line = lines[lineNum];
-            let inString = false;
-            let lastCommaPos = -1;
-
-            // Skip empty lines
-            if (!line.trim()) continue;
-
-            // Process the line character by character
-            for (let charPos = 0; charPos < line.length; charPos++) {
-                const char = line[charPos];
-
-                // Handle string literals
-                if (char === '"' && (charPos === 0 || line[charPos - 1] !== '\\')) {
-                    inString = !inString;
-                    continue;
-                }
-
-                // Skip content inside strings
-                if (inString) continue;
-
-                // Track object depth
-                if (char === '{') {
-                    inObject++;
-                    expectingProperty = true;
-                    continue;
-                }
-                if (char === '}') {
-                    inObject--;
-                    expectingProperty = false;
-                    lastCommaPos = -1; // Reset comma position when closing object
-                    continue;
-                }
-
-                // Handle commas
-                if (char === ',') {
-                    lastCommaPos = charPos;
-                    expectingProperty = true;
-                    continue;
-                }
-
-                // Check what follows a comma when we're in an object
-                if (inObject > 0 && lastCommaPos !== -1 && charPos > lastCommaPos) {
-                    // Skip whitespace when looking for next character
-                    if (/\s/.test(char)) continue;
-
-                    // If we find a closing brace, it's a valid trailing comma
-                    if (char === '}') {
-                        lastCommaPos = -1;
-                        continue;
-                    }
-
-                    // Only quotes are allowed as the next non-whitespace character after a comma
-                    if (char !== '"') {
-                        diagnostics.push({
-                            range: {
-                                start: { line: lineNum, character: lastCommaPos },
-                                end: { line: lineNum, character: charPos + 1 }
-                            },
-                            message: 'Invalid character after comma in object. Expected property declaration starting with quote (")',
-                            severity: DiagnosticSeverity.Error,
-                            source: 'terragrunt'
-                        });
-                        lastCommaPos = -1; // Reset to avoid multiple errors for the same issue
-                    }
-                }
-            }
-
-            // Check if we need to look ahead for the next property
-            if (lastCommaPos !== -1 && expectingProperty) {
-                // Look ahead at the next non-empty line
-                let nextLine = '';
-                let nextLineNum = lineNum + 1;
-                while (nextLineNum < lines.length) {
-                    const nextCandidate = lines[nextLineNum].trim();
-                    if (nextCandidate && !nextCandidate.startsWith('#') && !nextCandidate.startsWith('//')) {
-                        nextLine = nextCandidate;
-                        break;
-                    }
-                    nextLineNum++;
-                }
-
-                // If next line starts with closing brace, it's a valid trailing comma
-                if (nextLine.startsWith('}')) {
-                    continue;
-                }
-
-                // If next line doesn't start with a quote and isn't a closing brace, it's invalid
-                if (nextLine && !nextLine.trimLeft().startsWith('"')) {
-                    diagnostics.push({
-                        range: {
-                            start: { line: lineNum, character: lastCommaPos },
-                            end: { line: lineNum, character: lastCommaPos + 1 }
-                        },
-                        message: 'Invalid syntax after comma. Next property must start with a quote (")',
-                        severity: DiagnosticSeverity.Error,
-                        source: 'terragrunt'
-                    });
-                }
-            }
-        }
-    }
+		const lines = parsedDocument.getLines();
+		let inObject = 0; // Track nested object depth
+		let inArray = 0;  // Track nested array depth
+		let expectingProperty = false;
+	
+		for (let lineNum = 0; lineNum < lines.length; lineNum++) {
+			const line = lines[lineNum];
+			let inString = false;
+			let lastCommaPos = -1;
+	
+			// Skip empty lines
+			if (!line.trim()) continue;
+	
+			// Process the line character by character
+			for (let charPos = 0; charPos < line.length; charPos++) {
+				const char = line[charPos];
+	
+				// Handle string literals
+				if (char === '"' && (charPos === 0 || line[charPos - 1] !== '\\')) {
+					inString = !inString;
+					continue;
+				}
+	
+				// Skip content inside strings
+				if (inString) continue;
+	
+				// Track object and array depth
+				if (char === '{') {
+					inObject++;
+					expectingProperty = true;
+					continue;
+				}
+				if (char === '}') {
+					inObject--;
+					expectingProperty = false;
+					lastCommaPos = -1;
+					continue;
+				}
+				if (char === '[') {
+					inArray++;
+					continue;
+				}
+				if (char === ']') {
+					inArray--;
+					continue;
+				}
+	
+				// Handle commas
+				if (char === ',') {
+					lastCommaPos = charPos;
+					expectingProperty = inObject > 0;  // Only expect property if we're in an object
+					continue;
+				}
+	
+				// Check what follows a comma
+				if (lastCommaPos !== -1 && charPos > lastCommaPos) {
+					// Skip whitespace when looking for next character
+					if (/\s/.test(char)) continue;
+	
+					// If we're in an object (not an array), enforce property rules
+					if (inObject > 0 && inArray === 0 && expectingProperty) {
+						// In objects, only quotes are allowed as the next non-whitespace character after a comma
+						if (char !== '"') {
+							diagnostics.push({
+								range: {
+									start: { line: lineNum, character: lastCommaPos },
+									end: { line: lineNum, character: charPos + 1 }
+								},
+								message: 'Invalid character after comma in object. Expected property declaration starting with quote (")',
+								severity: DiagnosticSeverity.Error,
+								source: 'terragrunt'
+							});
+						}
+					}
+					lastCommaPos = -1;
+				}
+			}
+		}
+	}
 
 	private getDefaultValueForType(type: string): string {
 		const defaults: Record<string, string> = {
@@ -716,6 +689,7 @@ export class DiagnosticsProvider {
 	getDiagnostics(parsedDocument: ParsedDocument): Diagnostic[] {
         const diagnostics: Diagnostic[] = [];
         this.validateTokensIterative(parsedDocument.getTokens(), parsedDocument, diagnostics);
+		this.validateUnclosedBlocks(parsedDocument, diagnostics);
         this.validateObjectSeparators(parsedDocument, diagnostics);
         return diagnostics;
     }
