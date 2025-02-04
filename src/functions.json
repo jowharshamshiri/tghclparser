@@ -2422,6 +2422,153 @@
 				"description": "Map combining the keys and values"
 			},
 			"example": "locals { map = zipmap([\"a\", \"b\"], [1, 2]) }"
+		},
+		{
+			"name": "pathexpand",
+			"description": "Expands a path containing a ~ prefix into a full path.\n\n* Replaces ~ with user's home directory path.\n* Works with both Unix and Windows paths.\n* Returns the path unchanged if it doesn't start with ~.",
+			"parameters": [
+				{
+					"name": "path",
+					"type": "string",
+					"required": true,
+					"description": "Path potentially starting with ~"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Expanded absolute path"
+			},
+			"example": "locals { full_path = pathexpand(\"~/config/file.txt\") }"
+		},
+		{
+			"name": "startswith",
+			"description": "Checks if a string starts with a specified prefix.\n\n* Returns true if the string starts with the prefix.\n* Case-sensitive comparison.\n* Returns false if either argument is empty.",
+			"parameters": [
+				{
+					"name": "string",
+					"type": "string",
+					"required": true,
+					"description": "String to check"
+				},
+				{
+					"name": "prefix",
+					"type": "string",
+					"required": true,
+					"description": "Prefix to look for"
+				}
+			],
+			"returnType": {
+				"type": "boolean",
+				"description": "True if string starts with prefix"
+			},
+			"example": "locals { has_prefix = startswith(\"terraform-\", \"terraform\") }"
+		},
+		{
+			"name": "plantimestamp",
+			"description": "Returns a UTC timestamp for use in plan-time references.\n\n* Returns timestamp string that remains consistent during plan.\n* Useful for avoiding unnecessary resource updates.\n* Format is RFC 3339.",
+			"parameters": [],
+			"returnType": {
+				"type": "string",
+				"description": "Plan-time timestamp string"
+			},
+			"example": "locals { plan_time = plantimestamp() }"
+		},
+		{
+			"name": "sensitive",
+			"description": "Marks a value as sensitive, preventing it from appearing in logs and output.\n\n* Wraps the given value and marks it as sensitive.\n* The value can still be used normally in expressions.\n* Terraform/OpenTofu will hide this value in logs and terminal output.",
+			"parameters": [
+				{
+					"name": "value",
+					"type": "any",
+					"required": true,
+					"description": "Value to mark as sensitive"
+				}
+			],
+			"returnType": {
+				"type": "any",
+				"description": "Value marked as sensitive"
+			},
+			"example": "locals { secret = sensitive(var.password) }"
+		},
+		{
+			"name": "nonsensitive",
+			"description": "Removes the sensitive marking from a value.\n\n* Unwraps a sensitive value, removing the sensitive marking.\n* Use with caution as it makes sensitive values visible.\n* Returns the value unchanged if it wasn't marked sensitive.",
+			"parameters": [
+				{
+					"name": "value",
+					"type": "any",
+					"required": true,
+					"description": "Sensitive value to unwrap"
+				}
+			],
+			"returnType": {
+				"type": "any",
+				"description": "Value with sensitive marking removed"
+			},
+			"example": "locals { visible = nonsensitive(var.sensitive_value) }"
+		},
+		{
+			"name": "issensitive",
+			"description": "Checks whether a value is marked as sensitive.\n\n* Returns true if the value is marked as sensitive.\n* Returns false for regular values.\n* Useful for conditional logic based on value sensitivity.",
+			"parameters": [
+				{
+					"name": "value",
+					"type": "any",
+					"required": true,
+					"description": "Value to check for sensitive marking"
+				}
+			],
+			"returnType": {
+				"type": "boolean",
+				"description": "True if value is sensitive"
+			},
+			"example": "locals { is_secret = issensitive(var.value) }"
+		},
+		{
+			"name": "templatefile",
+			"description": "Reads the contents of a template file and renders it with the given variables.\n\n* Reads and interpolates a template file.\n* Supports ${...} syntax for variable interpolation.\n* Variables are provided as a map of values.",
+			"parameters": [
+				{
+					"name": "path",
+					"type": "string",
+					"required": true,
+					"description": "Path to template file"
+				},
+				{
+					"name": "vars",
+					"type": "object",
+					"required": true,
+					"description": "Map of variables to use in template"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Rendered template content"
+			},
+			"example": "locals { rendered = templatefile(\"${path.module}/template.tpl\", { name = \"value\" }) }"
+		},
+		{
+			"name": "templatestring",
+			"description": "Renders a template string with the given variables.\n\n* Like templatefile but works with an inline template string.\n* Supports ${...} syntax for variable interpolation.\n* Variables are provided as a map of values.",
+			"parameters": [
+				{
+					"name": "template",
+					"type": "string",
+					"required": true,
+					"description": "Template string to render"
+				},
+				{
+					"name": "vars",
+					"type": "object",
+					"required": true,
+					"description": "Map of variables to use in template"
+				}
+			],
+			"returnType": {
+				"type": "string",
+				"description": "Rendered template string"
+			},
+			"example": "locals { rendered = templatestring(\"Hello, ${name}!\", { name = \"World\" }) }"
 		}
 	]
 }
