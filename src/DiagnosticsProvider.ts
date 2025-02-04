@@ -1,16 +1,10 @@
 import type { Diagnostic, Range } from 'vscode-languageserver';
 import { DiagnosticSeverity } from 'vscode-languageserver';
 
-import type { BlockTemplate, Token, ValueDefinition, ValueType } from './model';
+import type { BlockTemplate, BlockDelimiter, Token, ValueDefinition, ValueType } from './model';
 import type { ParsedDocument } from './index';
 
 export class DiagnosticsProvider {
-	getDiagnostics(parsedDocument: ParsedDocument): Diagnostic[] {
-		const diagnostics: Diagnostic[] = [];
-		this.validateTokensIterative(parsedDocument.getTokens(), parsedDocument, diagnostics);
-		return diagnostics;
-	}
-
 	private validateTokensIterative(tokens: Token[], parsedDocument: ParsedDocument, diagnostics: Diagnostic[]) {
 		const stack: Token[] = [...tokens];
 		const processedTokens = new Set<Token>();
@@ -49,26 +43,26 @@ export class DiagnosticsProvider {
 	}
 	private validateBlock(token: Token, diagnostics: Diagnostic[], parsedDocument: ParsedDocument) {
 		const parentToken = parsedDocument.findParentBlock(token);
-    const template = parentToken
-        ? parsedDocument.getSchema().findNestedBlockTemplate(parentToken.text, token.text)
-        : parsedDocument.getSchema().getBlockTemplate(token.text);
+		const template = parentToken
+			? parsedDocument.getSchema().findNestedBlockTemplate(parentToken.text, token.text)
+			: parsedDocument.getSchema().getBlockTemplate(token.text);
 
-    if (!template) {
-        const parentTemplate = parentToken 
-            ? parsedDocument.getSchema().getBlockTemplate(parentToken.text)
-            : null;
+		if (!template) {
+			const parentTemplate = parentToken
+				? parsedDocument.getSchema().getBlockTemplate(parentToken.text)
+				: null;
 
-        if (!parentTemplate?.arbitraryAttributes) {
-            const contextMessage = parentToken ? ` in "${parentToken.text}" block` : '';
-            diagnostics.push({
-                range: this.tokenToRange(token),
-                message: `Unknown block type: ${token.text}${contextMessage}`,
-                severity: DiagnosticSeverity.Error,
-                source: 'terragrunt'
-            });
-        }
-        return;
-    }
+			if (!parentTemplate?.arbitraryAttributes) {
+				const contextMessage = parentToken ? ` in "${parentToken.text}" block` : '';
+				diagnostics.push({
+					range: this.tokenToRange(token),
+					message: `Unknown block type: ${token.text}${contextMessage}`,
+					severity: DiagnosticSeverity.Error,
+					source: 'terragrunt'
+				});
+			}
+			return;
+		}
 
 		// First, validate the overall structure of the block's content
 		for (const child of token.children ?? []) {
@@ -130,7 +124,7 @@ export class DiagnosticsProvider {
 				?.filter(c => c.type === 'identifier' || (c.type === 'block' && !this.isNestedBlockType(c.text, template)))
 				.map(c => c.text) ?? []
 		);
-	
+
 		// Check required attributes
 		if (template.attributes) {
 			for (const attr of template.attributes) {
@@ -559,17 +553,111 @@ export class DiagnosticsProvider {
 	}
 
 	private tokenToRange(token: Token): Range {
-		return {
-			start: {
-				line: token.startPosition.line,
-				character: token.startPosition.character
-			},
-			end: {
-				line: token.endPosition.line,
-				character: token.endPosition.character
-			}
-		};
-	}
+        return {
+            start: {
+                line: token.startPosition.line,
+                character: token.startPosition.character
+            },
+            end: {
+                line: token.endPosition.line,
+                character: token.endPosition.character
+            }
+        };
+    }
+
+	private validateObjectSeparators(parsedDocument: ParsedDocument, diagnostics: Diagnostic[]): void {
+        const lines = parsedDocument.getLines();
+        let inObject = 0; // Track nested object depth
+        let expectingProperty = false;
+
+        for (let lineNum = 0; lineNum < lines.length; lineNum++) {
+            const line = lines[lineNum];
+            let inString = false;
+            let lastCommaPos = -1;
+
+            // Skip empty lines
+            if (!line.trim()) continue;
+
+            // Process the line character by character
+            for (let charPos = 0; charPos < line.length; charPos++) {
+                const char = line[charPos];
+
+                // Handle string literals
+                if (char === '"' && (charPos === 0 || line[charPos - 1] !== '\\')) {
+                    inString = !inString;
+                    continue;
+                }
+
+                // Skip content inside strings
+                if (inString) continue;
+
+                // Track object depth
+                if (char === '{') {
+                    inObject++;
+                    expectingProperty = true;
+                    continue;
+                }
+                if (char === '}') {
+                    inObject--;
+                    expectingProperty = false;
+                    continue;
+                }
+
+                // Handle commas
+                if (char === ',') {
+                    lastCommaPos = charPos;
+                    expectingProperty = true;
+                    continue;
+                }
+
+                // Check what follows a comma when we're in an object
+                if (inObject > 0 && lastCommaPos !== -1 && charPos > lastCommaPos) {
+                    // Only whitespace and quotes are allowed after a comma before the next property
+                    if (!/[\s"]/.test(char)) {
+                        // Found invalid character after comma
+                        diagnostics.push({
+                            range: {
+                                start: { line: lineNum, character: lastCommaPos },
+                                end: { line: lineNum, character: charPos + 1 }
+                            },
+                            message: 'Invalid character after comma in object. Expected property declaration starting with quote (")',
+                            severity: DiagnosticSeverity.Error,
+                            source: 'terragrunt'
+                        });
+                        lastCommaPos = -1; // Reset to avoid multiple errors for the same issue
+                    }
+                }
+            }
+
+            // Check for end-of-line characters after comma
+            if (lastCommaPos !== -1 && expectingProperty) {
+                // Look ahead at the next non-empty line
+                let nextLine = '';
+                let nextLineNum = lineNum + 1;
+                while (nextLineNum < lines.length) {
+                    const nextCandidate = lines[nextLineNum].trim();
+                    if (nextCandidate && !nextCandidate.startsWith('#') && !nextCandidate.startsWith('//')) {
+                        nextLine = nextCandidate;
+                        break;
+                    }
+                    nextLineNum++;
+                }
+
+                // If next line doesn't start with a quote, it's invalid
+                if (nextLine && !nextLine.trimLeft().startsWith('"')) {
+                    diagnostics.push({
+                        range: {
+                            start: { line: lineNum, character: lastCommaPos },
+                            end: { line: lineNum, character: lastCommaPos + 1 }
+                        },
+                        message: 'Invalid syntax after comma. Next property must start with a quote (")',
+                        severity: DiagnosticSeverity.Error,
+                        source: 'terragrunt'
+                    });
+                }
+            }
+        }
+    }
 
 	private getDefaultValueForType(type: string): string {
 		const defaults: Record<string, string> = {
@@ -580,5 +668,143 @@ export class DiagnosticsProvider {
 			object: '{}',
 		};
 		return defaults[type] || '""';
+	}
+	
+	getDiagnostics(parsedDocument: ParsedDocument): Diagnostic[] {
+        const diagnostics: Diagnostic[] = [];
+        this.validateTokensIterative(parsedDocument.getTokens(), parsedDocument, diagnostics);
+        this.validateObjectSeparators(parsedDocument, diagnostics);
+        return diagnostics;
+    }
+
+	private validateUnclosedBlocks(parsedDocument: ParsedDocument, diagnostics: Diagnostic[]): void {
+		const lines = parsedDocument.getLines();
+		const delimiters: BlockDelimiter[] = [];
+		let inString = false;
+		let inComment = false;
+		let inMultilineComment = false;
+
+		for (let lineNum = 0; lineNum < lines.length; lineNum++) {
+			const line = lines[lineNum];
+
+			for (let colNum = 0; colNum < line.length; colNum++) {
+				const char = line[colNum];
+				const prevChar = colNum > 0 ? line[colNum - 1] : '';
+
+				// Handle string literals
+				if (char === '"' && prevChar !== '\\') {
+					inString = !inString;
+					continue;
+				}
+
+				// Skip content inside strings
+				if (inString) continue;
+
+				// Handle comments
+				if (char === '/' && line[colNum + 1] === '/') {
+					break; // Skip rest of line for single-line comments
+				}
+				if (char === '#') {
+					break; // Skip rest of line for # comments
+				}
+				if (char === '/' && line[colNum + 1] === '*') {
+					inMultilineComment = true;
+					colNum++; // Skip next character
+					continue;
+				}
+				if (char === '*' && line[colNum + 1] === '/' && inMultilineComment) {
+					inMultilineComment = false;
+					colNum++; // Skip next character
+					continue;
+				}
+
+				// Skip content inside comments
+				if (inMultilineComment) continue;
+
+				// Track opening delimiters
+				if (char === '{' || char === '[' || char === '(') {
+					delimiters.push({
+						char,
+						line: lineNum,
+						column: colNum,
+						type: this.getDelimiterType(char)
+					});
+				}
+				// Check closing delimiters
+				else if (char === '}' || char === ']' || char === ')') {
+					const openChar = this.getMatchingOpenDelimiter(char);
+					const lastDelimiter = delimiters[delimiters.length - 1];
+
+					if (!lastDelimiter || lastDelimiter.char !== openChar) {
+						// Unmatched closing delimiter
+						diagnostics.push({
+							range: {
+								start: { line: lineNum, character: colNum },
+								end: { line: lineNum, character: colNum + 1 }
+							},
+							message: `Unmatched closing ${this.getDelimiterName(char)}`,
+							severity: DiagnosticSeverity.Error,
+							source: 'terragrunt'
+						});
+					} else {
+						delimiters.pop();
+					}
+				}
+			}
+		}
+
+		// Report remaining unclosed delimiters
+		for (const delimiter of delimiters) {
+			diagnostics.push({
+				range: {
+					start: { line: delimiter.line, character: delimiter.column },
+					end: { line: delimiter.line, character: delimiter.column + 1 }
+				},
+				message: `Unclosed ${this.getDelimiterName(delimiter.char)}`,
+				severity: DiagnosticSeverity.Error,
+				source: 'terragrunt'
+			});
+		}
+	}
+
+	private getDelimiterType(char: string): 'brace' | 'bracket' | 'parenthesis' {
+		switch (char) {
+			case '{':
+			case '}':
+				return 'brace';
+			case '[':
+			case ']':
+				return 'bracket';
+			case '(':
+			case ')':
+				return 'parenthesis';
+			default:
+				throw new Error(`Invalid delimiter character: ${char}`);
+		}
+	}
+
+	private getMatchingOpenDelimiter(closeChar: string): string {
+		switch (closeChar) {
+			case '}': return '{';
+			case ']': return '[';
+			case ')': return '(';
+			default: throw new Error(`Invalid closing delimiter: ${closeChar}`);
+		}
+	}
+
+	private getDelimiterName(char: string): string {
+		switch (char) {
+			case '{':
+			case '}':
+				return 'brace';
+			case '[':
+			case ']':
+				return 'bracket';
+			case '(':
+			case ')':
+				return 'parenthesis';
+			default:
+				return 'delimiter';
+		}
 	}
 }

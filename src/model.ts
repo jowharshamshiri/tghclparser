@@ -27,6 +27,13 @@ export type ComplexValueType =
 	| 'interpolation'
 	| 'heredoc';
 
+export interface BlockDelimiter {
+	char: string;
+	line: number;
+	column: number;
+	type: 'brace' | 'bracket' | 'parenthesis';
+}
+
 export type ValueType = PrimitiveValueType | ComplexValueType;
 
 export type TokenType =
@@ -54,28 +61,28 @@ export type TokenType =
 	| 'array_lit'
 	| 'object_lit';
 
-	export class Token {
-		type: TokenType;
-		text: string;
-		startPosition: Position;
-		endPosition: Position;
-		depth: number;
-		children: Token[];
-		parent: Token | null; 
-		decorators?: TokenDecorator[];
-	
-		constructor(type: TokenType, text: string, line: number, startChar: number, endChar: number) {
-			this.type = type;
-			this.text = text;
-			this.startPosition = { line, character: startChar };
-			this.endPosition = { line, character: endChar };
-			this.depth = 0;
-			this.children = [];
-			this.parent = null;
-			this.decorators = [];
-		}
+export class Token {
+	type: TokenType;
+	text: string;
+	startPosition: Position;
+	endPosition: Position;
+	depth: number;
+	children: Token[];
+	parent: Token | null;
+	decorators?: TokenDecorator[];
+
+	constructor(type: TokenType, text: string, line: number, startChar: number, endChar: number) {
+		this.type = type;
+		this.text = text;
+		this.startPosition = { line, character: startChar };
+		this.endPosition = { line, character: endChar };
+		this.depth = 0;
+		this.children = [];
+		this.parent = null;
+		this.decorators = [];
 	}
-	
+}
+
 
 export interface TokenTypePatterns {
 	BLOCK: RegExp;
@@ -186,11 +193,11 @@ export interface BlockTemplate {
 }
 
 export interface FunctionParameter {
-    name: string;
-    type: string;
-    required: boolean;
-    description?: string;
-    variadic?: boolean;
+	name: string;
+	type: string;
+	required: boolean;
+	description?: string;
+	variadic?: boolean;
 }
 
 export interface FunctionReturnType {
