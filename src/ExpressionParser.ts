@@ -261,9 +261,48 @@ export class ExpressionParser {
 		arrayToken.children.push(elementToken);
 	}
 
-
-	// Update parseValue to avoid recursion with arrays
 	parseValue(value: string, row: number, startCol: number, analyzeString?: (value: string) => any[]): [Token, number] {
+		// First check for ternary expressions
+		const ternaryMatch = value.match(/^(.+?)\s*\?\s*(.+?)\s*:\s*(.+)$/);
+		if (ternaryMatch) {
+			const [fullMatch, condition, trueValue, falseValue] = ternaryMatch;
+			
+			// Create a container token for the ternary expression
+			const ternaryToken = new Token(
+				'function_call',  // We treat ternary like a function for evaluation purposes
+				'conditional',
+				row,
+				startCol,
+				startCol + fullMatch.length
+			);
+			
+			// Parse the condition
+			const [conditionToken] = this.parseValue(
+				condition.trim(),
+				row,
+				startCol + value.indexOf(condition)
+			);
+			
+			// Parse the true value
+			const [trueToken] = this.parseValue(
+				trueValue.trim(),
+				row,
+				startCol + value.indexOf(trueValue)
+			);
+			
+			// Parse the false value
+			const [falseToken] = this.parseValue(
+				falseValue.trim(),
+				row,
+				startCol + value.indexOf(falseValue)
+			);
+			
+			// Add all parts as children
+			ternaryToken.children.push(conditionToken, trueToken, falseToken);
+			
+			return [ternaryToken, startCol + fullMatch.length];
+
+		}
 		// Handle heredoc
 		const heredocMatch = value.match(/^\s*<<[-~]?(\w+)\s*$/);
 		if (heredocMatch) {
@@ -278,6 +317,14 @@ export class ExpressionParser {
 				const lastToken = nestedTokens[0];
 				return [lastToken, startCol + value.length];
 			}
+		}
+
+		// Handle boolean literals explicitly
+		if (value === 'true' || value === 'false') {
+			return [
+				new Token('boolean_lit', value, row, startCol, startCol + value.length),
+				startCol + value.length
+			];
 		}
 
 		// Handle interpolated strings

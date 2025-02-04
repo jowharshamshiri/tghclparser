@@ -9,36 +9,97 @@ export class TokenParser {
 		while (currentCol < line.length && /\s/.test(line[currentCol])) {
 			currentCol++;
 		}
-
-		// If we're at the end of the line or hit a comment, return
-		if (currentCol >= line.length ||
-			line[currentCol] === '#' ||
+	
+		// Skip if we're at the end of the line or hit special characters
+		if (currentCol >= line.length || 
+			line[currentCol] === '#' || 
 			line.slice(currentCol).startsWith('//') ||
 			line[currentCol] === '"' ||
 			line[currentCol] === '{' ||
 			line[currentCol] === '}' ||
 			line[currentCol] === '(' ||
-			line[currentCol] === ')') {
+			line[currentCol] === ')' ||
+			line[currentCol] === '?' ||
+			line[currentCol] === ':') {
 			return [false, currentCol];
 		}
-
-		// Check if we're part of a larger word/identifier
-		// Look backwards to ensure we're at a word boundary
-		if (currentCol > 0 && /\w/.test(line[currentCol - 1])) {
-			return [false, currentCol];
-		}
-
-		// Don't treat content inside function calls as bare tokens
-		// Include the function name itself
+	
+		// Don't process content inside string literals
 		const beforeCursor = line.slice(0, currentCol);
-		const funcCallMatch = beforeCursor.match(/\w+\s*\([^)]*$/);
-		if (funcCallMatch) {
+		const openQuotes = (beforeCursor.match(/"/g) || []).length;
+		if (openQuotes % 2 !== 0) {
 			return [false, currentCol];
 		}
-
-		// Look for complete bare words (must be bounded by non-word chars)
-		const match = line.slice(currentCol).match(/^([a-zA-Z_]\w*)(?!\w)/);
+	
+		
+		// Check for numeric or numeric-like tokens
+		const numericMatch = line.slice(currentCol).match(/^(\d+(\.\d*)?|\.\d+)([a-zA-Z]\w*)?/);
+		console.log(line.slice(currentCol), numericMatch);
+		if (numericMatch) {
+			const fullMatch = numericMatch[0];
+			if (/^(\d+|\d+\.\d+|\.\d+)$/.test(fullMatch)) {
+				// Invalid number format - create as bare token
+				const bareToken = new Token(
+					'bare_token',
+					fullMatch,
+					currentRow,
+					currentCol,
+					currentCol + fullMatch.length
+				);
+				addToken(bareToken, tokens);
+				return [true, currentCol + fullMatch.length];
+				// // Valid number format - will be handled by parseValue
+				// return [false, currentCol];
+			} else {
+				// Invalid number format - create as bare token
+				const bareToken = new Token(
+					'bare_token',
+					fullMatch,
+					currentRow,
+					currentCol,
+					currentCol + fullMatch.length
+				);
+				addToken(bareToken, tokens);
+				return [true, currentCol + fullMatch.length];
+			}
+		}
+	
+		// Check if we're part of a larger word/identifier
+		if (currentCol > 0 && /[\w-]/.test(line[currentCol - 1])) {
+			return [false, currentCol];
+		}
+	
+		// Don't treat content inside function calls or ternary expressions as bare tokens
+		if (beforeCursor.match(/\w+\s*\([^)]*$/) || // Function call
+			beforeCursor.match(/\?\s*[^:]*$/) ||     // After ? in ternary
+			beforeCursor.match(/:\s*$/) ||           // After : in ternary
+			beforeCursor.match(/\${[^}]*$/)) {       // Inside interpolation
+			return [false, currentCol];
+		}
+	
+		// Check if the word is a boolean literal
+		const booleanMatch = line.slice(currentCol).match(/^(true|false)\b/);
+		if (booleanMatch) {
+			const booleanToken = new Token(
+				'boolean_lit',
+				booleanMatch[1],
+				currentRow,
+				currentCol,
+				currentCol + booleanMatch[1].length
+			);
+			addToken(booleanToken, tokens);
+			return [true, currentCol + booleanMatch[1].length];
+		}
+	
+		// Look for bare words (must be bounded by non-word chars)
+		const match = line.slice(currentCol).match(/^([a-zA-Z_]\w*)(?![\w-])/);
 		if (match && !line.slice(currentCol + match[1].length).trim().startsWith('(')) {
+			// Skip if this is part of a ternary expression
+			const afterMatch = line.slice(currentCol + match[1].length).trim();
+			if (afterMatch.startsWith('?') || afterMatch.startsWith(':')) {
+				return [false, currentCol];
+			}
+	
 			const bareToken = new Token(
 				'bare_token',
 				match[1],
@@ -49,7 +110,7 @@ export class TokenParser {
 			addToken(bareToken, tokens);
 			return [true, currentCol + match[1].length];
 		}
-
+	
 		return [false, currentCol];
 	}
 	parseLineContent(
@@ -219,11 +280,11 @@ export class TokenParser {
 		const startRow = currentRow;
 		const startCol = currentCol;
 		let endRow = currentRow;
-	
+
 		// Get the current line and look for the end of the comment
 		const currentLine = lines[endRow];
 		const commentEndIndex = currentLine.indexOf('*/', currentCol);
-		
+
 		if (commentEndIndex !== -1) {
 			// Single line comment case
 			commentText = currentLine.slice(currentCol, commentEndIndex + 2);
@@ -234,16 +295,16 @@ export class TokenParser {
 				0  // Reset column position for next line
 			];
 		}
-	
+
 		// Multi-line case: add the first line
 		commentText = currentLine.slice(currentCol) + '\n';
 		endRow++;
-	
+
 		// Search subsequent lines
 		while (endRow < lines.length) {
 			const line = lines[endRow];
 			const endIndex = line.indexOf('*/');
-	
+
 			if (endIndex !== -1) {
 				// Found the end of the comment
 				commentText += line.slice(0, endIndex + 2);
@@ -253,12 +314,12 @@ export class TokenParser {
 					0  // Reset column position for next line
 				];
 			}
-	
+
 			// No end found, add the whole line
 			commentText += line + '\n';
 			endRow++;
 		}
-	
+
 		// If we get here, we never found the end of the comment
 		throw new Error(`Unterminated block comment starting at line ${startRow + 1}, column ${startCol + 1}`);
 	}

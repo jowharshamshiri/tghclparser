@@ -12,34 +12,41 @@ export class DiagnosticsProvider {
     }
 
     private validateTokensIterative(tokens: Token[], parsedDocument: ParsedDocument, diagnostics: Diagnostic[]) {
-        const stack: Token[] = [...tokens];
-        const processedTokens = new Set<Token>();
-
-        while (stack.length > 0) {
-            const token = stack.pop();
-            if (!token || processedTokens.has(token)) continue;
-
-            processedTokens.add(token);
-
-            if (token.type === 'block') {
-                this.validateBlock(token, diagnostics, parsedDocument);
-            } else if (token.type === 'function_call') {
-                this.validateFunctionCall(token, diagnostics, parsedDocument);
-            } else if (token.type === 'bare_token') {
-					diagnostics.push({
-						range: this.tokenToRange(token),
-						message: `Invalid syntax: unexpected bare word "${token.text}". Expected attribute assignment (key = value) or block definition`,
-						severity: DiagnosticSeverity.Error,
-						source: 'terragrunt'
-					});
-				}
-			
-
-            if (token.children?.length > 0) {
-                stack.push(...token.children.slice().reverse());
-            }
-        }
-    }
+		const stack: Token[] = [...tokens];
+		const processedTokens = new Set<Token>();
+	
+		while (stack.length > 0) {
+			const token = stack.pop();
+			if (!token || processedTokens.has(token)) continue;
+	
+			processedTokens.add(token);
+	
+			if (token.type === 'block') {
+				this.validateBlock(token, diagnostics, parsedDocument);
+			} else if (token.type === 'function_call') {
+				this.validateFunctionCall(token, diagnostics, parsedDocument);
+			} else if (token.type === 'boolean_lit' && !token.parent) {
+				// Detect loose boolean literals not attached to any parent context
+				diagnostics.push({
+					range: this.tokenToRange(token),
+					message: `Invalid syntax: unexpected boolean literal "${token.text}". Boolean values must be part of an attribute assignment or expression`,
+					severity: DiagnosticSeverity.Error,
+					source: 'terragrunt'
+				});
+			} else if (token.type === 'bare_token') {
+				diagnostics.push({
+					range: this.tokenToRange(token),
+					message: `Invalid syntax: unexpected bare word "${token.text}". Expected attribute assignment (key = value) or block definition`,
+					severity: DiagnosticSeverity.Error,
+					source: 'terragrunt'
+				});
+			}
+	
+			if (token.children?.length > 0) {
+				stack.push(...token.children.slice().reverse());
+			}
+		}
+	}
 	private validateBlock(token: Token, diagnostics: Diagnostic[], parsedDocument: ParsedDocument) {
 		const parentToken = parsedDocument.findParentBlock(token);
 		const template = parentToken
@@ -277,6 +284,33 @@ export class DiagnosticsProvider {
 			value.type === 'property_access' ||
 			(value.type === 'string_lit' && value.children.some(child => child.type === 'interpolation'))) {
 			return;
+		}
+
+		// Special handling for boolean values in complex expressions
+		if (valueDefinition.type === 'boolean') {
+			const validBooleanTypes = ['boolean_lit', 'function_call', 'property_access', 'conditional'];
+			if (!validBooleanTypes.includes(value.type)) {
+				diagnostics.push({
+					range: this.tokenToRange(value),
+					message: `Expected a boolean value (true/false) for attribute "${token.text}"`,
+					severity: DiagnosticSeverity.Error,
+					source: 'terragrunt'
+				});
+			}
+			// If it's a conditional (ternary), validate both branches are boolean
+			if (value.type === 'conditional' && value.children.length === 3) {
+				const [_, trueBranch, falseBranch] = value.children;
+				for (const branch of [trueBranch, falseBranch]) {
+					if (!validBooleanTypes.includes(branch.type) && branch.type !== 'boolean_lit') {
+						diagnostics.push({
+							range: this.tokenToRange(branch),
+							message: `Expected a boolean value in ternary expression`,
+							severity: DiagnosticSeverity.Error,
+							source: 'terragrunt'
+						});
+					}
+				}
+			}
 		}
 	
 		switch (valueDefinition.type) {
