@@ -142,14 +142,84 @@ export class TokenParser {
 			return [true, currentRow, currentCol + slice.indexOf('{') + 1];
 		}
 
-		// Handle regular blocks
-		const blockMatch = TOKEN_PATTERNS.BLOCK.exec(slice) || TOKEN_PATTERNS.BLOCK_ASSIGN.exec(slice);
-		if (blockMatch) {
-			const blockName = blockMatch[1];
-			const token = new Token('block', blockName, currentRow, currentCol, currentCol + blockName.length);
-			addToken(token, tokens);
-			return [true, currentRow, currentCol + slice.indexOf('{') + 1];
-		}
+		// Check if this is an object assignment rather than a block
+        const objectAssignMatch = slice.match(/^\s*(\w+)\s*=\s*{/);
+        if (objectAssignMatch) {
+            const identifierName = objectAssignMatch[1];
+            const identifierToken = new Token(
+                'identifier',
+                identifierName,
+                currentRow,
+                currentCol,
+                currentCol + identifierName.length
+            );
+
+            // Find the end of the object
+            let objectEndRow = currentRow;
+            let objectEndCol = currentCol + objectAssignMatch[0].length;
+            let braceDepth = 1;
+            let inString = false;
+
+            while (objectEndRow < lines.length) {
+                const line = objectEndRow === currentRow
+                    ? lines[objectEndRow].slice(objectEndCol)
+                    : lines[objectEndRow];
+
+                for (let i = 0; i < line.length; i++) {
+                    const char = line[i];
+                    if (char === '"' && (i === 0 || line[i - 1] !== '\\')) {
+                        inString = !inString;
+                    } else if (!inString) {
+                        if (char === '{') braceDepth++;
+                        if (char === '}') {
+                            braceDepth--;
+                            if (braceDepth === 0) {
+                                const actualEndCol = objectEndRow === currentRow
+                                    ? objectEndCol + i + 1
+                                    : i + 1;
+
+                                // Get the full object content
+                                let objectContent = '';
+                                if (objectEndRow === currentRow) {
+                                    objectContent = lines[currentRow].slice(
+                                        currentCol + objectAssignMatch[0].length - 1,
+                                        actualEndCol
+                                    );
+                                } else {
+                                    objectContent = lines[currentRow].slice(currentCol + objectAssignMatch[0].length - 1) + '\n';
+                                    for (let row = currentRow + 1; row < objectEndRow; row++) {
+                                        objectContent += lines[row] + '\n';
+                                    }
+                                    objectContent += lines[objectEndRow].slice(0, actualEndCol);
+                                }
+
+                                const [objectToken] = expressionParser.parseObject(
+                                    objectContent,
+                                    currentRow,
+                                    currentCol + objectAssignMatch[0].length - 1
+                                );
+
+                                identifierToken.children.push(objectToken);
+                                addToken(identifierToken, tokens);
+                                return [true, objectEndRow, actualEndCol];
+                            }
+                        }
+                    }
+                }
+
+                objectEndCol = 0;
+                objectEndRow++;
+            }
+        }
+
+        // Handle regular blocks
+        const blockMatch = TOKEN_PATTERNS.BLOCK.exec(slice);
+        if (blockMatch) {
+            const blockName = blockMatch[1];
+            const token = new Token('block', blockName, currentRow, currentCol, currentCol + blockName.length);
+            addToken(token, tokens);
+            return [true, currentRow, currentCol + slice.indexOf('{') + 1];
+        }
 
 		// Handle array assignments
 		const arrayMatch = slice.match(/^\s*(\w+)\s*=\s*\[/);

@@ -41,8 +41,37 @@ export class DiagnosticsProvider {
 			}
 		}
 	}
+
+	private isInArbitraryAttributesBlock(token: Token, parsedDocument: ParsedDocument): boolean {
+        let currentToken = token;
+        
+        while (true) {
+            const parentBlock = parsedDocument.findContainingBlock(currentToken.startPosition);
+            if (!parentBlock) break;
+
+            const template = parsedDocument.getSchema().getBlockTemplate(parentBlock.text);
+            if (template?.arbitraryAttributes) {
+                return true;
+            }
+
+            currentToken = parentBlock;
+        }
+
+        return false;
+    }
+
 	private validateBlock(token: Token, diagnostics: Diagnostic[], parsedDocument: ParsedDocument) {
 		const parentToken = parsedDocument.findParentBlock(token);
+
+		// Check if we're inside a block that allows arbitrary attributes
+        const isInArbitraryBlock = this.isInArbitraryAttributesBlock(token, parsedDocument);
+		console.log(`token: ${token.text} parentToken: ${parentToken?.text} isInArbitraryBlock: ${isInArbitraryBlock}`);
+
+        // If we're in an arbitrary block, don't validate this as a block type
+        if (isInArbitraryBlock) {
+            return;
+        }
+
 		const template = parentToken
 			? parsedDocument.getSchema().findNestedBlockTemplate(parentToken.text, token.text)
 			: parsedDocument.getSchema().getBlockTemplate(token.text);
@@ -600,6 +629,7 @@ export class DiagnosticsProvider {
                 if (char === '}') {
                     inObject--;
                     expectingProperty = false;
+                    lastCommaPos = -1; // Reset comma position when closing object
                     continue;
                 }
 
@@ -612,9 +642,17 @@ export class DiagnosticsProvider {
 
                 // Check what follows a comma when we're in an object
                 if (inObject > 0 && lastCommaPos !== -1 && charPos > lastCommaPos) {
-                    // Only whitespace and quotes are allowed after a comma before the next property
-                    if (!/[\s"]/.test(char)) {
-                        // Found invalid character after comma
+                    // Skip whitespace when looking for next character
+                    if (/\s/.test(char)) continue;
+
+                    // If we find a closing brace, it's a valid trailing comma
+                    if (char === '}') {
+                        lastCommaPos = -1;
+                        continue;
+                    }
+
+                    // Only quotes are allowed as the next non-whitespace character after a comma
+                    if (char !== '"') {
                         diagnostics.push({
                             range: {
                                 start: { line: lineNum, character: lastCommaPos },
@@ -629,7 +667,7 @@ export class DiagnosticsProvider {
                 }
             }
 
-            // Check for end-of-line characters after comma
+            // Check if we need to look ahead for the next property
             if (lastCommaPos !== -1 && expectingProperty) {
                 // Look ahead at the next non-empty line
                 let nextLine = '';
@@ -643,7 +681,12 @@ export class DiagnosticsProvider {
                     nextLineNum++;
                 }
 
-                // If next line doesn't start with a quote, it's invalid
+                // If next line starts with closing brace, it's a valid trailing comma
+                if (nextLine.startsWith('}')) {
+                    continue;
+                }
+
+                // If next line doesn't start with a quote and isn't a closing brace, it's invalid
                 if (nextLine && !nextLine.trimLeft().startsWith('"')) {
                     diagnostics.push({
                         range: {
