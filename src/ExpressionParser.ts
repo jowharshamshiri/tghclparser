@@ -1,5 +1,5 @@
 import type { TokenType } from './model';
-import { Token, TOKEN_PATTERNS  } from './model';
+import { Token, TOKEN_PATTERNS } from './model';
 
 export class ExpressionParser {
 	parseArray(value: string, row: number, startCol: number): [Token, number] {
@@ -266,7 +266,7 @@ export class ExpressionParser {
 		const ternaryMatch = value.match(/^(.+?)\s*\?\s*(.+?)\s*:\s*(.+)$/);
 		if (ternaryMatch) {
 			const [fullMatch, condition, trueValue, falseValue] = ternaryMatch;
-			
+
 			// Create a container token for the ternary expression
 			const ternaryToken = new Token(
 				'function_call',  // We treat ternary like a function for evaluation purposes
@@ -275,31 +275,31 @@ export class ExpressionParser {
 				startCol,
 				startCol + fullMatch.length
 			);
-			
+
 			// Parse the condition
 			const [conditionToken] = this.parseValue(
 				condition.trim(),
 				row,
 				startCol + value.indexOf(condition)
 			);
-			
+
 			// Parse the true value
 			const [trueToken] = this.parseValue(
 				trueValue.trim(),
 				row,
 				startCol + value.indexOf(trueValue)
 			);
-			
+
 			// Parse the false value
 			const [falseToken] = this.parseValue(
 				falseValue.trim(),
 				row,
 				startCol + value.indexOf(falseValue)
 			);
-			
+
 			// Add all parts as children
 			ternaryToken.children.push(conditionToken, trueToken, falseToken);
-			
+
 			return [ternaryToken, startCol + fullMatch.length];
 
 		}
@@ -763,7 +763,7 @@ export class ExpressionParser {
 
 		return content;
 	}
-	
+
 	parseObject(value: string, row: number, startCol: number): [Token, number] {
 		const objectToken = new Token('object_lit', 'obj', row, startCol, startCol + 1);
 		let currentPos = 1; // Skip opening brace
@@ -848,6 +848,8 @@ export class ExpressionParser {
 					valueToken = simpleToken;
 				}
 
+				// Set proper parent-child relationship
+				valueToken.parent = identifierToken;
 				identifierToken.children.push(valueToken);
 				properties.push(identifierToken);
 			} catch (e) {
