@@ -34,11 +34,10 @@ export class TokenParser {
 		
 		// Check for numeric or numeric-like tokens
 		const numericMatch = line.slice(currentCol).match(/^(\d+(\.\d*)?|\.\d+)([a-zA-Z]\w*)?/);
-		console.log(line.slice(currentCol), numericMatch);
 		if (numericMatch) {
 			const fullMatch = numericMatch[0];
 			if (/^(\d+|\d+\.\d+|\.\d+)$/.test(fullMatch)) {
-				// Invalid number format - create as bare token
+				// Loose numeric match - create as bare token
 				const bareToken = new Token(
 					'bare_token',
 					fullMatch,
@@ -48,8 +47,6 @@ export class TokenParser {
 				);
 				addToken(bareToken, tokens);
 				return [true, currentCol + fullMatch.length];
-				// // Valid number format - will be handled by parseValue
-				// return [false, currentCol];
 			} else {
 				// Invalid number format - create as bare token
 				const bareToken = new Token(
