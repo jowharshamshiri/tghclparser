@@ -58,28 +58,37 @@ export type TokenType =
 	| 'whitespace'
 	| 'property_access'
 	| 'array_lit'
-	| 'object_lit';
+	| 'object_lit'
+	| 'unknown'
+	| 'number_lit';
 
 export class Token {
-	type: TokenType;
-	text: string;
-	startPosition: Position;
-	endPosition: Position;
-	depth: number;
-	children: Token[];
-	parent: Token | null;
-	decorators?: TokenDecorator[];
+    type: TokenType;
+    text: string;
+    startPosition: Position;
+    endPosition: Position;
+    depth: number;
+    children: Token[];
+    parent: Token | null;
+    decorators?: TokenDecorator[];
 
-	constructor(type: TokenType, text: string, line: number, startChar: number, endChar: number) {
-		this.type = type;
-		this.text = text;
-		this.startPosition = { line, character: startChar };
-		this.endPosition = { line, character: endChar };
-		this.depth = 0;
-		this.children = [];
-		this.parent = null;
-		this.decorators = [];
-	}
+	constructor(
+        type: TokenType, 
+        text: string, 
+        startLine: number, 
+        startChar: number,
+        endLine: number,
+        endChar: number
+    ) {
+        this.type = type;
+        this.text = text;
+        this.startPosition = { line: startLine, character: startChar };
+        this.endPosition = { line: endLine, character: endChar };
+        this.depth = 0;
+        this.children = [];
+        this.parent = null;
+        this.decorators = [];
+    }
 }
 
 
@@ -223,3 +232,36 @@ export interface ValueDefinition {
 	required?: boolean;
 	description?: string;
 }
+
+export interface Location {
+	start: {
+	  offset: number;
+	  line: number;
+	  column: number;
+	};
+	end: {
+	  offset: number;
+	  line: number;
+	  column: number;
+	};
+	source?: string;
+  }
+  
+  export interface ASTValue {
+	key?: string;
+	value: any;
+	location?: Location;
+  }
+  
+  export interface BlockValue {
+	identifier: string;
+	blockType?: string;
+	pairs: ASTValue[];
+	location: Location;
+  }
+  
+  export interface ASTNode {
+	type: string;
+	value: string | number | boolean | BlockValue | Record<string, ASTValue>;
+	location: Location;
+  }
