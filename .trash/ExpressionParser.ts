@@ -8,6 +8,7 @@ export class ExpressionParser {
 			'arr',
 			row,
 			startCol,
+			row,
 			startCol + 1
 		);
 

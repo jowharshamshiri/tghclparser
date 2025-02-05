@@ -1,7 +1,18 @@
 {
-  // Utility functions for processing values
-  function makeString(str) {
-    return str.join('');
+  function makeAstNode(type, value, location) {
+    return {
+      type,
+      value,
+      location
+    };
+  }
+
+  function makeKeyValue(key, value, location) {
+    return {
+      key,
+      value,
+      location
+    };
   }
 
   function makeObject(pairs) {
@@ -21,53 +32,67 @@
 
 // Starting rule for Terragrunt configuration
 Start
-  = _ statements:Statement* _ { return makeObject(statements); }
+  = _ statements:Statement* _ { 
+    return makeAstNode('root', statements, location());
+  }
 
 // A statement can be either a block or an assignment
 Statement
-  = Block
-  / Assignment
+  = _ (Block / Assignment) _
 
 // Block definition (e.g., terraform {}, include {}, etc.)
 Block
-  = _ identifier:Identifier _ blockType:(StringLiteral)? _ "{" _ 
-    pairs:(Pair/Block)* _ 
-    "}" _ {
-    return {
-      key: identifier + (blockType ? "_" + blockType.slice(1,-1) : ""),
-      value: makeObject(pairs)
-    };
-  }
+  = start:_ name:Identifier _ "{" _ 
+    pairs:(Pair*) 
+    _ "}" _ {
+      const blockLoc = location();
+      const value = {};
+      pairs.forEach(pair => {
+        if (pair) {
+          value[pair.key] = pair.value;
+        }
+      });
+      return makeKeyValue(name, value, blockLoc);
+    }
 
-// Top-level assignment (e.g., inputs = {...})
+// Assignment (e.g., inputs = {...})
 Assignment
   = _ key:Identifier _ "=" _ value:Value _ {
-    return { key, value };
+    return makeKeyValue(key, value, location());
   }
 
 // Key-value pair inside blocks
 Pair
   = _ key:Identifier _ "=" _ value:Value _ {
-    return { key, value };
+    return makeKeyValue(key, value, location());
   }
 
-// Values can be strings, numbers, booleans, arrays, objects, or expressions
+// Values can be strings, numbers, booleans, arrays, objects
 Value
-  = StringLiteral
-  / Number
-  / Boolean
-  / Array
-  / Object
-  / Expression
+  = start:_ val:(StringLiteral / Number / Boolean / Array / Object / Expression) end:_ {
+    return val;
+  }
 
 // Object literal
 Object
-  = "{" _ pairs:(Pair/Block)* _ "}" { return makeObject(pairs); }
+  = "{" _ pairs:Pair* _ "}" {
+    const obj = {};
+    pairs.forEach(pair => {
+      if (pair) {
+        obj[pair.key] = pair.value;
+      }
+    });
+    return makeAstNode('object_lit', obj, location());
+  }
 
 // String literal with quotes
 StringLiteral
-  = '"' chars:StringChar* '"' { return makeString(chars); }
-  / "'" chars:SingleQuoteChar* "'" { return makeString(chars); }
+  = '"' chars:StringChar* '"' {
+    return makeAstNode('string_lit', chars.join(''), location());
+  }
+  / "'" chars:SingleQuoteChar* "'" {
+    return makeAstNode('string_lit', chars.join(''), location());
+  }
 
 StringChar
   = [^"\\]
@@ -80,7 +105,10 @@ SingleQuoteChar
 // Numbers
 Number
   = minus:"-"? int:Integer frac:Fraction? exp:Exponent? {
-    return parseFloat(minus + int + frac + exp);
+    return makeAstNode('number_lit', 
+      parseFloat(minus + int + frac + exp),
+      location()
+    );
   }
 
 Integer
@@ -95,18 +123,23 @@ Exponent
 
 // Boolean values
 Boolean
-  = "true" { return true; }
-  / "false" { return false; }
+  = "true" { return makeAstNode('boolean_lit', true, location()); }
+  / "false" { return makeAstNode('boolean_lit', false, location()); }
 
 // Arrays
 Array
   = "[" _ items:(Value ( _ "," _ Value)*)? _ "]" {
-    return items ? makeArray([items[0]].concat(items[1].map(item => item[3]))) : [];
+    const values = items 
+      ? makeArray([items[0]].concat(items[1].map(item => item[3])))
+      : [];
+    return makeAstNode('array_lit', values, location());
   }
 
 // HCL/Terragrunt expressions (e.g., ${...}, get_terragrunt_dir())
 Expression
-  = "${" _ chars:ExpressionChar+ _ "}" { return "${" + makeString(chars) + "}"; }
+  = "${" _ chars:ExpressionChar+ _ "}" { 
+    return makeAstNode('interpolation', "${" + chars.join('') + "}", location());
+  }
   / FunctionCall
 
 ExpressionChar
@@ -115,7 +148,11 @@ ExpressionChar
 // Function calls
 FunctionCall
   = name:Identifier _ "(" _ args:FunctionArgs? _ ")" {
-    return `${name}(${args ? makeString(args) : ""})`;
+    return makeAstNode(
+      'function_call',
+      `${name}(${args ? args.join(', ') : ''})`,
+      location()
+    );
   }
 
 FunctionArgs
@@ -125,7 +162,9 @@ FunctionArgs
 
 // Identifiers
 Identifier
-  = chars:IdentifierChar+ { return makeString(chars); }
+  = chars:IdentifierChar+ {
+    return chars.join('');
+  }
 
 IdentifierChar
   = [a-zA-Z0-9_-]
