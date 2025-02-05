@@ -469,7 +469,6 @@ export class ExpressionParser {
 		return tokens;
 	}
 
-	// Modified parseFunctionCall to handle multiline functions
 	parseFunctionCall(code: string[], startRow: number, startCol: number): [Token, number, number] {
 		const slice = code[startRow].slice(startCol);
 		const match = slice.match(TOKEN_PATTERNS.FUNCTION_CALL);
@@ -544,46 +543,6 @@ export class ExpressionParser {
 		}
 
 		throw new Error('Invalid function call syntax: missing closing parenthesis');
-	}
-
-	// Helper method to get the full content of a multiline function call
-	private getFullFunctionContent(code: string[], startRow: number, startCol: number): string {
-		let content = '';
-		let currentRow = startRow;
-		let parenCount = 0;
-		let inString = false;
-		let started = false;
-
-		while (currentRow < code.length) {
-			const line = currentRow === startRow
-				? code[currentRow].slice(startCol)
-				: code[currentRow];
-
-			for (let i = 0; i < line.length; i++) {
-				const char = line[i];
-
-				if (char === '"' && (i === 0 || line[i - 1] !== '\\')) {
-					inString = !inString;
-				}
-
-				if (!inString) {
-					if (char === '(') {
-						started = true;
-						parenCount++;
-					} else if (char === ')') {
-						parenCount--;
-						if (parenCount === 0 && started) {
-							return content + line.slice(0, i + 1);
-						}
-					}
-				}
-			}
-
-			content += `${line}\n`;
-			currentRow++;
-		}
-
-		throw new Error('Unterminated function call');
 	}
 
 	private parseFunctionCallContent(content: string, row: number, baseCol: number): Token[] {
@@ -729,134 +688,140 @@ export class ExpressionParser {
 		return pos;
 	}
 
-	private determineValueType(value: string): TokenType {
-		if (TOKEN_PATTERNS.STRING.test(value)) return 'string_lit';
-		if (TOKEN_PATTERNS.FLOAT_WITH_F.test(value)) return 'float_lit_with_f';
-		if (TOKEN_PATTERNS.FLOAT.test(value)) return 'float_lit';
-		if (TOKEN_PATTERNS.INTEGER.test(value)) return 'integer_lit';
-		if (TOKEN_PATTERNS.NULL.test(value)) return 'null_lit';
-		if (TOKEN_PATTERNS.BOOLEAN.test(value)) return 'boolean_lit';
-		return 'string_lit';
-	}
-
-	private getObjectContent(
-		code: string[],
-		startRow: number,
-		startCol: number,
-		endRow: number,
-		endCol: number
-	): string {
-		let content = '';
-
-		for (let row = startRow; row <= endRow; row++) {
-			const line = code[row];
-			if (row === startRow && row === endRow) {
-				content += line.slice(startCol + 1, endCol);
-			} else if (row === startRow) {
-				content += `${line.slice(startCol + 1)}\n`;
-			} else if (row === endRow) {
-				content += line.slice(0, endCol);
-			} else {
-				content += `${line}\n`;
-			}
-		}
-
-		return content;
-	}
-
 	parseObject(value: string, row: number, startCol: number): [Token, number] {
 		const objectToken = new Token('object_lit', 'obj', row, startCol, startCol + 1);
-		let currentPos = 1; // Skip opening brace
-		let braceCount = 1;
+		let pos = 0;
+		let braceDepth = 0;
 		let inString = false;
-
-		// Find the matching closing brace
-		while (currentPos < value.length && braceCount > 0) {
-			const char = value[currentPos];
-
-			if (char === '"' && value[currentPos - 1] !== '\\') {
-				inString = !inString;
-			} else if (!inString) {
-				if (char === '{') braceCount++;
-				if (char === '}') braceCount--;
+		let currentLine = 0;
+		let currentKey = '';
+		let currentValue = '';
+		let isInKey = false;
+		let isInValue = false;
+	
+		const lines = value.split('\n');
+		
+		for (let lineNum = 0; lineNum < lines.length; lineNum++) {
+			const line = lines[lineNum];
+			pos = 0;
+	
+			while (pos < line.length) {
+				const char = line[pos];
+	
+				// Handle string literals
+				if (char === '"' && (pos === 0 || line[pos - 1] !== '\\')) {
+					inString = !inString;
+					if (isInKey || isInValue) {
+						if (isInKey) currentKey += char;
+						if (isInValue) currentValue += char;
+					}
+					pos++;
+					continue;
+				}
+	
+				// If we're in a string, add character and continue
+				if (inString) {
+					if (isInKey) currentKey += char;
+					if (isInValue) currentValue += char;
+					pos++;
+					continue;
+				}
+	
+				// Handle object depth
+				if (char === '{') {
+					braceDepth++;
+					if (braceDepth === 1) {
+						// Start of the main object
+						pos++;
+						continue;
+					}
+					// Nested object
+					if (isInValue) currentValue += char;
+				} else if (char === '}') {
+					braceDepth--;
+					if (braceDepth === 0) {
+						// End of the main object
+						if (currentKey && currentValue) {
+							// Process any final key-value pair
+							this.addObjectProperty(objectToken, currentKey.trim(), currentValue.trim(), row + lineNum, startCol + pos - currentValue.length);
+						}
+						return [objectToken, startCol + pos + 1];
+					}
+					// Nested object close
+					if (isInValue) currentValue += char;
+				} else if (char === '=' && braceDepth === 1 && !isInValue) {
+					// Found key-value separator
+					isInKey = false;
+					isInValue = true;
+				} else if (char === ',' && braceDepth === 1) {
+					// End of a key-value pair
+					if (currentKey && currentValue) {
+						this.addObjectProperty(objectToken, currentKey.trim(), currentValue.trim(), row + lineNum, startCol + pos - currentValue.length);
+					}
+					currentKey = '';
+					currentValue = '';
+					isInKey = false;
+					isInValue = false;
+				} else {
+					// Regular character
+					if (!isInKey && !isInValue && !char.trim()) {
+						// Skip whitespace between properties
+						pos++;
+						continue;
+					}
+					
+					if (!isInKey && !isInValue && char.trim()) {
+						// Start of a new key
+						isInKey = true;
+					}
+	
+					if (isInKey) currentKey += char;
+					if (isInValue) currentValue += char;
+				}
+				pos++;
 			}
-			currentPos++;
+	
+			// Add newline to value if we're in the middle of one
+			if (isInValue && lineNum < lines.length - 1) {
+				currentValue += '\n';
+			}
 		}
-
-		if (braceCount !== 0) {
-			throw new Error('Unterminated object literal');
-		}
-
-		// Extract and parse the object content
-		const content = value.slice(1, currentPos - 1).trim();
-		const properties = this.parseObjectProperties(content, row, startCol + 1);
-		objectToken.children.push(...properties);
-
-		return [objectToken, startCol + currentPos];
+	
+		// If we get here without returning, the object wasn't properly terminated
+		throw new Error('Unterminated object literal');
 	}
 
-	private parseObjectProperties(content: string, row: number, baseCol: number): Token[] {
-		const properties: Token[] = [];
-		const lines = content.split('\n');
-
-		for (const [i, line_] of lines.entries()) {
-			const line = line_.trim();
-			if (!line || line.startsWith('#') || line.startsWith('//')) {
-				continue;
-			}
-
-			const equalIndex = line.indexOf('=');
-			if (equalIndex === -1) continue;
-
-			const key = line.slice(0, equalIndex).trim();
-			const value = line.slice(equalIndex + 1).trim();
-
-			if (!key || !value) continue;
-
-			// Create identifier token for the key
-			const identifierToken = new Token(
-				'identifier',
-				key,
-				row + i,
-				baseCol + line_.indexOf(key),
-				baseCol + line_.indexOf(key) + key.length
-			);
-
+	private addObjectProperty(objectToken: Token, key: string, value: string, row: number, startCol: number) {
+		// Create identifier token for the key
+		const identifierToken = new Token(
+			'identifier',
+			key.replace(/"/g, '').trim(),
+			row,
+			startCol,
+			startCol + key.length
+		);
+	
+		try {
 			// Parse the value
-			try {
-				let valueToken;
-				if (value.startsWith('{')) {
-					const [objToken, endCol] = this.parseObject(
-						value,
-						row + i,
-						baseCol + line_.indexOf('{')
-					);
-					valueToken = objToken;
-				} else if (value.startsWith('[')) {
-					const [arrayToken, endCol] = this.parseArray(
-						value,
-						row + i,
-						baseCol + line_.indexOf('[')
-					);
-					valueToken = arrayToken;
-				} else {
-					const [simpleToken, endCol] = this.parseValue(
-						value,
-						row + i,
-						baseCol + line_.indexOf(value)
-					);
-					valueToken = simpleToken;
-				}
-
-				// Set proper parent-child relationship
-				valueToken.parent = identifierToken;
-				identifierToken.children.push(valueToken);
-				properties.push(identifierToken);
-			} catch (e) {
-				console.error(`Error parsing object property: ${e}`);
+			let valueToken;
+			const trimmedValue = value.trim();
+			if (trimmedValue.startsWith('{')) {
+				const [objToken] = this.parseObject(trimmedValue, row, startCol + key.length + 3);
+				valueToken = objToken;
+			} else if (trimmedValue.startsWith('[')) {
+				const [arrayToken] = this.parseArray(trimmedValue, row, startCol + key.length + 3);
+				valueToken = arrayToken;
+			} else {
+				const [simpleToken] = this.parseValue(trimmedValue, row, startCol + key.length + 3);
+				valueToken = simpleToken;
 			}
+	
+			// Set up parent-child relationship
+			valueToken.parent = identifierToken;
+			identifierToken.children.push(valueToken);
+			objectToken.children.push(identifierToken);
+		} catch (e) {
+			console.error(`Error parsing object property value: ${e}`);
 		}
-
-		return properties;
 	}
 }

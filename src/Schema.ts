@@ -13,7 +13,6 @@ export class Schema {
 		return Schema.instance;
 	}
 
-	// New method to find nested blocks
 	findNestedBlockTemplate(parentType: string, nestedType: string): BlockTemplate | undefined {
 		const parent = this.getBlockTemplate(parentType);
 		if (!parent?.blocks) return undefined;
@@ -60,10 +59,6 @@ export class Schema {
 		return functions.functions.find(f => f.name === name);
 	}
 
-	validateFunctionCall(name: string): boolean {
-		return !!this.getFunctionDefinition(name);
-	}
-
 	getFunctionSignature(func: FunctionDefinition): string {
 		const params = func.parameters.map(p =>
 			`${p.name}${p.required ? '' : '?'}: ${p.type}`
@@ -101,4 +96,94 @@ export class Schema {
 		};
 		return `${attr.name} = ${typeMap[attr.value.type] || typeMap.default}`;
 	}
+
+	validateBlockAttributes(blockType: string, attributes: Record<string, any>): boolean {
+		const template = this.getBlockTemplate(blockType);
+		if (!template) return false;
+
+		// If the block allows arbitrary attributes, all attribute combinations are valid
+		if (template.arbitraryAttributes) return true;
+
+		// Check that all required attributes are present
+		const requiredAttrs = template.attributes?.filter(attr => attr.required) || [];
+		for (const attr of requiredAttrs) {
+			if (!(attr.name in attributes)) {
+				return false;
+			}
+		}
+
+		// Check that all present attributes are defined in the schema
+		for (const attrName of Object.keys(attributes)) {
+			if (!template.attributes?.some(attr => attr.name === attrName)) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	validateFunctionCall(funcName: string, args: any[]): boolean {
+		const funcDef = this.getFunctionDefinition(funcName);
+		if (!funcDef) return false;
+
+		// Check required parameters
+		const requiredParams = funcDef.parameters.filter(param => param.required);
+		if (args.length < requiredParams.length) {
+			return false;
+		}
+
+		// Check if too many arguments (unless the last parameter is variadic)
+		const lastParam = funcDef.parameters[funcDef.parameters.length - 1];
+		if (!lastParam?.variadic && args.length > funcDef.parameters.length) {
+			return false;
+		}
+
+		return true;
+	}
+
+	validateAttributeValue(blockType: string, attrName: string, value: any): boolean {
+		const template = this.getBlockTemplate(blockType);
+		if (!template) return false;
+
+		const attr = template.attributes?.find(a => a.name === attrName);
+		if (!attr) return template.arbitraryAttributes || false;
+
+		// Check value type
+		switch (attr.value.type) {
+			case 'string':
+				if (typeof value !== 'string') return false;
+				if (attr.value.pattern && !new RegExp(attr.value.pattern).test(value)) {
+					return false;
+				}
+				break;
+
+			case 'number':
+				if (typeof value !== 'number') return false;
+				break;
+
+			case 'boolean':
+				if (typeof value !== 'boolean') return false;
+				break;
+
+			case 'array':
+				if (!Array.isArray(value)) return false;
+				if (attr.value.minItems && value.length < attr.value.minItems) return false;
+				if (attr.value.maxItems && value.length > attr.value.maxItems) return false;
+				break;
+
+			case 'object':
+				if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+					return false;
+				}
+				break;
+		}
+
+		// Check enum values if specified
+		if (attr.value.enum && !attr.value.enum.includes(value)) {
+			return false;
+		}
+
+		return true;
+	}
+
 }
