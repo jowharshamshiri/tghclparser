@@ -1,0 +1,149 @@
+{
+  // Utility functions for processing values
+  function makeString(str) {
+    return str.join('');
+  }
+
+  function makeObject(pairs) {
+    const obj = {};
+    for (const pair of pairs) {
+      if (pair) {
+        obj[pair.key] = pair.value;
+      }
+    }
+    return obj;
+  }
+
+  function makeArray(items) {
+    return items.filter(item => item !== null);
+  }
+}
+
+// Starting rule for Terragrunt configuration
+Start
+  = _ statements:Statement* _ { return makeObject(statements); }
+
+// A statement can be either a block or an assignment
+Statement
+  = Block
+  / Assignment
+
+// Block definition (e.g., terraform {}, include {}, etc.)
+Block
+  = _ identifier:Identifier _ blockType:(StringLiteral)? _ "{" _ 
+    pairs:(Pair/Block)* _ 
+    "}" _ {
+    return {
+      key: identifier + (blockType ? "_" + blockType.slice(1,-1) : ""),
+      value: makeObject(pairs)
+    };
+  }
+
+// Top-level assignment (e.g., inputs = {...})
+Assignment
+  = _ key:Identifier _ "=" _ value:Value _ {
+    return { key, value };
+  }
+
+// Key-value pair inside blocks
+Pair
+  = _ key:Identifier _ "=" _ value:Value _ {
+    return { key, value };
+  }
+
+// Values can be strings, numbers, booleans, arrays, objects, or expressions
+Value
+  = StringLiteral
+  / Number
+  / Boolean
+  / Array
+  / Object
+  / Expression
+
+// Object literal
+Object
+  = "{" _ pairs:(Pair/Block)* _ "}" { return makeObject(pairs); }
+
+// String literal with quotes
+StringLiteral
+  = '"' chars:StringChar* '"' { return makeString(chars); }
+  / "'" chars:SingleQuoteChar* "'" { return makeString(chars); }
+
+StringChar
+  = [^"\\]
+  / "\\" char:["\\/bfnrt] { return eval('"\\' + char + '"'); }
+
+SingleQuoteChar
+  = [^'\\]
+  / "\\" char:. { return char; }
+
+// Numbers
+Number
+  = minus:"-"? int:Integer frac:Fraction? exp:Exponent? {
+    return parseFloat(minus + int + frac + exp);
+  }
+
+Integer
+  = "0"
+  / [1-9] [0-9]*
+
+Fraction
+  = "." [0-9]+
+
+Exponent
+  = [eE] [+-]? [0-9]+
+
+// Boolean values
+Boolean
+  = "true" { return true; }
+  / "false" { return false; }
+
+// Arrays
+Array
+  = "[" _ items:(Value ( _ "," _ Value)*)? _ "]" {
+    return items ? makeArray([items[0]].concat(items[1].map(item => item[3]))) : [];
+  }
+
+// HCL/Terragrunt expressions (e.g., ${...}, get_terragrunt_dir())
+Expression
+  = "${" _ chars:ExpressionChar+ _ "}" { return "${" + makeString(chars) + "}"; }
+  / FunctionCall
+
+ExpressionChar
+  = [^}]
+
+// Function calls
+FunctionCall
+  = name:Identifier _ "(" _ args:FunctionArgs? _ ")" {
+    return `${name}(${args ? makeString(args) : ""})`;
+  }
+
+FunctionArgs
+  = arg:Value rest:( _ "," _ Value)* {
+    return [arg].concat(rest.map(r => r[3]));
+  }
+
+// Identifiers
+Identifier
+  = chars:IdentifierChar+ { return makeString(chars); }
+
+IdentifierChar
+  = [a-zA-Z0-9_-]
+
+// Whitespace and comments
+_
+  = (Whitespace / Comment)*
+
+Whitespace
+  = [ \t\n\r]
+
+Comment
+  = SingleLineComment
+  / MultiLineComment
+
+SingleLineComment
+  = "//" [^\n]*
+  / "#" [^\n]*
+
+MultiLineComment
+  = "/*" (!"*/" .)* "*/"

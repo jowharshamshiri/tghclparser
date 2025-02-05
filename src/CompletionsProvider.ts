@@ -1,90 +1,68 @@
-import type {
-	CompletionItem,
-	Position
-} from 'vscode-languageserver';
-import { CompletionItemKind } from 'vscode-languageserver';
-
-import { PositionContext } from './model';
-import type { ParsedDocument } from './index';
+import { Schema } from './Schema';
+import { Token } from './model';
+import { CompletionItem, CompletionItemKind, Position } from 'vscode-languageserver';
 
 export class CompletionsProvider {
-	getCompletionsAtPosition(position: Position, parsedDocument:ParsedDocument): CompletionItem[] {
-		const textBeforeCursor = parsedDocument.getTextBeforeCursor(position);
+  constructor(private schema: Schema) {}
 
-		const containingBlock = parsedDocument.findContainingBlock(position);
-		const positionContext = parsedDocument.getContextAtPosition(position);
+  getCompletions(line: string, position: Position, token: Token | null): CompletionItem[] {
+    // Start of line - suggest blocks
+    if (this.isStartOfLine(line, position.character)) {
+      return this.getBlockCompletions();
+    }
 
-		if (positionContext === PositionContext.Function) {
-			const partialFunction = this.getPartialFunctionName(textBeforeCursor);
-			return this.getFunctionCompletions(partialFunction, parsedDocument);
-		}
+    // Inside a block - suggest attributes
+    if (token?.type === 'block') {
+      return this.getAttributeCompletions(token.text);
+    }
 
-		if (containingBlock) {
-			const blockIndent = parsedDocument.getLines()[containingBlock.startPosition.line].search(/\S/);
-			const currentIndent = parsedDocument.getLineText(position).search(/\S/);
+    // After = sign - suggest functions
+    if (this.isAfterEquals(line, position.character)) {
+      return this.getFunctionCompletions();
+    }
 
-			if (currentIndent > blockIndent || currentIndent === -1) {
-				return this.getAttributeCompletions(containingBlock.text, parsedDocument);
-			}
-		}
+    return [];
+  }
 
-		if (positionContext === PositionContext.Block && !containingBlock) {
-			return this.getBlockCompletions(parsedDocument);
-		}
+  private isStartOfLine(line: string, character: number): boolean {
+    return line.slice(0, character).trim().length === 0;
+  }
 
-		return [];
-	}
-	
-	private getPartialFunctionName(textBeforeCursor: string): string {
-		const match = textBeforeCursor.match(/=\s*(\w*)$/);
-		return match ? match[1] : '';
-	}
+  private isAfterEquals(line: string, character: number): boolean {
+    const beforeCursor = line.slice(0, character).trim();
+    return beforeCursor.endsWith('=');
+  }
 
-	private getFunctionCompletions(partialName = '', parsedDocument:ParsedDocument): CompletionItem[] {
-		const functions = parsedDocument.getSchema().getAllFunctions();
-		return functions
-			.filter(func => func.name.startsWith(partialName))
-			.map(func => ({
-				label: func.name,
-				kind: CompletionItemKind.Function,
-				detail: parsedDocument.getSchema().getFunctionSignature(func),
-				documentation: {
-					kind: 'markdown',
-					value: func.description || ''
-				},
-				insertText: parsedDocument.getSchema().generateFunctionSnippet(func),
-				filterText: func.name
-			}));
-	}
+  private getBlockCompletions(): CompletionItem[] {
+    return this.schema.getAllBlockTemplates().map(template => ({
+      label: template.type,
+      kind: CompletionItemKind.Class,
+      detail: template.description,
+      insertText: this.schema.generateBlockSnippet(template),
+      insertTextFormat: 2 // Snippet
+    }));
+  }
 
-	private getBlockCompletions(parsedDocument: ParsedDocument): CompletionItem[] {
-		const blockTemplates = parsedDocument.getSchema().getAllBlockTemplates();
-		return blockTemplates.map(template => ({
-			label: template.type,
-			kind: CompletionItemKind.Class,
-			detail: `Block: ${template.type}`,
-			documentation: {
-				kind: 'markdown',
-				value: template.description || ''
-			},
-			insertText: parsedDocument.getSchema().generateBlockSnippet(template)
-		}));
-	}
+  private getAttributeCompletions(blockType: string): CompletionItem[] {
+    const template = this.schema.getBlockTemplate(blockType);
+    if (!template?.attributes) return [];
 
-	private getAttributeCompletions(blockType: string, parsedDocument:ParsedDocument): CompletionItem[] {
-		const template = parsedDocument.getSchema().getBlockTemplate(blockType);
-		if (!template?.attributes) return [];
+    return template.attributes.map(attr => ({
+      label: attr.name,
+      kind: CompletionItemKind.Field,
+      detail: attr.description,
+      insertText: this.schema.generateAttributeSnippet(attr),
+      insertTextFormat: 2 // Snippet
+    }));
+  }
 
-		return template.attributes.map(attr => ({
-			label: attr.name,
-			kind: CompletionItemKind.Field,
-			detail: `${attr.name}: ${attr.value.type}`,
-			documentation: {
-				kind: 'markdown',
-				value: attr.description || ''
-			},
-			insertText: parsedDocument.getSchema().generateAttributeSnippet(attr)
-		}));
-	}
-	
+  private getFunctionCompletions(): CompletionItem[] {
+    return this.schema.getAllFunctions().map(func => ({
+      label: func.name,
+      kind: CompletionItemKind.Function,
+      detail: func.description,
+      insertText: this.schema.generateFunctionSnippet(func),
+      insertTextFormat: 2 // Snippet
+    }));
+  }
 }

@@ -1,4 +1,3 @@
-
 import type { Position } from 'vscode-languageserver';
 
 export class AnError extends Error {
@@ -213,7 +212,6 @@ export interface FunctionDefinition {
 }
 
 
-// Define allowed values for attributes
 export interface ValueDefinition {
 	type: ValueType;
 	elementType?: ValueType;  // For arrays, specifies the type of elements
