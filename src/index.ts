@@ -99,7 +99,7 @@ export class ParsedDocument {
   private parse(code: string): IParseResult {
     try {
       this.ast = tg_parse(code, { grammarSource: this.uri });
-	
+		console.log("ast",this.ast);
 	  this.tokens=[this.parseNode(this.ast)];
 
       this.diagnostics = this.diagnosticsProvider.getDiagnostics(this.tokens);
@@ -110,6 +110,7 @@ export class ParsedDocument {
         tokens: this.tokens
       };
     } catch (e) {
+		console.log("error",e);
       const diagnostic: Diagnostic = {
         severity: 1,
         range: {

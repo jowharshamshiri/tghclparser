@@ -33,12 +33,16 @@ Statement
   }
 
 Block
-  = name:BlockIdentifier _ "{" _ 
-    pairs:(Pair*) 
+  = name:BlockIdentifier params:BlockParameter* _ "{" _ 
+    items:(Pair / Block)* 
     _ "}" {
-      // Include the name as the first child and store the name value in value field
-      return makeNode('block', name.value, location(), [name, ...pairs].filter(Boolean));
+      return makeNode('block', name.value, location(), [name, ...params, ...items].filter(Boolean));
     }
+
+BlockParameter
+  = _ param:StringLiteral {
+    return makeNode('parameter', param.value, location(), [param]);
+  }
 
 BlockIdentifier
   = name:Identifier {
@@ -54,9 +58,12 @@ AssignmentIdentifier
   = name:Identifier {
     return makeIdentifierNode(name, location());
   }
-
+  
 Pair
   = _ key:AttributeIdentifier _ "=" _ value:Value _ {
+    return makeNode('attribute', key.value, location(), [key, value]);
+  }
+  / _ key:AttributeIdentifier _ value:Block {
     return makeNode('attribute', key.value, location(), [key, value]);
   }
 
@@ -76,8 +83,14 @@ RootObject
   }
 
 Value
-  = val:(StringLiteral / Number / Boolean / Array / Object / Expression) {
+  = val:(StringLiteral / Number / Boolean / Array / Object / Expression / PathReference) {
     return val;
+  }
+
+PathReference
+  = parts:Identifier rest:("." Identifier)* {
+    const fullPath = parts + rest.map(r => "." + r[1]).join('');
+    return makeNode('reference', fullPath, location());
   }
 
 Object
@@ -157,7 +170,7 @@ Identifier
   }
 
 IdentifierChar
-  = [a-zA-Z0-9_-]
+  = [a-zA-Z0-9_\-.]
 
 _
   = (Whitespace / Comment)*
