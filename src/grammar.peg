@@ -6,24 +6,25 @@
   }
 
   function makeNode(type, value, location, children = []) {
+    // Only include non-empty children array
     return {
       id: getNextId(),
       type,
-      value,
+      ...(value !== null && { value }),
       location,
       ...(children.length > 0 && { children })
     };
   }
 
   function makeIdentifierNode(name, location) {
-    return makeNode('attribute_identifier', name, location);
+    return makeNode('identifier', name, location);
   }
 }
 
 // Starting rule for Terragrunt configuration
 Start
   = _ statements:Statement* _ { 
-    return makeNode('root', statements, location());
+    return makeNode('root', null, location(), statements);
   }
 
 Statement
@@ -35,6 +36,7 @@ Block
   = name:BlockIdentifier _ "{" _ 
     pairs:(Pair*) 
     _ "}" {
+      // Include the name as the first child and store the name value in value field
       return makeNode('block', name.value, location(), [name, ...pairs].filter(Boolean));
     }
 
@@ -101,11 +103,8 @@ SingleQuoteChar
 
 Number
   = minus:"-"? int:Integer frac:Fraction? exp:Exponent? {
-    return makeNode(
-      'number_lit', 
-      parseFloat((minus || '') + int + (frac || '') + (exp || '')),
-      location()
-    );
+    const value = parseFloat((minus || '') + int + (frac || '') + (exp || ''));
+    return makeNode('number_lit', value, location());
   }
 
 Integer
@@ -132,7 +131,8 @@ Array
 
 Expression
   = "${" _ chars:ExpressionChar+ _ "}" { 
-    return makeNode('interpolation', "${" + chars.join('') + "}", location());
+    const value = "${" + chars.join('') + "}";
+    return makeNode('interpolation', value, location());
   }
   / FunctionCall
 
@@ -159,7 +159,6 @@ Identifier
 IdentifierChar
   = [a-zA-Z0-9_-]
 
-// Whitespace and comments
 _
   = (Whitespace / Comment)*
 

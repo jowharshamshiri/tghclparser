@@ -1,6 +1,6 @@
 import { CompletionItem, Diagnostic, Position } from 'vscode-languageserver';
 import { parse as tg_parse, SyntaxError } from './terragrunt-parser';
-import { Token, Location, BlockValue, ASTValue, ASTNode } from './model';
+import { Token, Location, BlockValue, ASTValue, ASTNode, TokenType } from './model';
 import { Schema } from './Schema';
 import { CompletionsProvider } from './CompletionsProvider';
 import { HoverProvider } from './HoverProvider';
@@ -47,37 +47,18 @@ export class ParsedDocument {
     );
   }
 
-  private convertAstToTokens(ast: any): Token[] {
-    if (!ast || typeof ast !== 'object') {
-      return [];
-    }
-
-    const rootToken = this.createToken(ast);
-    if (!rootToken) return [];
-
-    // Special handling for root node - process its value array
-    if (ast.type === 'root' && Array.isArray(ast.value)) {
-      for (const childNode of ast.value) {
-        const childToken = this.processNode(childNode);
-        if (childToken) {
-          childToken.parent = rootToken;
-          rootToken.children.push(childToken);
-        }
-      }
-    }
-
-    return this.flattenTokens(rootToken);
-  }
-
-  private processNode(node: any): Token | null {
+  private processNode(node: any, parentToken: Token | null = null): Token | null {
     const token = this.createToken(node);
     if (!token) return null;
 
-    if (Array.isArray(node.children)) {
+    if (parentToken) {
+      token.parent = parentToken;
+    }
+
+    if (node.children && Array.isArray(node.children)) {
       for (const childNode of node.children) {
-        const childToken = this.processNode(childNode);
+        const childToken = this.processNode(childNode, token);
         if (childToken) {
-          childToken.parent = token;
           token.children.push(childToken);
         }
       }
@@ -86,33 +67,41 @@ export class ParsedDocument {
     return token;
   }
 
-  private flattenTokens(rootToken: Token | null): Token[] {
-    if (!rootToken) return [];
-    
-    const result: Token[] = [];
-    const seen = new Set<number>();
-    
-    const visit = (token: Token) => {
-      if (!seen.has(token.id)) {
-        seen.add(token.id);
-        result.push(token);
-        for (const child of token.children) {
-          visit(child);
-        }
+  private flattenTokens(rootToken: Token): Token[] {
+    const tokens: Token[] = [];
+    const processed = new Set<number>();
+
+    const traverse = (token: Token) => {
+      if (!processed.has(token.id)) {
+        processed.add(token.id);
+        tokens.push(token);
+        token.children.forEach(child => traverse(child));
       }
     };
-    
-    visit(rootToken);
-    return result;
+
+    traverse(rootToken);
+    return tokens;
   }
+
+  parseNode(node: any, parent: Token | null = null): Token {
+    const token = new Token(node.id, node.type as TokenType, node.value ?? null, node.location as Location);
+    token.parent = parent;
+    
+    if (node.children) {
+        token.children = node.children.map((child: any) => this.parseNode(child, token));
+    }
+    
+    return token;
+}
+
+
 
   private parse(code: string): IParseResult {
     try {
-		
       this.ast = tg_parse(code, { grammarSource: this.uri });
-	  console.log(this.ast);
-      this.tokens = this.convertAstToTokens(this.ast);
-	  console.log(this.removeCircularReferences(this.tokens));
+	
+	  this.tokens=[this.parseNode(this.ast)];
+
       this.diagnostics = this.diagnosticsProvider.getDiagnostics(this.tokens);
       
       return {
@@ -138,26 +127,9 @@ export class ParsedDocument {
       };
     }
   }
-  
-
-  private processChildren(node: any, parentToken: Token) {
-    if (!node.children || !Array.isArray(node.children)) {
-      return;
-    }
-
-    for (const child of node.children) {
-      const childToken = this.createToken(child);
-      if (childToken) {
-        childToken.parent = parentToken;
-        parentToken.children.push(childToken);
-        this.processChildren(child, childToken);
-      }
-    }
-  }
-
 
   private removeCircularReferences<T>(data: T[]): string {
-	return JSON.stringify(data, (key, value) => (key === "parent" ? null : value), 2);
+    return JSON.stringify(data, (key, value) => (key === "parent" ? null : value), 2);
   }
 
   public getUri(): string {
@@ -238,4 +210,4 @@ export class ParsedDocument {
   }
 }
 
-export {Token};
+export { Token };

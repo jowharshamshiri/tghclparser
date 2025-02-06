@@ -35,7 +35,7 @@ export type TokenType =
 	| 'assignment'
 	| 'attribute'
 	| 'root'
-	| 'attribute_identifier';
+	| 'identifier';
 
 export interface Location {
 	start: {

@@ -27,7 +27,7 @@ export class HoverProvider {
       case 'function_call':
         // For function calls, we need to get the actual function name from the child identifier
         const functionName = token.children.find(child => 
-          child.type === 'attribute_identifier')?.getDisplayText() || value;
+          child.type === 'identifier')?.getDisplayText() || value;
         const funcDef = this.schema.getFunctionDefinition(functionName);
         if (funcDef) {
           contents = [
@@ -44,7 +44,7 @@ export class HoverProvider {
         break;
 
       case 'identifier':
-      case 'attribute_identifier':
+      case 'identifier':
         if (token.parent?.type === 'block') {
           const parentBlockValue = token.parent.getDisplayText();
           const parentBlock = this.schema.getBlockTemplate(parentBlockValue);
@@ -63,7 +63,7 @@ export class HoverProvider {
       case 'attribute':
         // For attributes, look at the identifier child
         const attrName = token.children.find(child => 
-          child.type === 'attribute_identifier')?.getDisplayText();
+          child.type === 'identifier')?.getDisplayText();
         if (token.parent?.type === 'block' && attrName) {
           const parentBlockValue = token.parent.getDisplayText();
           const parentBlock = this.schema.getBlockTemplate(parentBlockValue);
