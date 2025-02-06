@@ -244,12 +244,13 @@ function peg$parse(input, options) {
   var peg$e32 = peg$literalExpectation("*/", false);
 
   var peg$f0 = function(statements) { 
-    return makeNode('root', statements, location());
+    return makeNode('root', null, location(), statements);
   };
   var peg$f1 = function(statement) {
     return statement;
   };
   var peg$f2 = function(name, pairs) {
+      // Include the name as the first child and store the name value in value field
       return makeNode('block', name.value, location(), [name, ...pairs].filter(Boolean));
     };
   var peg$f3 = function(name) {
@@ -288,11 +289,8 @@ function peg$parse(input, options) {
   var peg$f14 = function(char) { return eval('"\\' + char + '"'); };
   var peg$f15 = function(char) { return char; };
   var peg$f16 = function(minus, int, frac, exp) {
-    return makeNode(
-      'number_lit', 
-      parseFloat((minus || '') + int + (frac || '') + (exp || '')),
-      location()
-    );
+    const value = parseFloat((minus || '') + int + (frac || '') + (exp || ''));
+    return makeNode('number_lit', value, location());
   };
   var peg$f17 = function() { return makeNode('boolean_lit', true, location()); };
   var peg$f18 = function() { return makeNode('boolean_lit', false, location()); };
@@ -303,7 +301,8 @@ function peg$parse(input, options) {
     return makeNode('array_lit', null, location(), values);
   };
   var peg$f20 = function(chars) { 
-    return makeNode('interpolation', "${" + chars.join('') + "}", location());
+    const value = "${" + chars.join('') + "}";
+    return makeNode('interpolation', value, location());
   };
   var peg$f21 = function(name, args) {
     const fnName = makeIdentifierNode(name, location());
@@ -1752,17 +1751,18 @@ function peg$parse(input, options) {
   }
 
   function makeNode(type, value, location, children = []) {
+    // Only include non-empty children array
     return {
       id: getNextId(),
       type,
-      value,
+      ...(value !== null && { value }),
       location,
       ...(children.length > 0 && { children })
     };
   }
 
   function makeIdentifierNode(name, location) {
-    return makeNode('attribute_identifier', name, location);
+    return makeNode('identifier', name, location);
   }
 
   peg$result = peg$startRuleFunction();

@@ -18,7 +18,7 @@ export class DiagnosticsProvider {
           this.validateFunction(token, diagnostics);
           break;
         case 'identifier':
-        case 'attribute_identifier':
+        case 'identifier':
           this.validateIdentifier(token, diagnostics);
           break;
         case 'attribute':
@@ -63,7 +63,7 @@ export class DiagnosticsProvider {
       const presentAttrs = new Set(
         token.children
           .filter(child => child.type === 'attribute')
-          .map(child => child.children.find(c => c.type === 'attribute_identifier')?.getDisplayText())
+          .map(child => child.children.find(c => c.type === 'identifier')?.getDisplayText())
           .filter(Boolean)
       );
 
@@ -82,7 +82,7 @@ export class DiagnosticsProvider {
   private validateFunction(token: Token, diagnostics: Diagnostic[]) {
     // Get function name from child identifier
     const funcIdentifier = token.children.find(child => 
-      child.type === 'attribute_identifier');
+      child.type === 'identifier');
     const funcName = funcIdentifier?.getDisplayText();
     
     if (!funcName) {
@@ -137,7 +137,7 @@ export class DiagnosticsProvider {
 
   private validateAttribute(token: Token, diagnostics: Diagnostic[]) {
     const attributeIdentifier = token.children.find(child => 
-      child.type === 'attribute_identifier');
+      child.type === 'identifier');
     if (!attributeIdentifier) return;
 
     const attributeName = attributeIdentifier.getDisplayText();
@@ -150,7 +150,7 @@ export class DiagnosticsProvider {
       if (attribute) {
         // Validate attribute value if present
         const valueToken = token.children.find(child => 
-          child.type !== 'attribute_identifier');
+          child.type !== 'identifier');
         if (valueToken) {
           this.validateAttributeValue(valueToken, attribute, diagnostics);
         }

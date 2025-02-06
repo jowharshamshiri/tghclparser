@@ -84,8 +84,8 @@ export class CompletionsProvider {
   private isAttributeContext(token: Token): boolean {
     if (!token) return false;
     
-    // If we're in an attribute or attribute_identifier
-    if (token.type === 'attribute' || token.type === 'attribute_identifier') {
+    // If we're in an attribute or identifier
+    if (token.type === 'attribute' || token.type === 'identifier') {
       return true;
     }
 
