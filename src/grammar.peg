@@ -1,3 +1,4 @@
+
 {
   let debugEnabled = true;
   function debugLog(rule, text, pos, context = {}) {
@@ -139,13 +140,22 @@ Object = "{" _ pairs:Pair* _ "}" {
   return makeNode('object', null, location(), pairs); 
 }
 
-StringLiteral = '"' chars:DoubleStringChar* '"' { return makeNode('string_lit', chars.join(''), location()); }
-  / "'" chars:SingleStringChar* "'" { return makeNode('string_lit', chars.join(''), location()); }
+StringLiteral = QuotedString / SingleQuotedString 
 
-DoubleStringChar = [^"\\${] / "${" expr:(!("}") .)* "}" { return "${" + expr.map(e => e[1]).join('') + "}"; } / EscapeSequence
-SingleStringChar = [^'\\${] / "${" expr:(!("}") .)* "}" { return "${" + expr.map(e => e[1]).join('') + "}"; } / EscapeSequence
+QuotedString = '"' chars:DoubleStringChar* '"' { 
+  return makeNode('string_lit', chars.join(''), location()); 
+}
+
+SingleQuotedString = "'" chars:SingleStringChar* "'" { 
+  return makeNode('string_lit', chars.join(''), location()); 
+}
+
+DoubleStringChar = [^"\\${] / EscapedChar / InterpolatedExpr
+SingleStringChar = [^'\\${] / EscapedChar / InterpolatedExpr
 
 EscapeSequence = "\\" . { return text(); }
+EscapedChar = "\\" . { return text(); }
+InterpolatedExpr = "${" expr:(!("}") .)* "}" { return "${" + expr.map(e => e[1]).join('') + "}"; }
 
 Number = minus:"-"? int:Integer frac:Fraction? exp:Exponent? {
   return makeNode('number_lit', parseFloat(text()), location());
@@ -157,13 +167,17 @@ Exponent = [eE] [+-]? [0-9]+
 
 Boolean = ("true" / "false") { return makeNode('boolean_lit', text() === 'true', location()); }
 
-Array = "[" _ items:(Value (_ "," _ Value)*)? _ "]" {
-  const values = items ? [items[0], ...items[1].map(i => i[3])] : [];
+Array = "[" _ items:(ArrayItem (_ "," _ ArrayItem)* (_ ",")?)? _ "]" {
+  const values = items ? [items[0], ...items[1].map(item => item[3])] : [];
   return makeNode('array_lit', null, location(), values);
 }
 
+ArrayItem = val:(StringLiteral / Number / Boolean / Object / FunctionCall / Expression / Reference) {
+  return val;
+}
+
 Expression = "${" expr:(!("}") .)* "}" {
-  return makeNode('interpolation', "${" + expr.map(e => e[1]).join('') + "}", location());
+  return makeNode('interpolation', text(), location());
 }
 
 ExpressionChar
