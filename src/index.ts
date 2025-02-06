@@ -109,15 +109,23 @@ export class ParsedDocument {
         diagnostics: this.diagnostics,
         tokens: this.tokens
       };
-    } catch (e) {
-		console.log("error",e);
+    } catch (error) {
+      if (error instanceof SyntaxError && error.location) {
+        console.error(`Syntax Error at line ${error.location.start.line}, column ${error.location.start.column}:`);
+		//which rule failed
+		console.log(error.expected);
+        console.log(error.format([{ source: this.uri, text: code }]));
+      } else {
+        console.error("Unknown Parsing Error:", error);
+      }
+
       const diagnostic: Diagnostic = {
         severity: 1,
         range: {
           start: { line: 0, character: 0 },
           end: { line: 0, character: 0 }
         },
-        message: e instanceof Error ? e.message : 'Unknown error',
+        message: error instanceof Error ? error.message : 'Unknown error',
         source: 'terragrunt'
       };
       

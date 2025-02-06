@@ -71,6 +71,10 @@ Block = _ name:Identifier _ params:BlockParameter* _ "{" _ items:(Pair / Block)*
   return makeNode('block', name, location(), [makeIdentifierNode(name, location()), ...params, ...items]);
 }
 
+BlockInRootAssignment = name:Identifier params:BlockParameter* _ "{" _ items:(Pair / Block)* _ "}" {
+  return makeNode('block', name, location(), [makeIdentifierNode(name, location()), ...params, ...items]);
+}
+
 BlockParameter = _ param:StringLiteral {
   return makeNode('parameter', param.value, location(), [param]);
 }
@@ -83,6 +87,7 @@ BlockIdentifier
 RootAssignment = _ name:Identifier _ "=" _ value:RootValue {
   return makeNode('assignment', name, location(), [makeIdentifierNode(name, location()), value]);
 }
+
 
 AssignmentIdentifier
   = name:Identifier {
@@ -106,24 +111,9 @@ RootObject = "{" _ pairs:Pair* _ "}" {
   return makeNode('object', null, location(), pairs); 
 }
 
-BlockInRootAssignment = name:Identifier params:BlockParameter* _ "{" _ items:(Pair / Block)* _ "}" {
-  return makeNode('block', name, location(), [makeIdentifierNode(name, location()), ...params, ...items]);
-}
-
 Value = val:(StringLiteral / Number / Boolean / Array / Object / FunctionCall / Expression / Reference / HereDoc) _ {
   return val;
 }
-
-FunctionCall = name:Identifier _ "(" _ first:FunctionArg? rest:(_ "," _ FunctionArg)* _ ")" {
-  const args = first ? [first].concat(rest.map(r => r[3])) : [];
-  return makeNode('function_call', text(), location(), [makeIdentifierNode(name, location()), ...args]);
-}
-
-FunctionArg = arg:(StringLiteral / Number / Boolean / Array / Object / FunctionCall / Reference) {
-  return arg;
-}
-
-Identifier = first:[a-zA-Z_] rest:[a-zA-Z0-9_\-.]* { return first + rest.join(''); }
 
 HereDoc
   = "<<" _ identifier:HereDocIdentifier _ "\n"
@@ -154,6 +144,7 @@ StringLiteral = '"' chars:DoubleStringChar* '"' { return makeNode('string_lit', 
 
 DoubleStringChar = [^"\\${] / "${" expr:(!("}") .)* "}" { return "${" + expr.map(e => e[1]).join('') + "}"; } / EscapeSequence
 SingleStringChar = [^'\\${] / "${" expr:(!("}") .)* "}" { return "${" + expr.map(e => e[1]).join('') + "}"; } / EscapeSequence
+
 EscapeSequence = "\\" . { return text(); }
 
 Number = minus:"-"? int:Integer frac:Fraction? exp:Exponent? {
@@ -178,9 +169,21 @@ Expression = "${" expr:(!("}") .)* "}" {
 ExpressionChar
   = [^}]
 
+FunctionCall = name:Identifier _ "(" _ first:FunctionArg? rest:(_ "," _ FunctionArg)* _ ")" {
+  const args = first ? [first].concat(rest.map(r => r[3])) : [];
+  return makeNode('function_call', text(), location(), [makeIdentifierNode(name, location()), ...args]);
+}
+
+FunctionArg = arg:(StringLiteral / Number / Boolean / Array / Object / FunctionCall / Reference) {
+  return arg;
+}
+
+Identifier = first:[a-zA-Z_] rest:[a-zA-Z0-9_\-.]* { return first + rest.join(''); }
+
 IdentifierChar
   = [a-zA-Z0-9_\-.]
 
+_
 _ = (Whitespace / Comment)*
 Whitespace = [ \t\n\r]
 Comment = SingleLineComment / MultiLineComment
