@@ -36,113 +36,83 @@ export class ParsedDocument {
     this.parse(content);
   }
 
-  private convertAstToTokens(ast: any, parent: Token | null = null): Token[] {
-    const tokens: Token[] = [];
-    
-    if (!ast || typeof ast !== 'object') {
-      return tokens;
-    }
+  private createToken(node: any): Token | null {
+    if (!node || !node.location) return null;
 
-    // Handle root node
-    if (ast.type === 'root' && Array.isArray(ast.value)) {
-      ast.value.forEach(statement => {
-        if (Array.isArray(statement) && statement[1]) {
-          const blockTokens = this.processBlock(statement[1], parent);
-          tokens.push(...blockTokens);
-        }
-      });
-      return tokens;
-    }
-
-    // Handle individual blocks and values
-    if ('key' in ast && 'value' in ast) {
-      const blockTokens = this.processBlock(ast, parent);
-      tokens.push(...blockTokens);
-    }
-
-    return tokens;
+    return new Token(
+      node.id,
+      node.type as any,
+      node.value,
+      node.location
+    );
   }
 
-  private processBlock(block: any, parent: Token | null): Token[] {
-    const tokens: Token[] = [];
-    const location = block.location;
-
-    // Create block token
-    const blockToken = new Token(
-      'block',
-      block.key,
-      location.start.line - 1,
-      location.start.column - 1,
-      location.end.line - 1,
-      location.end.column - 1
-    );
-
-    if (parent) {
-      blockToken.parent = parent;
-      parent.children.push(blockToken);
+  private convertAstToTokens(ast: any): Token[] {
+    if (!ast || typeof ast !== 'object') {
+      return [];
     }
 
-    // Process block value
-    if (block.value) {
-      if (typeof block.value === 'object') {
-        // Handle nested blocks and attributes
-        Object.entries(block.value).forEach(([key, value]: [string, any]) => {
-          // Create attribute token
-          const attrToken = new Token(
-            'identifier',
-            key,
-            value.location?.start.line - 1 || 0,
-            value.location?.start.column - 1 || 0,
-            value.location?.end.line - 1 || 0,
-            value.location?.end.column - 1 || 0
-          );
-          attrToken.parent = blockToken;
-          blockToken.children.push(attrToken);
+    const rootToken = this.createToken(ast);
+    if (!rootToken) return [];
 
-          // Handle the value based on its type
-          if (value.type) {
-            const valueToken = new Token(
-              value.type,
-              value.value,
-              value.location?.start.line - 1 || 0,
-              value.location?.start.column - 1 || 0,
-              value.location?.end.line - 1 || 0,
-              value.location?.end.column - 1 || 0
-            );
-            valueToken.parent = attrToken;
-            attrToken.children.push(valueToken);
-          } else if (typeof value === 'object') {
-            // Recursively process nested blocks
-            const nestedTokens = this.convertAstToTokens(value, attrToken);
-            tokens.push(...nestedTokens);
-          }
-        });
-      } else {
-        // Handle primitive values
-        const valueToken = new Token(
-          typeof block.value === 'string' ? 'string_lit' : 
-          typeof block.value === 'number' ? 'number_lit' : 
-          typeof block.value === 'boolean' ? 'boolean_lit' : 
-          'unknown',
-          String(block.value),
-          location.start.line - 1,
-          location.start.column - 1,
-          location.end.line - 1,
-          location.end.column - 1
-        );
-        valueToken.parent = blockToken;
-        blockToken.children.push(valueToken);
+    // Special handling for root node - process its value array
+    if (ast.type === 'root' && Array.isArray(ast.value)) {
+      for (const childNode of ast.value) {
+        const childToken = this.processNode(childNode);
+        if (childToken) {
+          childToken.parent = rootToken;
+          rootToken.children.push(childToken);
+        }
       }
     }
 
-    tokens.push(blockToken);
-    return tokens;
+    return this.flattenTokens(rootToken);
+  }
+
+  private processNode(node: any): Token | null {
+    const token = this.createToken(node);
+    if (!token) return null;
+
+    if (Array.isArray(node.children)) {
+      for (const childNode of node.children) {
+        const childToken = this.processNode(childNode);
+        if (childToken) {
+          childToken.parent = token;
+          token.children.push(childToken);
+        }
+      }
+    }
+
+    return token;
+  }
+
+  private flattenTokens(rootToken: Token | null): Token[] {
+    if (!rootToken) return [];
+    
+    const result: Token[] = [];
+    const seen = new Set<number>();
+    
+    const visit = (token: Token) => {
+      if (!seen.has(token.id)) {
+        seen.add(token.id);
+        result.push(token);
+        for (const child of token.children) {
+          visit(child);
+        }
+      }
+    };
+    
+    visit(rootToken);
+    return result;
   }
 
   private parse(code: string): IParseResult {
     try {
+		
       this.ast = tg_parse(code, { grammarSource: this.uri });
+	  console.log(this.ast);
       this.tokens = this.convertAstToTokens(this.ast);
+	  console.log(this.removeCircularReferences(this.tokens));
       this.diagnostics = this.diagnosticsProvider.getDiagnostics(this.tokens);
       
       return {
@@ -167,6 +137,27 @@ export class ParsedDocument {
         tokens: []
       };
     }
+  }
+  
+
+  private processChildren(node: any, parentToken: Token) {
+    if (!node.children || !Array.isArray(node.children)) {
+      return;
+    }
+
+    for (const child of node.children) {
+      const childToken = this.createToken(child);
+      if (childToken) {
+        childToken.parent = parentToken;
+        parentToken.children.push(childToken);
+        this.processChildren(child, childToken);
+      }
+    }
+  }
+
+
+  private removeCircularReferences<T>(data: T[]): string {
+	return JSON.stringify(data, (key, value) => (key === "parent" ? null : value), 2);
   }
 
   public getUri(): string {
@@ -228,18 +219,18 @@ export class ParsedDocument {
   }
 
   private isPositionInRange(position: Position, token: Token): boolean {
-    if (position.line < token.startPosition.line || 
-        position.line > token.endPosition.line) {
+    const startPos = token.startPosition;
+    const endPos = token.endPosition;
+
+    if (position.line < startPos.line || position.line > endPos.line) {
       return false;
     }
 
-    if (position.line === token.startPosition.line && 
-        position.character < token.startPosition.character) {
+    if (position.line === startPos.line && position.character < startPos.character) {
       return false;
     }
 
-    if (position.line === token.endPosition.line && 
-        position.character > token.endPosition.character) {
+    if (position.line === endPos.line && position.character > endPos.character) {
       return false;
     }
 
@@ -247,4 +238,4 @@ export class ParsedDocument {
   }
 }
 
-export { Token };
+export {Token};

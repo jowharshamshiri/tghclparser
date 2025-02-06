@@ -7,13 +7,14 @@ export class HoverProvider {
 
   getHoverInfo(token: Token): HoverResult | null {
     let contents: string[] = [];
+    const value = token.getDisplayText();
 
     switch (token.type) {
       case 'block':
-        const blockTemplate = this.schema.getBlockTemplate(token.text);
+        const blockTemplate = this.schema.getBlockTemplate(value);
         if (blockTemplate) {
           contents = [
-            `# ${token.text} Block`,
+            `# ${value} Block`,
             blockTemplate.description || '',
             '## Attributes',
             ...(blockTemplate.attributes || []).map(attr => 
@@ -24,10 +25,13 @@ export class HoverProvider {
         break;
 
       case 'function_call':
-        const funcDef = this.schema.getFunctionDefinition(token.text);
+        // For function calls, we need to get the actual function name from the child identifier
+        const functionName = token.children.find(child => 
+          child.type === 'attribute_identifier')?.getDisplayText() || value;
+        const funcDef = this.schema.getFunctionDefinition(functionName);
         if (funcDef) {
           contents = [
-            `# ${token.text}()`,
+            `# ${functionName}()`,
             funcDef.description,
             '## Parameters',
             ...funcDef.parameters.map(param =>
@@ -40,12 +44,33 @@ export class HoverProvider {
         break;
 
       case 'identifier':
+      case 'attribute_identifier':
         if (token.parent?.type === 'block') {
-          const parentBlock = this.schema.getBlockTemplate(token.parent.text);
-          const attr = parentBlock?.attributes?.find(a => a.name === token.text);
+          const parentBlockValue = token.parent.getDisplayText();
+          const parentBlock = this.schema.getBlockTemplate(parentBlockValue);
+          const attr = parentBlock?.attributes?.find(a => a.name === value);
           if (attr) {
             contents = [
-              `# ${token.text}`,
+              `# ${value}`,
+              attr.description,
+              `**Required**: ${attr.required}`,
+              `**Type**: ${attr.value.type}`
+            ];
+          }
+        }
+        break;
+
+      case 'attribute':
+        // For attributes, look at the identifier child
+        const attrName = token.children.find(child => 
+          child.type === 'attribute_identifier')?.getDisplayText();
+        if (token.parent?.type === 'block' && attrName) {
+          const parentBlockValue = token.parent.getDisplayText();
+          const parentBlock = this.schema.getBlockTemplate(parentBlockValue);
+          const attr = parentBlock?.attributes?.find(a => a.name === attrName);
+          if (attr) {
+            contents = [
+              `# ${attrName}`,
               attr.description,
               `**Required**: ${attr.required}`,
               `**Type**: ${attr.value.type}`

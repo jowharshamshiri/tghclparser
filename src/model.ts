@@ -6,7 +6,95 @@ export class AnError extends Error {
 		this.name = "TGLS Error";
 	}
 }
+export type TokenType =
+	| 'conditional'
+	| 'bare_token'
+	| 'block'
+	| 'identifier'
+	| 'string_lit'
+	| 'block_comment'
+	| 'block_parameter'
+	| 'inline_comment'
+	| 'heredoc'
+	| 'heredoc_content'
+	| 'interpolation'
+	| 'function_call'
+	| 'block_assign'
+	| 'block_with_param'
+	| 'integer_lit'
+	| 'float_lit'
+	| 'float_lit_with_f'
+	| 'null_lit'
+	| 'boolean_lit'
+	| 'whitespace'
+	| 'property_access'
+	| 'array_lit'
+	| 'object_lit'
+	| 'unknown'
+	| 'number_lit'
+	| 'assignment'
+	| 'attribute'
+	| 'root'
+	| 'attribute_identifier';
 
+export interface Location {
+	start: {
+		offset: number;
+		line: number;
+		column: number;
+	};
+	end: {
+		offset: number;
+		line: number;
+		column: number;
+	};
+	source?: string;
+}
+
+export class Token {
+	readonly id: number;
+	type: TokenType;
+	value: string | number | boolean | null;
+	location: Location;
+	children: Token[];
+	parent: Token | null;
+	decorators?: TokenDecorator[];
+
+	constructor(
+		id: number,
+		type: TokenType,
+		value: string | number | boolean | null,
+		location: Location
+	) {
+		this.id = id;
+		this.type = type;
+		this.value = value;
+		this.location = location;
+		this.children = [];
+		this.parent = null;
+		this.decorators = [];
+	}
+
+	get startPosition(): Position {
+		return {
+			line: this.location.start.line - 1,
+			character: this.location.start.column - 1
+		};
+	}
+
+	get endPosition(): Position {
+		return {
+			line: this.location.end.line - 1,
+			character: this.location.end.column - 1
+		};
+	}
+
+	// Helper method to get displayable text for the token
+	getDisplayText(): string {
+		if (this.value === null) return '';
+		return String(this.value);
+	}
+}
 export enum PositionContext {
 	Block,
 	Function
@@ -34,63 +122,6 @@ export interface BlockDelimiter {
 }
 
 export type ValueType = PrimitiveValueType | ComplexValueType;
-
-export type TokenType =
-	| 'conditional'
-	| 'bare_token'
-	| 'block'
-	| 'identifier'
-	| 'string_lit'
-	| 'block_comment'
-	| 'block_parameter'
-	| 'inline_comment'
-	| 'heredoc'
-	| 'heredoc_content'
-	| 'interpolation'
-	| 'function_call'
-	| 'block_assign'
-	| 'block_with_param'
-	| 'integer_lit'
-	| 'float_lit'
-	| 'float_lit_with_f'
-	| 'null_lit'
-	| 'boolean_lit'
-	| 'whitespace'
-	| 'property_access'
-	| 'array_lit'
-	| 'object_lit'
-	| 'unknown'
-	| 'number_lit';
-
-export class Token {
-    type: TokenType;
-    text: string;
-    startPosition: Position;
-    endPosition: Position;
-    depth: number;
-    children: Token[];
-    parent: Token | null;
-    decorators?: TokenDecorator[];
-
-	constructor(
-        type: TokenType, 
-        text: string, 
-        startLine: number, 
-        startChar: number,
-        endLine: number,
-        endChar: number
-    ) {
-        this.type = type;
-        this.text = text;
-        this.startPosition = { line: startLine, character: startChar };
-        this.endPosition = { line: endLine, character: endChar };
-        this.depth = 0;
-        this.children = [];
-        this.parent = null;
-        this.decorators = [];
-    }
-}
-
 
 export interface TokenTypePatterns {
 	BLOCK: RegExp;
@@ -235,33 +266,33 @@ export interface ValueDefinition {
 
 export interface Location {
 	start: {
-	  offset: number;
-	  line: number;
-	  column: number;
+		offset: number;
+		line: number;
+		column: number;
 	};
 	end: {
-	  offset: number;
-	  line: number;
-	  column: number;
+		offset: number;
+		line: number;
+		column: number;
 	};
 	source?: string;
-  }
-  
-  export interface ASTValue {
+}
+
+export interface ASTValue {
 	key?: string;
 	value: any;
 	location?: Location;
-  }
-  
-  export interface BlockValue {
+}
+
+export interface BlockValue {
 	identifier: string;
 	blockType?: string;
 	pairs: ASTValue[];
 	location: Location;
-  }
-  
-  export interface ASTNode {
+}
+
+export interface ASTNode {
 	type: string;
 	value: string | number | boolean | BlockValue | Record<string, ASTValue>;
 	location: Location;
-  }
+}
