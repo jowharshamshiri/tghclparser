@@ -18,7 +18,11 @@ export class DiagnosticsProvider {
           this.validateFunction(token, diagnostics);
           break;
         case 'identifier':
+        case 'attribute_identifier':
           this.validateIdentifier(token, diagnostics);
+          break;
+        case 'attribute':
+          this.validateAttribute(token, diagnostics);
           break;
       }
 
@@ -31,33 +35,37 @@ export class DiagnosticsProvider {
   }
 
   private validateBlock(token: Token, seenBlocks: Set<string>, diagnostics: Diagnostic[]) {
-    const template = this.schema.getBlockTemplate(token.text);
+    const blockValue = token.getDisplayText();
+    const template = this.schema.getBlockTemplate(blockValue);
 
     if (!template) {
       diagnostics.push(this.createDiagnostic(
         token,
-        `Unknown block type: ${token.text}`,
+        `Unknown block type: ${blockValue}`,
         DiagnosticSeverity.Error
       ));
       return;
     }
 
     // Check for duplicate blocks
-    if (seenBlocks.has(token.text) && !template.arbitraryAttributes) {
+    if (seenBlocks.has(blockValue) && !template.arbitraryAttributes) {
       diagnostics.push(this.createDiagnostic(
         token,
-        `Duplicate block: ${token.text}`,
+        `Duplicate block: ${blockValue}`,
         DiagnosticSeverity.Error
       ));
     }
-    seenBlocks.add(token.text);
+    seenBlocks.add(blockValue);
 
     // Validate required attributes
     if (template.attributes) {
       const requiredAttrs = template.attributes.filter(attr => attr.required);
-      const presentAttrs = new Set(token.children
-        .filter(child => child.type === 'identifier')
-        .map(child => child.text));
+      const presentAttrs = new Set(
+        token.children
+          .filter(child => child.type === 'attribute')
+          .map(child => child.children.find(c => c.type === 'attribute_identifier')?.getDisplayText())
+          .filter(Boolean)
+      );
 
       for (const attr of requiredAttrs) {
         if (!presentAttrs.has(attr.name)) {
@@ -72,12 +80,26 @@ export class DiagnosticsProvider {
   }
 
   private validateFunction(token: Token, diagnostics: Diagnostic[]) {
-    const funcDef = this.schema.getFunctionDefinition(token.text);
+    // Get function name from child identifier
+    const funcIdentifier = token.children.find(child => 
+      child.type === 'attribute_identifier');
+    const funcName = funcIdentifier?.getDisplayText();
+    
+    if (!funcName) {
+      diagnostics.push(this.createDiagnostic(
+        token,
+        `Invalid function call structure`,
+        DiagnosticSeverity.Error
+      ));
+      return;
+    }
+
+    const funcDef = this.schema.getFunctionDefinition(funcName);
     
     if (!funcDef) {
       diagnostics.push(this.createDiagnostic(
         token,
-        `Unknown function: ${token.text}`,
+        `Unknown function: ${funcName}`,
         DiagnosticSeverity.Error
       ));
       return;
@@ -85,10 +107,12 @@ export class DiagnosticsProvider {
 
     // Validate required parameters
     const requiredParams = funcDef.parameters.filter(param => param.required);
-    if (token.children.length < requiredParams.length) {
+    // Remove the function identifier from children count when checking parameters
+    const paramCount = token.children.length - 1;
+    if (paramCount < requiredParams.length) {
       diagnostics.push(this.createDiagnostic(
         token,
-        `Function ${token.text} requires at least ${requiredParams.length} parameters`,
+        `Function ${funcName} requires at least ${requiredParams.length} parameters`,
         DiagnosticSeverity.Error
       ));
     }
@@ -96,16 +120,65 @@ export class DiagnosticsProvider {
 
   private validateIdentifier(token: Token, diagnostics: Diagnostic[]) {
     if (token.parent?.type === 'block') {
-      const blockTemplate = this.schema.getBlockTemplate(token.parent.text);
-      if (!blockTemplate?.attributes?.some(attr => attr.name === token.text) &&
+      const blockValue = token.parent.getDisplayText();
+      const identifierValue = token.getDisplayText();
+      const blockTemplate = this.schema.getBlockTemplate(blockValue);
+      
+      if (!blockTemplate?.attributes?.some(attr => attr.name === identifierValue) &&
           !blockTemplate?.arbitraryAttributes) {
         diagnostics.push(this.createDiagnostic(
           token,
-          `Unknown attribute: ${token.text} in ${token.parent.text} block`,
+          `Unknown attribute: ${identifierValue} in ${blockValue} block`,
           DiagnosticSeverity.Warning
         ));
       }
     }
+  }
+
+  private validateAttribute(token: Token, diagnostics: Diagnostic[]) {
+    const attributeIdentifier = token.children.find(child => 
+      child.type === 'attribute_identifier');
+    if (!attributeIdentifier) return;
+
+    const attributeName = attributeIdentifier.getDisplayText();
+    const blockToken = this.findParentBlock(token);
+    
+    if (blockToken) {
+      const blockTemplate = this.schema.getBlockTemplate(blockToken.getDisplayText());
+      const attribute = blockTemplate?.attributes?.find(attr => attr.name === attributeName);
+
+      if (attribute) {
+        // Validate attribute value if present
+        const valueToken = token.children.find(child => 
+          child.type !== 'attribute_identifier');
+        if (valueToken) {
+          this.validateAttributeValue(valueToken, attribute, diagnostics);
+        }
+      }
+    }
+  }
+
+  private validateAttributeValue(token: Token, attribute: any, diagnostics: Diagnostic[]) {
+    // Add specific value validation based on attribute definition
+    // This is a placeholder for attribute-specific validation
+    if (attribute.type === 'string' && token.type !== 'string_lit') {
+      diagnostics.push(this.createDiagnostic(
+        token,
+        `Expected string value for attribute ${attribute.name}`,
+        DiagnosticSeverity.Error
+      ));
+    }
+  }
+
+  private findParentBlock(token: Token): Token | null {
+    let current = token.parent;
+    while (current) {
+      if (current.type === 'block') {
+        return current;
+      }
+      current = current.parent;
+    }
+    return null;
   }
 
   private createDiagnostic(

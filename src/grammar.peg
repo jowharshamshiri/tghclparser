@@ -1,97 +1,94 @@
 {
-  function makeAstNode(type, value, location) {
+  let nextId = 1;
+  
+  function getNextId() {
+    return nextId++;
+  }
+
+  function makeNode(type, value, location, children = []) {
     return {
+      id: getNextId(),
       type,
       value,
-      location
+      location,
+      ...(children.length > 0 && { children })
     };
   }
 
-  function makeKeyValue(key, value, location) {
-    return {
-      key,
-      value,
-      location
-    };
-  }
-
-  function makeObject(pairs) {
-    const obj = {};
-    for (const pair of pairs) {
-      if (pair) {
-        obj[pair.key] = pair.value;
-      }
-    }
-    return obj;
-  }
-
-  function makeArray(items) {
-    return items.filter(item => item !== null);
+  function makeIdentifierNode(name, location) {
+    return makeNode('attribute_identifier', name, location);
   }
 }
 
 // Starting rule for Terragrunt configuration
 Start
   = _ statements:Statement* _ { 
-    return makeAstNode('root', statements, location());
+    return makeNode('root', statements, location());
   }
 
-// A statement can be either a block or an assignment
 Statement
-  = _ (Block / Assignment) _
+  = _ statement:(Block / RootAssignment) _ {
+    return statement;
+  }
 
-// Block definition (e.g., terraform {}, include {}, etc.)
 Block
-  = start:_ name:Identifier _ "{" _ 
+  = name:BlockIdentifier _ "{" _ 
     pairs:(Pair*) 
-    _ "}" _ {
-      const blockLoc = location();
-      const value = {};
-      pairs.forEach(pair => {
-        if (pair) {
-          value[pair.key] = pair.value;
-        }
-      });
-      return makeKeyValue(name, value, blockLoc);
+    _ "}" {
+      return makeNode('block', name.value, location(), [name, ...pairs].filter(Boolean));
     }
 
-// Assignment (e.g., inputs = {...})
-Assignment
-  = _ key:Identifier _ "=" _ value:Value _ {
-    return makeKeyValue(key, value, location());
+BlockIdentifier
+  = name:Identifier {
+    return makeIdentifierNode(name, location());
   }
 
-// Key-value pair inside blocks
+RootAssignment
+  = key:AssignmentIdentifier _ "=" _ value:RootValue {
+    return makeNode('assignment', key.value, location(), [key, value]);
+  }
+
+AssignmentIdentifier
+  = name:Identifier {
+    return makeIdentifierNode(name, location());
+  }
+
 Pair
-  = _ key:Identifier _ "=" _ value:Value _ {
-    return makeKeyValue(key, value, location());
+  = _ key:AttributeIdentifier _ "=" _ value:Value _ {
+    return makeNode('attribute', key.value, location(), [key, value]);
   }
 
-// Values can be strings, numbers, booleans, arrays, objects
-Value
-  = start:_ val:(StringLiteral / Number / Boolean / Array / Object / Expression) end:_ {
+AttributeIdentifier
+  = name:Identifier {
+    return makeIdentifierNode(name, location());
+  }
+
+RootValue
+  = val:(RootObject / Expression) {
     return val;
   }
 
-// Object literal
-Object
+RootObject
   = "{" _ pairs:Pair* _ "}" {
-    const obj = {};
-    pairs.forEach(pair => {
-      if (pair) {
-        obj[pair.key] = pair.value;
-      }
-    });
-    return makeAstNode('object_lit', obj, location());
+    return makeNode('object', null, location(), pairs);
   }
 
-// String literal with quotes
+Value
+  = val:(StringLiteral / Number / Boolean / Array / Object / Expression) {
+    return val;
+  }
+
+Object
+  = "{" _ pairs:Pair* _ "}" {
+    return makeNode('object', null, location(), pairs);
+  }
+
 StringLiteral
   = '"' chars:StringChar* '"' {
-    return makeAstNode('string_lit', chars.join(''), location());
+    return makeNode('string_lit', chars.join(''), location());
   }
   / "'" chars:SingleQuoteChar* "'" {
-    return makeAstNode('string_lit', chars.join(''), location());
+    return makeNode('string_lit', chars.join(''), location());
   }
 
 StringChar
@@ -102,11 +99,11 @@ SingleQuoteChar
   = [^'\\]
   / "\\" char:. { return char; }
 
-// Numbers
 Number
   = minus:"-"? int:Integer frac:Fraction? exp:Exponent? {
-    return makeAstNode('number_lit', 
-      parseFloat(minus + int + frac + exp),
+    return makeNode(
+      'number_lit', 
+      parseFloat((minus || '') + int + (frac || '') + (exp || '')),
       location()
     );
   }
@@ -121,38 +118,32 @@ Fraction
 Exponent
   = [eE] [+-]? [0-9]+
 
-// Boolean values
 Boolean
-  = "true" { return makeAstNode('boolean_lit', true, location()); }
-  / "false" { return makeAstNode('boolean_lit', false, location()); }
+  = "true" { return makeNode('boolean_lit', true, location()); }
+  / "false" { return makeNode('boolean_lit', false, location()); }
 
-// Arrays
 Array
   = "[" _ items:(Value ( _ "," _ Value)*)? _ "]" {
     const values = items 
-      ? makeArray([items[0]].concat(items[1].map(item => item[3])))
+      ? [items[0]].concat(items[1].map(item => item[3]))
       : [];
-    return makeAstNode('array_lit', values, location());
+    return makeNode('array_lit', null, location(), values);
   }
 
-// HCL/Terragrunt expressions (e.g., ${...}, get_terragrunt_dir())
 Expression
   = "${" _ chars:ExpressionChar+ _ "}" { 
-    return makeAstNode('interpolation', "${" + chars.join('') + "}", location());
+    return makeNode('interpolation', "${" + chars.join('') + "}", location());
   }
   / FunctionCall
 
 ExpressionChar
   = [^}]
 
-// Function calls
 FunctionCall
   = name:Identifier _ "(" _ args:FunctionArgs? _ ")" {
-    return makeAstNode(
-      'function_call',
-      `${name}(${args ? args.join(', ') : ''})`,
-      location()
-    );
+    const fnName = makeIdentifierNode(name, location());
+    const fnVal = `${name}(${args ? args.join(', ') : ''})`;
+    return makeNode('function_call', fnVal, location(), [fnName]);
   }
 
 FunctionArgs
@@ -160,7 +151,6 @@ FunctionArgs
     return [arg].concat(rest.map(r => r[3]));
   }
 
-// Identifiers
 Identifier
   = chars:IdentifierChar+ {
     return chars.join('');

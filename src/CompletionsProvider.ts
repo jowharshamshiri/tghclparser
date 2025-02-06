@@ -12,8 +12,11 @@ export class CompletionsProvider {
     }
 
     // Inside a block - suggest attributes
-    if (token?.type === 'block') {
-      return this.getAttributeCompletions(token.text);
+    if (token && (token.type === 'block' || this.findParentBlock(token))) {
+      const blockToken = token.type === 'block' ? token : this.findParentBlock(token);
+      if (blockToken) {
+        return this.getAttributeCompletions(blockToken.getDisplayText());
+      }
     }
 
     // After = sign - suggest functions
@@ -22,6 +25,17 @@ export class CompletionsProvider {
     }
 
     return [];
+  }
+
+  private findParentBlock(token: Token): Token | null {
+    let current = token.parent;
+    while (current) {
+      if (current.type === 'block') {
+        return current;
+      }
+      current = current.parent;
+    }
+    return null;
   }
 
   private isStartOfLine(line: string, character: number): boolean {
@@ -64,5 +78,26 @@ export class CompletionsProvider {
       insertText: this.schema.generateFunctionSnippet(func),
       insertTextFormat: 2 // Snippet
     }));
+  }
+
+  // Helper method to determine if a token is within a block's attribute context
+  private isAttributeContext(token: Token): boolean {
+    if (!token) return false;
+    
+    // If we're in an attribute or attribute_identifier
+    if (token.type === 'attribute' || token.type === 'attribute_identifier') {
+      return true;
+    }
+
+    // Check if we're in a block's body
+    let current = token;
+    while (current.parent) {
+      if (current.parent.type === 'block') {
+        return true;
+      }
+      current = current.parent;
+    }
+
+    return false;
   }
 }
