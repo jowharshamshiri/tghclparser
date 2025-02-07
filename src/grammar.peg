@@ -77,11 +77,6 @@ BlockIdentifier
     return makeNode('block_identifier', name, location());
   }
 
-// Block in root assignment
-BlockInRootAssignment = name:BlockIdentifier params:BlockParameter* _ "{" _ items:(Pair / Block)* _ "}" {
-  return makeNode('block', name.value, location(), [name, ...params, ...items]);
-}
-
 BlockParameter = _ param:StringLiteral {
   return makeNode('parameter', param.value, location(), [param]);
 }
@@ -93,11 +88,6 @@ RootAssignment = _ name:RootAssignmentIdentifier _ "=" _ value:RootValue {
 RootAssignmentIdentifier
   = name:$([a-zA-Z_][a-zA-Z0-9_\-.]*) {
     return makeNode('root_assignment_identifier', name, location());
-  }
-
-AssignmentIdentifier
-  = name:Identifier {
-    return makeIdentifierNode(name, location());
   }
 
 Pair = key:AttributeIdentifier _ "=" _ value:Value {
@@ -117,7 +107,7 @@ UnquotedAttributeIdentifier
     return makeNode('attribute_identifier', name, location(), [], { quoted: false });
   }
 
-RootValue = val:(RootObject / BlockInRootAssignment / FunctionCall / Expression) {
+RootValue = val:(RootObject / Block / FunctionCall / Expression) {
   return val;
 }
 
@@ -200,9 +190,6 @@ Expression = "${" expr:(!("}") .)* "}" {
   return makeNode('interpolation', text(), location());
 }
 
-ExpressionChar
-  = [^}]
-
 FunctionCall = name:FunctionIdentifier _ "(" _ first:FunctionArg? rest:(_ "," _ FunctionArg)* _ ")" {
   const args = first ? [first].concat(rest.map(r => r[3])) : [];
   return makeNode('function_call', text(), location(), [name, ...args]);
@@ -221,10 +208,6 @@ Identifier = first:[a-zA-Z_] rest:[a-zA-Z0-9_\-.]* {
   return first + rest.join('');
 }
 
-IdentifierChar
-  = [a-zA-Z0-9_\-.]
-
-_
 _ = (Whitespace / Comment)*
 Whitespace = [ \t\n\r]
 Comment = SingleLineComment / MultiLineComment
