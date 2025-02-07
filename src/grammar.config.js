@@ -3,7 +3,7 @@ export default {
 	output: 'terragrunt-parser.js',
 	format: 'es',
 	dts: true,
-	trace: false,
+	trace: true,
 	cache: false,
 	// Define output types for each grammar rule
 	returnTypes: {
