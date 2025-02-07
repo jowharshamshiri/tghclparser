@@ -4270,7 +4270,6 @@ function peg$parse(input, options) {
     return nextId++;
   }
 
-  // Only include non-empty children array
   function makeNode(type, value, location, children = []) {
     const node = {
       id: getNextId(),
