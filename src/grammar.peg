@@ -1,28 +1,27 @@
-
 {
-  let debugEnabled = true;
+  let debugEnabled = false;
   function debugLog(rule, text, pos, context = {}) {
     if (debugEnabled) {
-	  let preview = '';
-	  //check text is a string
-	  if (typeof text == 'string') {
-          preview = text?.substring(Math.max(0, pos - 20), pos + 20)
-        .replace(/\n/g, '\\n');
-	  }else{
-		if (typeof text == 'function') {
-			preview = text().substring(Math.max(0, pos - 20), pos + 20)
-		}else{
-			preview = ''
-			console.log('text is not a function, it is a ' + typeof text);
-		}
-	  }
+      let preview = '';
+      // Check if text is a string
+      if (typeof text == 'string') {
+        preview = text?.substring(Math.max(0, pos - 20), pos + 20)
+          .replace(/\n/g, '\\n');
+      } else {
+        if (typeof text == 'function') {
+          preview = text().substring(Math.max(0, pos - 20), pos + 20);
+        } else {
+          preview = '';
+          console.log('text is not a function, it is a ' + typeof text);
+        }
+      }
       const positionMarker = '→';
       const markerPos = Math.min(20, pos);
-      
+
       const contextInfo = Object.entries(context)
         .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
         .join(', ');
-        
+
       console.log(
         `[${rule}] at pos ${pos}\n` +
         `Context: ${contextInfo}\n` +
@@ -33,7 +32,7 @@
   }
 
   let nextId = 1;
-  
+
   function getNextId() {
     return nextId++;
   }
@@ -47,11 +46,11 @@
       location,
       ...(children.length > 0 && { children })
     };
-    
+
     if (debugEnabled) {
       console.log('Created Node:', JSON.stringify(node, null, 2));
     }
-    
+
     return node;
   }
 
@@ -62,7 +61,7 @@
 
 // Starting rule for Terragrunt configuration
 Start = _ statements:Statement* _ {
-  debugLog('Start', text, location().start.offset, {statementsCount: statements.length});
+  debugLog('Start', text, location().start.offset, { statementsCount: statements.length });
   return makeNode('root', null, location(), statements);
 }
 
@@ -100,7 +99,7 @@ AssignmentIdentifier
   = name:Identifier {
     return makeIdentifierNode(name, location());
   }
-  
+
 Pair = key:AttributeIdentifier _ "=" _ value:Value {
   return makeNode('attribute', key.value, location(), [key, value]);
 }
@@ -110,20 +109,21 @@ AttributeIdentifier
 
 QuotedAttributeIdentifier
   = str:StringLiteral {
-      return makeNode('attribute_identifier', str.value, location(), [], { quoted: true });
-    }
+    return makeNode('attribute_identifier', str.value, location(), [], { quoted: true });
+  }
 
 UnquotedAttributeIdentifier
   = name:$([a-zA-Z_][a-zA-Z0-9_\-.]*) {
-      return makeNode('attribute_identifier', name, location(), [], { quoted: false });
-    }
+    return makeNode('attribute_identifier', name, location(), [], { quoted: false });
+  }
 
 RootValue = val:(RootObject / BlockInRootAssignment / FunctionCall / Expression) {
   return val;
 }
 
-RootObject = "{" _ pairs:Pair* _ "}" { 
-  return makeNode('object', null, location(), pairs); 
+RootObject = "{" _ pairs:(Pair (_ ","? _ Pair)* (_ ",")?)? _ "}" {
+  const values = pairs ? [pairs[0], ...pairs[1].map(pair => pair[3])] : [];
+  return makeNode('object', null, location(), values);
 }
 
 Value = val:(StringLiteral / Number / Boolean / Array / Object / FunctionCall / Expression / Reference / HereDoc) _ {
@@ -155,18 +155,19 @@ ReferenceIdentifier
     return makeNode('reference_identifier', name, location());
   }
 
-Object = "{" _ pairs:Pair* _ "}" { 
-  return makeNode('object', null, location(), pairs); 
+Object = "{" _ pairs:(Pair (_ ","? _ Pair)* (_ ",")?)? _ "}" {
+  const values = pairs ? [pairs[0], ...pairs[1].map(pair => pair[3])] : [];
+  return makeNode('object', null, location(), values);
 }
 
-StringLiteral = QuotedString / SingleQuotedString 
+StringLiteral = QuotedString / SingleQuotedString
 
-QuotedString = '"' chars:DoubleStringChar* '"' { 
-  return makeNode('string_lit', chars.join(''), location()); 
+QuotedString = '"' chars:DoubleStringChar* '"' {
+  return makeNode('string_lit', chars.join(''), location());
 }
 
-SingleQuotedString = "'" chars:SingleStringChar* "'" { 
-  return makeNode('string_lit', chars.join(''), location()); 
+SingleQuotedString = "'" chars:SingleStringChar* "'" {
+  return makeNode('string_lit', chars.join(''), location());
 }
 
 DoubleStringChar = [^"\\${] / EscapedChar / InterpolatedExpr
@@ -207,7 +208,7 @@ FunctionCall = name:FunctionIdentifier _ "(" _ first:FunctionArg? rest:(_ "," _ 
   return makeNode('function_call', text(), location(), [name, ...args]);
 }
 
-FunctionIdentifier 
+FunctionIdentifier
   = name:$([a-zA-Z_][a-zA-Z0-9_\-.]*) {
     return makeNode('function_identifier', name, location());
   }
@@ -216,8 +217,8 @@ FunctionArg = arg:(StringLiteral / Number / Boolean / Array / Object / FunctionC
   return arg;
 }
 
-Identifier = first:[a-zA-Z_] rest:[a-zA-Z0-9_\-.]* { 
-  return first + rest.join(''); 
+Identifier = first:[a-zA-Z_] rest:[a-zA-Z0-9_\-.]* {
+  return first + rest.join('');
 }
 
 IdentifierChar
