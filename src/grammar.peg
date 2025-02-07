@@ -1,5 +1,8 @@
 {
   let debugEnabled = false;
+  let heredocMarker = null;
+  let nextId = 1;
+
   function debugLog(rule, text, pos, context = {}) {
     if (debugEnabled) {
       let preview = '';
@@ -31,13 +34,10 @@
     }
   }
 
-  let nextId = 1;
-
   function getNextId() {
     return nextId++;
   }
 
-  // Only include non-empty children array
   function makeNode(type, value, location, children = []) {
     const node = {
       id: getNextId(),
@@ -59,24 +59,28 @@
   }
 }
 
-// Starting rule for Terragrunt configuration
 Start = _ statements:Statement* _ {
   debugLog('Start', text, location().start.offset, { statementsCount: statements.length });
   return makeNode('root', null, location(), statements);
 }
 
-Statement = statement:(Block / RootAssignment) _ { return statement; }
+Statement = statement:(RootAssignment / Block) _ { return statement; }
 
-RootAssignment = _ name:RootAssignmentIdentifier _ "=" _ value:RootValue {
+RootAssignment = _ name:RootAssignmentIdentifier _ "=" _ value:(RootValue / Boolean / StringLiteral) {
   return makeNode('assignment', name.value, location(), [name, value]);
 }
 
-RootValue = val:(Block / RootObject / TernaryExpression / ComparisonExpression / FunctionCall / Expression) {
+RootValue = val:(Block / RootObject / Array / TernaryExpression / ComparisonExpression / FunctionCall / Expression) {
   return val;
 }
 
-Block = _ name:BlockIdentifier _ params:BlockParameter* _ "{" _ items:(Pair / Block)* _ "}" {
+Block = _ name:BlockIdentifier _ params:BlockParameter* _ "{" _ items:(Pair / ParameterizedBlock / Block)* _ "}" {
   return makeNode('block', name.value, location(), [name, ...params, ...items]);
+}
+
+ParameterizedBlock = name:BlockIdentifier _ param:StringLiteral _ "{" _ items:(Pair / Block)* _ "}" {
+  const paramNode = makeNode('parameter', param.value, param.location, [param]);
+  return makeNode('block', name.value, location(), [name, paramNode, ...items]);
 }
 
 BlockIdentifier = name:$([a-zA-Z_][a-zA-Z0-9_\-.*]*) {
@@ -114,36 +118,9 @@ RootObject = "{" _ pairs:(Pair (_ ","? _ Pair)* (_ ",")?)? _ "}" {
   return makeNode('object', null, location(), values);
 }
 
-Value = val:(TernaryExpression / ComparisonExpression / StringLiteral / Number / Boolean / Array / Object / FunctionCall / Expression / Reference / HereDoc) _ {
+Value = val:(TernaryExpression / ComparisonExpression / StringLiteral / Number / Boolean / Array / Object / FunctionCall / Expression / Reference) _ {
   return val;
 }
-
-
-HereDoc
-  = "<<" _ identifier:HereDocIdentifier _ "\n"
-    content:HereDocContent
-    end:HereDocEnd {
-    debugLog('HereDoc', text, location().start.offset, { identifier, content, end });
-    return makeNode('heredoc', content, location());
-  }
-
-HereDocIdentifier
-  = chars:[A-Z]+ {
-    debugLog('HereDocIdentifier', text, location().start.offset, { chars });
-    return chars.join('');
-  }
-
-HereDocContent
-  = chars:(!HereDocEnd .)* {
-    debugLog('HereDocContent', text, location().start.offset, { chars });
-    return chars.map(c => c[1]).join('');
-  }
-
-HereDocEnd
-  = "\n" identifier:HereDocIdentifier {
-    debugLog('HereDocEnd', text, location().start.offset, { identifier });
-    return identifier;
-  }
 
 Reference = !FunctionCall head:ReferenceIdentifier tail:("." ReferenceIdentifier)* {
   return makeNode('reference', head.value + tail.map(t => "." + t[1].value).join(''), location());
@@ -159,7 +136,30 @@ Object = "{" _ pairs:(Pair (_ ","? _ Pair)* (_ ",")?)? _ "}" {
   return makeNode('object', null, location(), values);
 }
 
-StringLiteral = QuotedString / SingleQuotedString
+StringLiteral = QuotedString / SingleQuotedString / Heredoc
+
+Heredoc = "<<"? beginMarker newline content:heredocContent endMarker {
+  return makeNode('string_lit', content, location());
+}
+
+beginMarker = marker:$[A-Z][A-Z0-9]* {
+  heredocMarker = marker;
+  return marker;
+}
+
+endMarker = newline end:$[A-Z][A-Z0-9]* &{
+  const matched = heredocMarker === end;
+  if (!matched) {
+    error(`Expected heredoc end marker "${heredocMarker}", but found "${end}"`);
+  }
+  return matched;
+}
+
+heredocContent = $((!endMarker .)*) {
+  return text();
+}
+
+newline = [\r\n]+
 
 QuotedString = '"' chars:DoubleStringChar* '"' {
   return makeNode('string_lit', chars.join(''), location());
@@ -210,17 +210,34 @@ ComparisonExpression = left:(FunctionCall / StringLiteral / SimpleExpression) _ 
   return makeNode('comparison_expression', null, location(), [left, right]);
 }
 
-FunctionCall = identifier:FunctionIdentifier _ "(" _ firstArg:FunctionArg? restArgs:(_ "," _ FunctionArg)* _ ")" {
-  const args = firstArg ? [firstArg, ...restArgs.map(r => r[3])] : [];
-  return makeNode('function_call', null, location(), [identifier, ...args]);
+FunctionCall = identifier:FunctionIdentifier _ "(" _ args:FunctionArgs? _ ")" {
+  const argArray = args || [];
+  return makeNode('function_call', null, location(), [identifier, ...argArray]);
+}
+
+FunctionArgs = first:FunctionArg rest:(_ "," _ FunctionArg?)* {
+  // Filter out null/undefined args from optional trailing arguments
+  const additionalArgs = rest
+    .map(r => r[3])
+    .filter(arg => arg !== null && arg !== undefined);
+  return [first, ...additionalArgs];
+}
+
+FunctionArg = arg:(
+  StringLiteral /
+  Number /
+  Boolean /
+  Array /
+  Object /
+  FunctionCall /
+  Reference /
+  Expression
+) {
+  return arg;
 }
 
 FunctionIdentifier = identifier:$([a-zA-Z_][a-zA-Z0-9_]*) {
   return makeNode('function_identifier', identifier, location());
-}
-
-FunctionArg = arg:(StringLiteral / Number / Boolean / Array / Object / FunctionCall / Reference / Expression) {
-  return arg;
 }
 
 Identifier = first:[a-zA-Z_] rest:[a-zA-Z0-9_\-.]* {
