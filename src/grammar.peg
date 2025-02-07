@@ -68,39 +68,45 @@ Start = _ statements:Statement* _ {
 
 Statement = statement:(Block / RootAssignment) _ { return statement; }
 
-Block = _ name:Identifier _ params:BlockParameter* _ "{" _ items:(Pair / Block)* _ "}" {
-  return makeNode('block', name, location(), [makeIdentifierNode(name, location()), ...params, ...items]);
+// Block identifier with proper location
+Block = _ name:BlockIdentifier _ params:BlockParameter* _ "{" _ items:(Pair / Block)* _ "}" {
+  return makeNode('block', name.value, location(), [name, ...params, ...items]);
 }
 
-BlockInRootAssignment = name:Identifier params:BlockParameter* _ "{" _ items:(Pair / Block)* _ "}" {
-  return makeNode('block', name, location(), [makeIdentifierNode(name, location()), ...params, ...items]);
+BlockIdentifier
+  = name:$([a-zA-Z_][a-zA-Z0-9_\-.*]*) {
+    return makeIdentifierNode(name, location());
+  }
+
+// Block in root assignment
+BlockInRootAssignment = name:BlockIdentifier params:BlockParameter* _ "{" _ items:(Pair / Block)* _ "}" {
+  return makeNode('block', name.value, location(), [name, ...params, ...items]);
 }
 
 BlockParameter = _ param:StringLiteral {
   return makeNode('parameter', param.value, location(), [param]);
 }
 
-BlockIdentifier
-  = name:Identifier {
-    return makeIdentifierNode(name, location());
-  }
-
-RootAssignment = _ name:Identifier _ "=" _ value:RootValue {
-  return makeNode('assignment', name, location(), [makeIdentifierNode(name, location()), value]);
+RootAssignment = _ name:RootAssignmentIdentifier _ "=" _ value:RootValue {
+  return makeNode('assignment', name.value, location(), [name, value]);
 }
 
+RootAssignmentIdentifier
+  = name:$([a-zA-Z_][a-zA-Z0-9_\-.*]*) {
+    return makeIdentifierNode(name, location());
+  }
 
 AssignmentIdentifier
   = name:Identifier {
     return makeIdentifierNode(name, location());
   }
   
-Pair = key:Identifier _ "=" _ value:Value {
-  return makeNode('attribute', key, location(), [makeIdentifierNode(key, location()), value]);
+Pair = key:AttributeIdentifier _ "=" _ value:Value {
+  return makeNode('attribute', key.value, location(), [key, value]);
 }
 
 AttributeIdentifier
-  = name:Identifier {
+  = name:$([a-zA-Z_][a-zA-Z0-9_\-.*]*) {
     return makeIdentifierNode(name, location());
   }
 
@@ -132,9 +138,14 @@ HereDocContent
 HereDocEnd
   = identifier:HereDocIdentifier _ { return identifier; }
 
-Reference = !FunctionCall head:Identifier tail:("." Identifier)* {
-  return makeNode('reference', head + tail.map(t => "." + t[1]).join(''), location());
+Reference = !FunctionCall head:ReferenceIdentifier tail:("." ReferenceIdentifier)* {
+  return makeNode('reference', head.value + tail.map(t => "." + t[1].value).join(''), location());
 }
+
+ReferenceIdentifier
+  = name:$([a-zA-Z_][a-zA-Z0-9_\-.*]*) {
+    return makeIdentifierNode(name, location());
+  }
 
 Object = "{" _ pairs:Pair* _ "}" { 
   return makeNode('object', null, location(), pairs); 
@@ -183,16 +194,23 @@ Expression = "${" expr:(!("}") .)* "}" {
 ExpressionChar
   = [^}]
 
-FunctionCall = name:Identifier _ "(" _ first:FunctionArg? rest:(_ "," _ FunctionArg)* _ ")" {
+FunctionCall = name:FunctionIdentifier _ "(" _ first:FunctionArg? rest:(_ "," _ FunctionArg)* _ ")" {
   const args = first ? [first].concat(rest.map(r => r[3])) : [];
-  return makeNode('function_call', text(), location(), [makeIdentifierNode(name, location()), ...args]);
+  return makeNode('function_call', text(), location(), [name, ...args]);
 }
+
+FunctionIdentifier 
+  = name:$([a-zA-Z_][a-zA-Z0-9_\-.*]*) {
+    return makeIdentifierNode(name, location());
+  }
 
 FunctionArg = arg:(StringLiteral / Number / Boolean / Array / Object / FunctionCall / Reference) {
   return arg;
 }
 
-Identifier = first:[a-zA-Z_] rest:[a-zA-Z0-9_\-.]* { return first + rest.join(''); }
+Identifier = first:[a-zA-Z_] rest:[a-zA-Z0-9_\-.]* { 
+  return first + rest.join(''); 
+}
 
 IdentifierChar
   = [a-zA-Z0-9_\-.]
