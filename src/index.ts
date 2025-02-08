@@ -1,10 +1,12 @@
-import { CompletionItem, Diagnostic, Position } from 'vscode-languageserver';
-import { parse as tg_parse, SyntaxError } from './terragrunt-parser';
-import { Token, TokenType } from './model';
-import { Schema } from './Schema';
+import type { CompletionItem, Diagnostic, Position } from 'vscode-languageserver';
+
 import { CompletionsProvider } from './CompletionsProvider';
-import { HoverProvider } from './HoverProvider';
 import { DiagnosticsProvider } from './DiagnosticsProvider';
+import { HoverProvider } from './HoverProvider';
+import type { TokenType } from './model';
+import { Token } from './model';
+import { Schema } from './Schema';
+import { parse as tg_parse, SyntaxError } from './terragrunt-parser';
 
 export interface HoverResult {
 	content: {
@@ -137,7 +139,7 @@ export class ParsedDocument {
 				console.log('\nProblematic line:', errorLine);
 
 				// Create a pointer to the exact error position
-				const pointer = ' '.repeat("Problematic line:".length + error.location.start.column) + '^';
+				const pointer = `${' '.repeat("Problematic line:".length + error.location.start.column)  }^`;
 				console.log(pointer);
 
 				// Log the formatted error message
@@ -270,4 +272,5 @@ export class ParsedDocument {
 	}
 }
 
-export { Token };
+
+export {Token} from './model';
