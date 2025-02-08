@@ -1,6 +1,6 @@
 import { CompletionItem, Diagnostic, Position } from 'vscode-languageserver';
 import { parse as tg_parse, SyntaxError } from './terragrunt-parser';
-import { Token, Location, BlockValue, ASTValue, ASTNode, TokenType } from './model';
+import { Token, TokenType } from './model';
 import { Schema } from './Schema';
 import { CompletionsProvider } from './CompletionsProvider';
 import { HoverProvider } from './HoverProvider';
@@ -79,7 +79,7 @@ export class ParsedDocument {
 	}
 
 	parseNode(node: any, parent: Token | null = null): Token {
-		const token = new Token(node.id, node.type as TokenType, node.value ?? null, node.location as Location);
+		const token = new Token(node.id, node.type as TokenType, node.value ?? null, node.location);
 		token.parent = parent;
 
 		if (node.children) {

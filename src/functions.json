@@ -6,32 +6,68 @@
 			"description": "Gets the directory containing the Terragrunt configuration file.\n\n* Returns the absolute path to the directory containing the Terragrunt configuration.\n* Useful for constructing paths relative to the Terragrunt configuration file.",
 			"parameters": [],
 			"returnType": {
-				"type": "string",
-				"description": "Absolute path to the Terragrunt configuration directory"
+				"types": [
+					"string"
+				],
+				"description": "Absolute path to the Terragrunt configuration directory",
+				"validation": {
+					"pattern": "^[/\\\\].*"
+				}
 			},
-			"example": "locals {\n  config_path = \"${get_terragrunt_dir()}/config.yaml\"\n}"
+			"examples": [
+				"locals {\n  config_path = \"${get_terragrunt_dir()}/config.yaml\"\n}"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "get_terraform_commands_that_need_vars",
 			"description": "Gets the list of Terraform commands that accept input variables.\n\n* Returns a list of Terraform commands that can use input variables.\n* Useful for conditionally applying variable files.",
 			"parameters": [],
 			"returnType": {
-				"type": "array",
-				"elementType": "string",
-				"description": "List of Terraform commands that accept variables"
+				"types": [
+					"array"
+				],
+				"description": "List of Terraform commands that accept variables",
+				"validation": {
+					"allowedValues": [
+						"plan",
+						"apply",
+						"destroy",
+						"refresh",
+						"import",
+						"console"
+					]
+				}
 			},
-			"example": "terraform {\n  extra_arguments \"common_vars\" {\n    commands = get_terraform_commands_that_need_vars()\n    arguments = [\"-var-file=common.tfvars\"]\n  }\n}"
+			"examples": [
+				"terraform {\n  extra_arguments \"common_vars\" {\n    commands = get_terraform_commands_that_need_vars()\n    arguments = [\"-var-file=common.tfvars\"]\n  }\n}"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "get_terraform_commands_that_need_locking",
 			"description": "Gets the list of Terraform commands that use state locking.\n\n* Returns a list of Terraform commands that use state locking.\n* Useful for managing state lock behavior.",
 			"parameters": [],
 			"returnType": {
-				"type": "array",
-				"elementType": "string",
-				"description": "List of Terraform commands that use state locking"
+				"types": [
+					"array"
+				],
+				"description": "List of Terraform commands that use state locking",
+				"validation": {
+					"allowedValues": [
+						"plan",
+						"apply",
+						"destroy",
+						"init",
+						"refresh",
+						"import"
+					]
+				}
 			},
-			"example": "terraform {\n  extra_arguments \"disable_locking\" {\n    commands = get_terraform_commands_that_need_locking()\n    arguments = [\"-lock=false\"]\n  }\n}"
+			"examples": [
+				"terraform {\n  extra_arguments \"disable_locking\" {\n    commands = get_terraform_commands_that_need_locking()\n    arguments = [\"-lock=false\"]\n  }\n}"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "run_cmd",
@@ -39,16 +75,27 @@
 			"parameters": [
 				{
 					"name": "command",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Command to execute"
+					"description": "Command to execute",
+					"variadic": true,
+					"validation": {
+						"pattern": "^[^;&|]+$"
+					}
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Command output"
 			},
-			"example": "locals {\n  git_ref = run_cmd(\"git\", \"rev-parse\", \"--short\", \"HEAD\")\n}"
+			"examples": [
+				"locals {\n  git_ref = run_cmd(\"git\", \"rev-parse\", \"--short\", \"HEAD\")\n}"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "sops_decrypt_file",
@@ -56,16 +103,26 @@
 			"parameters": [
 				{
 					"name": "path",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Path to the encrypted file"
+					"description": "Path to the encrypted file",
+					"validation": {
+						"pattern": ".*\\.(ya?ml|json|env|ini)$"
+					}
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Decrypted file contents"
 			},
-			"example": "locals {\n  secrets = yamldecode(sops_decrypt_file(\"${get_terragrunt_dir()}/secrets.yaml\"))\n}"
+			"examples": [
+				"locals {\n  secrets = yamldecode(sops_decrypt_file(\"${get_terragrunt_dir()}/secrets.yaml\"))\n}"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "read_terragrunt_config",
@@ -73,43 +130,83 @@
 			"parameters": [
 				{
 					"name": "path",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Path to the Terragrunt configuration file"
+					"description": "Path to the Terragrunt configuration file",
+					"validation": {
+						"pattern": ".*\\.hcl$"
+					}
 				},
 				{
 					"name": "default_value",
-					"type": "any",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object",
+						"null"
+					],
 					"required": false,
 					"description": "Default value to return if the file doesn't exist"
 				}
 			],
 			"returnType": {
-				"type": "object",
+				"types": [
+					"object"
+				],
 				"description": "Parsed configuration"
 			},
-			"example": "locals {\n  common = read_terragrunt_config(find_in_parent_folders(\"common.hcl\"))\n}"
+			"examples": [
+				"locals {\n  common = read_terragrunt_config(find_in_parent_folders(\"common.hcl\"))\n}"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "get_terraform_command",
 			"description": "Gets the current Terraform command being executed.\n\n* Returns the name of the Terraform command that Terragrunt is running.\n* Useful for conditional logic based on the command being run.",
 			"parameters": [],
 			"returnType": {
-				"type": "string",
-				"description": "Current Terraform command"
+				"types": [
+					"string"
+				],
+				"description": "Current Terraform command",
+				"validation": {
+					"allowedValues": [
+						"plan",
+						"apply",
+						"destroy",
+						"init",
+						"refresh",
+						"import",
+						"output",
+						"console",
+						"fmt",
+						"validate"
+					]
+				}
 			},
-			"example": "skip = get_terraform_command() == \"destroy\""
+			"examples": [
+				"skip = get_terraform_command() == \"destroy\""
+			],
+			"deprecated": false
 		},
 		{
 			"name": "get_terraform_cli_args",
 			"description": "Gets the command line arguments passed to Terraform.\n\n* Returns the list of arguments that will be passed to Terraform.\n* Useful for inspecting or modifying Terraform command arguments.",
 			"parameters": [],
 			"returnType": {
-				"type": "array",
-				"elementType": "string",
+				"types": [
+					"array"
+				],
 				"description": "Terraform command line arguments"
 			},
-			"example": "skip = contains(get_terraform_cli_args(), \"-destroy\")"
+			"examples": [
+				"skip = contains(get_terraform_cli_args(), \"-destroy\")"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "get_env",
@@ -117,42 +214,74 @@
 			"parameters": [
 				{
 					"name": "name",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "The name of the environment variable to retrieve"
+					"description": "The name of the environment variable to retrieve",
+					"validation": {
+						"pattern": "^[A-Z][A-Z0-9_]*$"
+					}
 				},
 				{
 					"name": "default",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": false,
 					"description": "The default value to return if the environment variable is not set"
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Value of the environment variable or default value"
 			},
-			"example": "inputs = {\n  api_key = get_env(\"API_KEY\", \"default-key\")\n}"
+			"examples": [
+				"inputs = {\n  api_key = get_env(\"API_KEY\", \"default-key\")\n}"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "get_platform",
 			"description": "Gets the current operating system platform.\n\n* Returns the current operating system platform (e.g., 'windows', 'darwin', 'linux').\n* Useful for platform-specific configurations.",
 			"parameters": [],
 			"returnType": {
-				"type": "string",
-				"description": "Current operating system platform"
+				"types": [
+					"string"
+				],
+				"description": "Current operating system platform",
+				"validation": {
+					"allowedValues": [
+						"windows",
+						"darwin",
+						"linux"
+					]
+				}
 			},
-			"example": "locals {\n  is_windows = get_platform() == \"windows\"\n}"
+			"examples": [
+				"locals {\n  is_windows = get_platform() == \"windows\"\n}"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "get_repo_root",
 			"description": "Gets the root directory of the Git repository.\n\n* Returns the absolute path to the root of the current Git repository.\n* Useful for referencing files relative to the repository root.",
 			"parameters": [],
 			"returnType": {
-				"type": "string",
-				"description": "Absolute path to Git repository root"
+				"types": [
+					"string"
+				],
+				"description": "Absolute path to Git repository root",
+				"validation": {
+					"pattern": "^[/\\\\].*"
+				}
 			},
-			"example": "locals {\n  repo_root = get_repo_root()\n}"
+			"examples": [
+				"locals {\n  repo_root = get_repo_root()\n}"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "regex_replace",
@@ -160,28 +289,39 @@
 			"parameters": [
 				{
 					"name": "string",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "The input string to perform replacement on"
 				},
 				{
 					"name": "pattern",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "The regular expression pattern to match"
 				},
 				{
 					"name": "replacement",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "The string to replace matches with"
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "String with replacements applied"
 			},
-			"example": "locals {\n  cleaned_path = regex_replace(path_relative_to_include(), \"/\", \"-\")\n}"
+			"examples": [
+				"locals {\n  cleaned_path = regex_replace(path_relative_to_include(), \"/\", \"-\")\n}"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "yamldecode",
@@ -189,16 +329,28 @@
 			"parameters": [
 				{
 					"name": "yaml",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "The YAML string to decode"
 				}
 			],
 			"returnType": {
-				"type": "any",
+				"types": [
+					"string",
+					"number",
+					"boolean",
+					"array",
+					"object",
+					"null"
+				],
 				"description": "Decoded YAML value"
 			},
-			"example": "locals {\n  config = yamldecode(file(\"${get_terragrunt_dir()}/config.yaml\"))\n}"
+			"examples": [
+				"locals {\n  config = yamldecode(file(\"${get_terragrunt_dir()}/config.yaml\"))\n}"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "yamlencode",
@@ -206,16 +358,28 @@
 			"parameters": [
 				{
 					"name": "value",
-					"type": "any",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object",
+						"null"
+					],
 					"required": true,
 					"description": "The value to encode as YAML"
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "YAML-encoded string"
 			},
-			"example": "generate \"config\" {\n  contents = yamlencode(local.config)\n}"
+			"examples": [
+				"generate \"config\" {\n  contents = yamlencode(local.config)\n}"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "jsondecode",
@@ -223,16 +387,28 @@
 			"parameters": [
 				{
 					"name": "json",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "The JSON string to decode"
 				}
 			],
 			"returnType": {
-				"type": "any",
+				"types": [
+					"string",
+					"number",
+					"boolean",
+					"array",
+					"object",
+					"null"
+				],
 				"description": "Decoded JSON value"
 			},
-			"example": "locals {\n  config = jsondecode(file(\"${get_terragrunt_dir()}/config.json\"))\n}"
+			"examples": [
+				"locals {\n  config = jsondecode(file(\"${get_terragrunt_dir()}/config.json\"))\n}"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "jsonencode",
@@ -240,16 +416,28 @@
 			"parameters": [
 				{
 					"name": "value",
-					"type": "any",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object",
+						"null"
+					],
 					"required": true,
 					"description": "The value to encode as JSON"
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "JSON-encoded string"
 			},
-			"example": "generate \"config\" {\n  contents = jsonencode(local.config)\n}"
+			"examples": [
+				"generate \"config\" {\n  contents = jsonencode(local.config)\n}"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "read_tfvars_file",
@@ -257,47 +445,80 @@
 			"parameters": [
 				{
 					"name": "path",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Path to the .tfvars file"
+					"description": "Path to the .tfvars file",
+					"validation": {
+						"pattern": ".*\\.tfvars$"
+					}
 				}
 			],
 			"returnType": {
-				"type": "object",
+				"types": [
+					"object"
+				],
 				"description": "Parsed tfvars contents"
 			},
-			"example": "locals {\n  env_vars = read_tfvars_file(\"${get_terragrunt_dir()}/env.tfvars\")\n}"
+			"examples": [
+				"locals {\n  env_vars = read_tfvars_file(\"${get_terragrunt_dir()}/env.tfvars\")\n}"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "get_terraform_commands_that_need_retry",
 			"description": "Gets Terraform commands that should be retried on certain errors.\n\n* Returns a list of Terraform commands that should be retried if they fail with certain errors.\n* Useful for handling transient failures.",
 			"parameters": [],
 			"returnType": {
-				"type": "array",
-				"elementType": "string",
-				"description": "List of Terraform commands that support retry"
+				"types": [
+					"array"
+				],
+				"description": "List of Terraform commands that support retry",
+				"validation": {
+					"allowedValues": [
+						"init",
+						"plan",
+						"apply",
+						"destroy",
+						"refresh"
+					]
+				}
 			},
-			"example": "retryable_errors = [\".*Error.*\"]"
+			"examples": [
+				"retryable_errors = [\".*Error.*\"]"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "get_path_from_repo_root",
 			"description": "Gets the path relative to the repository root.\n\n* Returns the relative path from the repository root to the current configuration.\n* Useful for generating paths based on repository structure.",
 			"parameters": [],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Relative path from repository root"
 			},
-			"example": "locals {\n  module_path = get_path_from_repo_root()\n}"
+			"examples": [
+				"locals {\n  module_path = get_path_from_repo_root()\n}"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "get_path_to_repo_root",
 			"description": "Gets the path to the repository root.\n\n* Returns the relative path from the current configuration to the repository root.\n* Useful for referencing files at the repository root.",
 			"parameters": [],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Relative path to repository root"
 			},
-			"example": "locals {\n  root_path = get_path_to_repo_root()\n}"
+			"examples": [
+				"locals {\n  root_path = get_path_to_repo_root()\n}"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "basename",
@@ -305,16 +526,23 @@
 			"parameters": [
 				{
 					"name": "path",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "The path to extract the basename from"
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Last element of the path"
 			},
-			"example": "locals {\n  filename = basename(\"/path/to/file.txt\")\n}"
+			"examples": [
+				"locals {\n  filename = basename(\"/path/to/file.txt\")\n}"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "dirname",
@@ -322,16 +550,23 @@
 			"parameters": [
 				{
 					"name": "path",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "The path to extract the directory from"
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Directory containing the path"
 			},
-			"example": "locals {\n  parent_dir = dirname(\"/path/to/file.txt\")\n}"
+			"examples": [
+				"locals {\n  parent_dir = dirname(\"/path/to/file.txt\")\n}"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "merge",
@@ -339,16 +574,22 @@
 			"parameters": [
 				{
 					"name": "maps",
-					"type": "object",
+					"types": [
+						"object"
+					],
 					"required": true,
 					"description": "Two or more maps to merge",
 					"variadic": true
 				}
 			],
 			"returnType": {
-				"type": "object",
+				"types": [
+					"object"
+				],
 				"description": "Merged map"
-			}
+			},
+			"examples": [],
+			"deprecated": false
 		},
 		{
 			"name": "coalesce",
@@ -356,17 +597,33 @@
 			"parameters": [
 				{
 					"name": "values",
-					"type": "any",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object",
+						"null"
+					],
 					"required": true,
 					"description": "List of values to check",
 					"variadic": true
 				}
 			],
 			"returnType": {
-				"type": "any",
+				"types": [
+					"string",
+					"number",
+					"boolean",
+					"array",
+					"object"
+				],
 				"description": "First non-null value"
 			},
-			"example": "locals {\n  region = coalesce(get_env(\"AWS_REGION\"), local.default_region)\n}"
+			"examples": [
+				"locals {\n  region = coalesce(get_env(\"AWS_REGION\"), local.default_region)\n}"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "find_in_parent_folders",
@@ -374,22 +631,32 @@
 			"parameters": [
 				{
 					"name": "filename",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": false,
-					"description": "Name of the file or folder to find (defaults to terragrunt.hcl)"
+					"description": "Name of the file or folder to find (defaults to terragrunt.hcl)",
+					"defaultValue": "terragrunt.hcl"
 				},
 				{
 					"name": "fallback",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": false,
 					"description": "Fallback value if the file is not found"
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Path to the found file/folder or fallback value"
 			},
-			"example": "include {\n  path = find_in_parent_folders(\"common.hcl\", \"default.hcl\")\n}"
+			"examples": [
+				"include {\n  path = find_in_parent_folders(\"common.hcl\", \"default.hcl\")\n}"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "path_relative_to_include",
@@ -397,16 +664,23 @@
 			"parameters": [
 				{
 					"name": "name",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": false,
 					"description": "Name of the include block to base the relative path on (required if multiple include blocks exist)"
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Relative path from including configuration"
 			},
-			"example": "remote_state {\n  key = \"${path_relative_to_include()}/terraform.tfstate\"\n}"
+			"examples": [
+				"remote_state {\n  key = \"${path_relative_to_include()}/terraform.tfstate\"\n}"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "get_parent_terragrunt_dir",
@@ -414,90 +688,158 @@
 			"parameters": [
 				{
 					"name": "name",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": false,
 					"description": "Name of the include block to base the parent directory on (required if multiple include blocks exist)"
 				}
 			],
 			"returnType": {
-				"type": "string",
-				"description": "Absolute path to the parent Terragrunt configuration directory"
+				"types": [
+					"string"
+				],
+				"description": "Absolute path to the parent Terragrunt configuration directory",
+				"validation": {
+					"pattern": "^[/\\\\].*"
+				}
 			},
-			"example": "include {\n  path = \"${get_parent_terragrunt_dir()}/common.hcl\"\n}"
+			"examples": [
+				"include {\n  path = \"${get_parent_terragrunt_dir()}/common.hcl\"\n}"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "get_original_terragrunt_dir",
 			"description": "Returns the directory where the original Terragrunt configuration file lives. This is primarily useful when one Terragrunt config is being read from another.\n\n* Returns the absolute path to where the original terragrunt.hcl file lives.\n* Useful when one Terragrunt config is being read from another config file.",
 			"parameters": [],
 			"returnType": {
-				"type": "string",
-				"description": "Absolute path to original Terragrunt configuration directory"
-			}
+				"types": [
+					"string"
+				],
+				"description": "Absolute path to original Terragrunt configuration directory",
+				"validation": {
+					"pattern": "^[/\\\\].*"
+				}
+			},
+			"examples": [],
+			"deprecated": false
 		},
 		{
 			"name": "get_terraform_commands_that_need_input",
 			"description": "Gets the list of Terraform commands that accept the -input parameter.\n\n* Returns a list of Terraform commands that accept the -input=(true or false) parameter.\n* Useful for configuring commands that should run non-interactively.",
 			"parameters": [],
 			"returnType": {
-				"type": "array",
-				"elementType": "string",
-				"description": "List of Terraform commands that accept -input parameter"
-			}
+				"types": [
+					"array"
+				],
+				"description": "List of Terraform commands that accept -input parameter",
+				"validation": {
+					"allowedValues": [
+						"plan",
+						"apply",
+						"refresh",
+						"import",
+						"init"
+					]
+				}
+			},
+			"examples": [],
+			"deprecated": false
 		},
 		{
 			"name": "get_terraform_commands_that_need_parallelism",
 			"description": "Gets the list of Terraform commands that accept the -parallelism parameter.\n\n* Returns a list of Terraform commands that can have their parallelism modified.\n* Useful for controlling resource creation parallelism.",
 			"parameters": [],
 			"returnType": {
-				"type": "array",
-				"elementType": "string",
-				"description": "List of Terraform commands that accept -parallelism parameter"
-			}
+				"types": [
+					"array"
+				],
+				"description": "List of Terraform commands that accept -parallelism parameter",
+				"validation": {
+					"allowedValues": [
+						"plan",
+						"apply",
+						"destroy"
+					]
+				}
+			},
+			"examples": [],
+			"deprecated": false
 		},
 		{
 			"name": "get_aws_account_alias",
 			"description": "Returns the AWS account alias associated with the current credentials.\n\n* Returns the alias of the current AWS account.\n* Returns empty string if alias cannot be found.\n* Value can change during parsing of HCL code.",
 			"parameters": [],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "AWS account alias or empty string"
-			}
+			},
+			"examples": [],
+			"deprecated": false
 		},
 		{
 			"name": "get_aws_account_id",
 			"description": "Returns the AWS account ID associated with the current credentials.\n\n* Returns the ID of the current AWS account.\n* Value can change during parsing of HCL code, for example after evaluation of iam_role attribute.",
 			"parameters": [],
 			"returnType": {
-				"type": "string",
-				"description": "AWS account ID"
-			}
+				"types": [
+					"string"
+				],
+				"description": "AWS account ID",
+				"validation": {
+					"pattern": "^\\d{12}$"
+				}
+			},
+			"examples": [],
+			"deprecated": false
 		},
 		{
 			"name": "get_aws_caller_identity_arn",
 			"description": "Returns the ARN of the AWS identity associated with the current credentials.\n\n* Returns the ARN of the current AWS identity.\n* Value can change during parsing of HCL code, for example after evaluation of iam_role attribute.",
 			"parameters": [],
 			"returnType": {
-				"type": "string",
-				"description": "AWS caller identity ARN"
-			}
+				"types": [
+					"string"
+				],
+				"description": "AWS caller identity ARN",
+				"validation": {
+					"pattern": "^arn:aws:iam::\\d{12}:.+$"
+				}
+			},
+			"examples": [],
+			"deprecated": false
 		},
 		{
 			"name": "get_aws_caller_identity_user_id",
 			"description": "Returns the UserId of the AWS identity associated with the current credentials.\n\n* Returns the UserId of the current AWS identity.\n* Value can change during parsing of HCL code, for example after evaluation of iam_role attribute.",
 			"parameters": [],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "AWS caller identity UserId"
-			}
+			},
+			"examples": [],
+			"deprecated": false
 		},
 		{
 			"name": "get_working_dir",
 			"description": "Returns the absolute path where Terragrunt runs Terraform commands.\n\n* Returns the absolute path to the working directory.\n* Useful when you need to manage substitutions of vars inside a *.tfvars file located in terragrunt's tmp dir.",
 			"parameters": [],
 			"returnType": {
-				"type": "string",
-				"description": "Absolute path to working directory"
-			}
+				"types": [
+					"string"
+				],
+				"description": "Absolute path to working directory",
+				"validation": {
+					"pattern": "^[/\\\\].*"
+				}
+			},
+			"examples": [],
+			"deprecated": false
 		},
 		{
 			"name": "mark_as_read",
@@ -505,34 +847,47 @@
 			"parameters": [
 				{
 					"name": "file_path",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "Path to the file to mark as read"
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Path to the marked file"
-			}
+			},
+			"examples": [],
+			"deprecated": false
 		},
 		{
 			"name": "get_default_retryable_errors",
 			"description": "Returns the list of default retryable errors.\n\n* Returns a list of error patterns that Terragrunt will retry by default.\n* Useful for extending the default retry behavior.",
 			"parameters": [],
 			"returnType": {
-				"type": "array",
-				"elementType": "string",
+				"types": [
+					"array"
+				],
 				"description": "List of default retryable error patterns"
-			}
+			},
+			"examples": [],
+			"deprecated": false
 		},
 		{
 			"name": "get_terragrunt_source_cli_flag",
 			"description": "Returns the value passed via --terragrunt-source flag or TERRAGRUNT_SOURCE environment variable.\n\n* Returns the source override value if specified.\n* Returns empty string if neither the flag nor environment variable is set.\n* Useful for constructing hooks or flags that only apply to local development.",
 			"parameters": [],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Source override value or empty string"
-			}
+			},
+			"examples": [],
+			"deprecated": false
 		},
 		{
 			"name": "path_relative_from_include",
@@ -540,25 +895,43 @@
 			"parameters": [
 				{
 					"name": "name",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": false,
 					"description": "Name of the include block to base the relative path on (required if multiple include blocks exist)"
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Relative path from include to current configuration"
-			}
+			},
+			"examples": [],
+			"deprecated": false
 		},
 		{
 			"name": "get_terraform_commands_that_need_vars",
 			"description": "Gets the list of Terraform commands that accept -var and -var-file parameters.\n\n* Returns a list of Terraform commands that can use input variables.\n* Useful for conditionally applying variable files.",
 			"parameters": [],
 			"returnType": {
-				"type": "array",
-				"elementType": "string",
-				"description": "List of Terraform commands that accept variables"
-			}
+				"types": [
+					"array"
+				],
+				"description": "List of Terraform commands that accept variables",
+				"validation": {
+					"allowedValues": [
+						"plan",
+						"apply",
+						"destroy",
+						"refresh",
+						"console"
+					]
+				}
+			},
+			"examples": [],
+			"deprecated": false
 		},
 		{
 			"name": "abs",
@@ -566,16 +939,26 @@
 			"parameters": [
 				{
 					"name": "number",
-					"type": "number",
+					"types": [
+						"number"
+					],
 					"required": true,
 					"description": "The number to get the absolute value of"
 				}
 			],
 			"returnType": {
-				"type": "number",
-				"description": "Absolute value of the input number"
+				"types": [
+					"number"
+				],
+				"description": "Absolute value of the input number",
+				"validation": {
+					"min": 0
+				}
 			},
-			"example": "locals { absolute = abs(-42) }"
+			"examples": [
+				"locals { absolute = abs(-42) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "abspath",
@@ -583,16 +966,26 @@
 			"parameters": [
 				{
 					"name": "path",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "Relative path to convert to absolute"
 				}
 			],
 			"returnType": {
-				"type": "string",
-				"description": "Absolute path"
+				"types": [
+					"string"
+				],
+				"description": "Absolute path",
+				"validation": {
+					"pattern": "^[/\\\\].*"
+				}
 			},
-			"example": "locals { full_path = abspath(\"../config\") }"
+			"examples": [
+				"locals { full_path = abspath(\"../config\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "alltrue",
@@ -600,16 +993,31 @@
 			"parameters": [
 				{
 					"name": "list",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
-					"description": "List of boolean values to check"
+					"description": "List of boolean values to check",
+					"validation": {
+						"allowedValues": [
+							true,
+							false,
+							"true",
+							"false"
+						]
+					}
 				}
 			],
 			"returnType": {
-				"type": "boolean",
+				"types": [
+					"boolean"
+				],
 				"description": "True if all elements are true, false otherwise"
 			},
-			"example": "locals { all_enabled = alltrue([true, true, true]) }"
+			"examples": [
+				"locals { all_enabled = alltrue([true, true, true]) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "anytrue",
@@ -617,16 +1025,31 @@
 			"parameters": [
 				{
 					"name": "list",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
-					"description": "List of boolean values to check"
+					"description": "List of boolean values to check",
+					"validation": {
+						"allowedValues": [
+							true,
+							false,
+							"true",
+							"false"
+						]
+					}
 				}
 			],
 			"returnType": {
-				"type": "boolean",
+				"types": [
+					"boolean"
+				],
 				"description": "True if any element is true, false otherwise"
 			},
-			"example": "locals { any_enabled = anytrue([false, true, false]) }"
+			"examples": [
+				"locals { any_enabled = anytrue([false, true, false]) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "base64decode",
@@ -634,16 +1057,26 @@
 			"parameters": [
 				{
 					"name": "str",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Base64-encoded string to decode"
+					"description": "Base64-encoded string to decode",
+					"validation": {
+						"pattern": "^[A-Za-z0-9+/]*={0,2}$"
+					}
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Decoded string"
 			},
-			"example": "locals { decoded = base64decode(\"SGVsbG8=\") }"
+			"examples": [
+				"locals { decoded = base64decode(\"SGVsbG8=\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "base64encode",
@@ -651,16 +1084,26 @@
 			"parameters": [
 				{
 					"name": "str",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to encode in base64"
 				}
 			],
 			"returnType": {
-				"type": "string",
-				"description": "Base64-encoded string"
+				"types": [
+					"string"
+				],
+				"description": "Base64-encoded string",
+				"validation": {
+					"pattern": "^[A-Za-z0-9+/]*={0,2}$"
+				}
 			},
-			"example": "locals { encoded = base64encode(\"Hello\") }"
+			"examples": [
+				"locals { encoded = base64encode(\"Hello\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "base64gunzip",
@@ -668,16 +1111,26 @@
 			"parameters": [
 				{
 					"name": "str",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Base64-encoded gzipped string to decode"
+					"description": "Base64-encoded gzipped string to decode",
+					"validation": {
+						"pattern": "^[A-Za-z0-9+/]*={0,2}$"
+					}
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Decoded and uncompressed string"
 			},
-			"example": "locals { uncompressed = base64gunzip(var.compressed_data) }"
+			"examples": [
+				"locals { uncompressed = base64gunzip(var.compressed_data) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "base64gzip",
@@ -685,16 +1138,26 @@
 			"parameters": [
 				{
 					"name": "str",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to compress and encode"
 				}
 			],
 			"returnType": {
-				"type": "string",
-				"description": "Base64-encoded gzipped string"
+				"types": [
+					"string"
+				],
+				"description": "Base64-encoded gzipped string",
+				"validation": {
+					"pattern": "^[A-Za-z0-9+/]*={0,2}$"
+				}
 			},
-			"example": "locals { compressed = base64gzip(\"Hello World\") }"
+			"examples": [
+				"locals { compressed = base64gzip(\"Hello World\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "base64sha256",
@@ -702,16 +1165,26 @@
 			"parameters": [
 				{
 					"name": "str",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to hash"
 				}
 			],
 			"returnType": {
-				"type": "string",
-				"description": "Base64-encoded SHA256 hash"
+				"types": [
+					"string"
+				],
+				"description": "Base64-encoded SHA256 hash",
+				"validation": {
+					"pattern": "^[A-Za-z0-9+/]{43}=$"
+				}
 			},
-			"example": "locals { hash = base64sha256(\"Hello World\") }"
+			"examples": [
+				"locals { hash = base64sha256(\"Hello World\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "base64sha512",
@@ -719,16 +1192,26 @@
 			"parameters": [
 				{
 					"name": "str",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to hash"
 				}
 			],
 			"returnType": {
-				"type": "string",
-				"description": "Base64-encoded SHA512 hash"
+				"types": [
+					"string"
+				],
+				"description": "Base64-encoded SHA512 hash",
+				"validation": {
+					"pattern": "^[A-Za-z0-9+/]{86}=$"
+				}
 			},
-			"example": "locals { hash = base64sha512(\"Hello World\") }"
+			"examples": [
+				"locals { hash = base64sha512(\"Hello World\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "bcrypt",
@@ -736,22 +1219,39 @@
 			"parameters": [
 				{
 					"name": "str",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to hash"
 				},
 				{
 					"name": "cost",
-					"type": "number",
+					"types": [
+						"number"
+					],
 					"required": false,
-					"description": "Cost parameter for bcrypt (default: 10)"
+					"description": "Cost parameter for bcrypt (default: 10)",
+					"defaultValue": 10,
+					"validation": {
+						"min": 4,
+						"max": 31
+					}
 				}
 			],
 			"returnType": {
-				"type": "string",
-				"description": "Bcrypt hash of the input string"
+				"types": [
+					"string"
+				],
+				"description": "Bcrypt hash of the input string",
+				"validation": {
+					"pattern": "^\\$2[ayb]\\$[0-9]{2}\\$[A-Za-z0-9./]{53}$"
+				}
 			},
-			"example": "locals { password_hash = bcrypt(\"mypassword\", 12) }"
+			"examples": [
+				"locals { password_hash = bcrypt(\"mypassword\", 12) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "can",
@@ -759,16 +1259,28 @@
 			"parameters": [
 				{
 					"name": "expression",
-					"type": "any",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object",
+						"null"
+					],
 					"required": true,
 					"description": "Expression to test"
 				}
 			],
 			"returnType": {
-				"type": "boolean",
+				"types": [
+					"boolean"
+				],
 				"description": "True if expression can be evaluated, false otherwise"
 			},
-			"example": "locals { safe = can(var.map[\"key\"]) }"
+			"examples": [
+				"locals { safe = can(var.map[\"key\"]) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "ceil",
@@ -776,16 +1288,23 @@
 			"parameters": [
 				{
 					"name": "number",
-					"type": "number",
+					"types": [
+						"number"
+					],
 					"required": true,
 					"description": "Number to round up"
 				}
 			],
 			"returnType": {
-				"type": "number",
+				"types": [
+					"number"
+				],
 				"description": "Smallest integer greater than or equal to the input"
 			},
-			"example": "locals { rounded = ceil(1.1) } # Returns 2"
+			"examples": [
+				"locals { rounded = ceil(1.1) } # Returns 2"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "chomp",
@@ -793,16 +1312,23 @@
 			"parameters": [
 				{
 					"name": "str",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to chomp"
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "String with trailing newlines removed"
 			},
-			"example": "locals { cleaned = chomp(\"hello\\n\") }"
+			"examples": [
+				"locals { cleaned = chomp(\"hello\\n\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "chunklist",
@@ -810,22 +1336,34 @@
 			"parameters": [
 				{
 					"name": "list",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
 					"description": "List to split into chunks"
 				},
 				{
 					"name": "chunk_size",
-					"type": "number",
+					"types": [
+						"number"
+					],
 					"required": true,
-					"description": "Size of each chunk"
+					"description": "Size of each chunk",
+					"validation": {
+						"min": 1
+					}
 				}
 			],
 			"returnType": {
-				"type": "array",
+				"types": [
+					"array"
+				],
 				"description": "List of chunks"
 			},
-			"example": "locals { chunks = chunklist([1, 2, 3, 4, 5], 2) } # Returns [[1, 2], [3, 4], [5]]"
+			"examples": [
+				"locals { chunks = chunklist([1, 2, 3, 4, 5], 2) } # Returns [[1, 2], [3, 4], [5]]"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "cidrcontains",
@@ -833,22 +1371,37 @@
 			"parameters": [
 				{
 					"name": "prefix",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "CIDR range to check against"
+					"description": "CIDR range to check against",
+					"validation": {
+						"pattern": "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"
+					}
 				},
 				{
 					"name": "ip",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "IP address to check"
+					"description": "IP address to check",
+					"validation": {
+						"pattern": "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}$"
+					}
 				}
 			],
 			"returnType": {
-				"type": "boolean",
+				"types": [
+					"boolean"
+				],
 				"description": "True if IP is in CIDR range"
 			},
-			"example": "locals { in_range = cidrcontains(\"10.0.0.0/8\", \"10.0.0.1\") }"
+			"examples": [
+				"locals { in_range = cidrcontains(\"10.0.0.0/8\", \"10.0.0.1\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "cidrhost",
@@ -856,22 +1409,40 @@
 			"parameters": [
 				{
 					"name": "prefix",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "CIDR range"
+					"description": "CIDR range",
+					"validation": {
+						"pattern": "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"
+					}
 				},
 				{
 					"name": "hostnum",
-					"type": "number",
+					"types": [
+						"number"
+					],
 					"required": true,
-					"description": "Host number within the CIDR range"
+					"description": "Host number within the CIDR range",
+					"validation": {
+						"min": 0
+					}
 				}
 			],
 			"returnType": {
-				"type": "string",
-				"description": "IP address for the specified host"
+				"types": [
+					"string"
+				],
+				"description": "IP address for the specified host",
+				"validation": {
+					"pattern": "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}$"
+				}
 			},
-			"example": "locals { ip = cidrhost(\"10.0.0.0/8\", 2) }"
+			"examples": [
+				"locals { ip = cidrhost(\"10.0.0.0/8\", 2) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "cidrnetmask",
@@ -879,16 +1450,29 @@
 			"parameters": [
 				{
 					"name": "prefix",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "CIDR prefix"
+					"description": "CIDR prefix",
+					"validation": {
+						"pattern": "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"
+					}
 				}
 			],
 			"returnType": {
-				"type": "string",
-				"description": "Subnet mask address"
+				"types": [
+					"string"
+				],
+				"description": "Subnet mask address",
+				"validation": {
+					"pattern": "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}$"
+				}
 			},
-			"example": "locals { netmask = cidrnetmask(\"10.0.0.0/24\") } # Returns 255.255.255.0"
+			"examples": [
+				"locals { netmask = cidrnetmask(\"10.0.0.0/24\") } # Returns 255.255.255.0"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "cidrsubnet",
@@ -896,28 +1480,52 @@
 			"parameters": [
 				{
 					"name": "prefix",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "CIDR range"
+					"description": "CIDR range",
+					"validation": {
+						"pattern": "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"
+					}
 				},
 				{
 					"name": "newbits",
-					"type": "number",
+					"types": [
+						"number"
+					],
 					"required": true,
-					"description": "Number of additional bits for the subnet prefix"
+					"description": "Number of additional bits for the subnet prefix",
+					"validation": {
+						"min": 1,
+						"max": 32
+					}
 				},
 				{
 					"name": "netnum",
-					"type": "number",
+					"types": [
+						"number"
+					],
 					"required": true,
-					"description": "Subnet number within the prefix"
+					"description": "Subnet number within the prefix",
+					"validation": {
+						"min": 0
+					}
 				}
 			],
 			"returnType": {
-				"type": "string",
-				"description": "Subnet CIDR range"
+				"types": [
+					"string"
+				],
+				"description": "Subnet CIDR range",
+				"validation": {
+					"pattern": "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"
+				}
 			},
-			"example": "locals { subnet = cidrsubnet(\"10.0.0.0/16\", 8, 2) }"
+			"examples": [
+				"locals { subnet = cidrsubnet(\"10.0.0.0/16\", 8, 2) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "cidrsubnets",
@@ -925,23 +1533,39 @@
 			"parameters": [
 				{
 					"name": "prefix",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "CIDR range"
+					"description": "CIDR range",
+					"validation": {
+						"pattern": "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"
+					}
 				},
 				{
 					"name": "newbits",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
 					"description": "List of numbers of new bits for each subnet",
-					"variadic": true
+					"variadic": true,
+					"validation": {
+						"min": 1,
+						"max": 32
+					}
 				}
 			],
 			"returnType": {
-				"type": "array",
+				"types": [
+					"array"
+				],
 				"description": "List of subnet CIDR ranges"
 			},
-			"example": "locals { subnets = cidrsubnets(\"10.0.0.0/16\", 4, 4, 8) }"
+			"examples": [
+				"locals { subnets = cidrsubnets(\"10.0.0.0/16\", 4, 4, 8) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "compact",
@@ -949,16 +1573,23 @@
 			"parameters": [
 				{
 					"name": "list",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
 					"description": "List to compact"
 				}
 			],
 			"returnType": {
-				"type": "array",
+				"types": [
+					"array"
+				],
 				"description": "List with null and empty string elements removed"
 			},
-			"example": "locals { cleaned = compact([\"a\", \"\", \"b\", null, \"c\"]) }"
+			"examples": [
+				"locals { cleaned = compact([\"a\", \"\", \"b\", null, \"c\"]) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "concat",
@@ -966,17 +1597,24 @@
 			"parameters": [
 				{
 					"name": "lists",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
 					"description": "Lists to concatenate",
 					"variadic": true
 				}
 			],
 			"returnType": {
-				"type": "array",
+				"types": [
+					"array"
+				],
 				"description": "Combined list"
 			},
-			"example": "locals { combined = concat([1, 2], [3, 4], [5]) }"
+			"examples": [
+				"locals { combined = concat([1, 2], [3, 4], [5]) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "contains",
@@ -984,22 +1622,36 @@
 			"parameters": [
 				{
 					"name": "list",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
 					"description": "List to search"
 				},
 				{
 					"name": "value",
-					"type": "any",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object",
+						"null"
+					],
 					"required": true,
 					"description": "Value to find"
 				}
 			],
 			"returnType": {
-				"type": "boolean",
+				"types": [
+					"boolean"
+				],
 				"description": "True if value is in list"
 			},
-			"example": "locals { has_element = contains([\"a\", \"b\", \"c\"], \"b\") }"
+			"examples": [
+				"locals { has_element = contains([\"a\", \"b\", \"c\"], \"b\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "csvdecode",
@@ -1007,16 +1659,23 @@
 			"parameters": [
 				{
 					"name": "str",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "CSV-formatted string to decode"
 				}
 			],
 			"returnType": {
-				"type": "array",
+				"types": [
+					"array"
+				],
 				"description": "List of maps representing CSV rows"
 			},
-			"example": "locals { data = csvdecode(file(\"data.csv\")) }"
+			"examples": [
+				"locals { data = csvdecode(file(\"data.csv\")) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "distinct",
@@ -1024,16 +1683,23 @@
 			"parameters": [
 				{
 					"name": "list",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
 					"description": "List to deduplicate"
 				}
 			],
 			"returnType": {
-				"type": "array",
+				"types": [
+					"array"
+				],
 				"description": "List with duplicates removed"
 			},
-			"example": "locals { unique = distinct([\"a\", \"b\", \"a\", \"c\", \"b\"]) }"
+			"examples": [
+				"locals { unique = distinct([\"a\", \"b\", \"a\", \"c\", \"b\"]) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "element",
@@ -1041,22 +1707,39 @@
 			"parameters": [
 				{
 					"name": "list",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
 					"description": "List to get element from"
 				},
 				{
 					"name": "index",
-					"type": "number",
+					"types": [
+						"number"
+					],
 					"required": true,
-					"description": "Index to retrieve"
+					"description": "Index to retrieve",
+					"validation": {
+						"min": 0
+					}
 				}
 			],
 			"returnType": {
-				"type": "any",
+				"types": [
+					"string",
+					"number",
+					"boolean",
+					"array",
+					"object",
+					"null"
+				],
 				"description": "Element at the specified index"
 			},
-			"example": "locals { item = element([\"a\", \"b\", \"c\"], 1) }"
+			"examples": [
+				"locals { item = element([\"a\", \"b\", \"c\"], 1) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "endswith",
@@ -1064,22 +1747,31 @@
 			"parameters": [
 				{
 					"name": "str",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to check"
 				},
 				{
 					"name": "suffix",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "Suffix to look for"
 				}
 			],
 			"returnType": {
-				"type": "boolean",
+				"types": [
+					"boolean"
+				],
 				"description": "True if string ends with suffix"
 			},
-			"example": "locals { has_suffix = endswith(\"hello.txt\", \".txt\") }"
+			"examples": [
+				"locals { has_suffix = endswith(\"hello.txt\", \".txt\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "file",
@@ -1087,16 +1779,26 @@
 			"parameters": [
 				{
 					"name": "path",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Path to the file to read"
+					"description": "Path to the file to read",
+					"validation": {
+						"pattern": "^[^<>:;,?\"*|]+$"
+					}
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Contents of the file"
 			},
-			"example": "locals { content = file(\"${path.module}/file.txt\") }"
+			"examples": [
+				"locals { content = file(\"${path.module}/file.txt\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "filebase64",
@@ -1104,16 +1806,29 @@
 			"parameters": [
 				{
 					"name": "path",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Path to the file to read"
+					"description": "Path to the file to read",
+					"validation": {
+						"pattern": "^[^<>:;,?\"*|]+$"
+					}
 				}
 			],
 			"returnType": {
-				"type": "string",
-				"description": "Base64-encoded contents of the file"
+				"types": [
+					"string"
+				],
+				"description": "Base64-encoded contents of the file",
+				"validation": {
+					"pattern": "^[A-Za-z0-9+/]*={0,2}$"
+				}
 			},
-			"example": "locals { encoded = filebase64(\"${path.module}/cert.pem\") }"
+			"examples": [
+				"locals { encoded = filebase64(\"${path.module}/cert.pem\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "filebase64sha256",
@@ -1121,16 +1836,29 @@
 			"parameters": [
 				{
 					"name": "path",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Path to the file to hash"
+					"description": "Path to the file to hash",
+					"validation": {
+						"pattern": "^[^<>:;,?\"*|]+$"
+					}
 				}
 			],
 			"returnType": {
-				"type": "string",
-				"description": "Base64-encoded SHA256 hash of the file"
+				"types": [
+					"string"
+				],
+				"description": "Base64-encoded SHA256 hash of the file",
+				"validation": {
+					"pattern": "^[A-Za-z0-9+/]{43}=$"
+				}
 			},
-			"example": "locals { hash = filebase64sha256(\"${path.module}/data.bin\") }"
+			"examples": [
+				"locals { hash = filebase64sha256(\"${path.module}/data.bin\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "filebase64sha512",
@@ -1138,16 +1866,29 @@
 			"parameters": [
 				{
 					"name": "path",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Path to the file to hash"
+					"description": "Path to the file to hash",
+					"validation": {
+						"pattern": "^[^<>:;,?\"*|]+$"
+					}
 				}
 			],
 			"returnType": {
-				"type": "string",
-				"description": "Base64-encoded SHA512 hash of the file"
+				"types": [
+					"string"
+				],
+				"description": "Base64-encoded SHA512 hash of the file",
+				"validation": {
+					"pattern": "^[A-Za-z0-9+/]{86}=$"
+				}
 			},
-			"example": "locals { hash = filebase64sha512(\"${path.module}/data.bin\") }"
+			"examples": [
+				"locals { hash = filebase64sha512(\"${path.module}/data.bin\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "fileexists",
@@ -1155,16 +1896,26 @@
 			"parameters": [
 				{
 					"name": "path",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Path to check for file existence"
+					"description": "Path to check for file existence",
+					"validation": {
+						"pattern": "^[^<>:;,?\"*|]+$"
+					}
 				}
 			],
 			"returnType": {
-				"type": "boolean",
+				"types": [
+					"boolean"
+				],
 				"description": "True if file exists"
 			},
-			"example": "locals { exists = fileexists(\"${path.module}/config.json\") }"
+			"examples": [
+				"locals { exists = fileexists(\"${path.module}/config.json\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "filemd5",
@@ -1172,16 +1923,29 @@
 			"parameters": [
 				{
 					"name": "path",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Path to the file to hash"
+					"description": "Path to the file to hash",
+					"validation": {
+						"pattern": "^[^<>:;,?\"*|]+$"
+					}
 				}
 			],
 			"returnType": {
-				"type": "string",
-				"description": "MD5 hash of the file"
+				"types": [
+					"string"
+				],
+				"description": "MD5 hash of the file",
+				"validation": {
+					"pattern": "^[a-f0-9]{32}$"
+				}
 			},
-			"example": "locals { hash = filemd5(\"${path.module}/data.txt\") }"
+			"examples": [
+				"locals { hash = filemd5(\"${path.module}/data.txt\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "fileset",
@@ -1189,22 +1953,34 @@
 			"parameters": [
 				{
 					"name": "path",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Base directory for the search"
+					"description": "Base directory for the search",
+					"validation": {
+						"pattern": "^[^<>:;,?\"*|]+$"
+					}
 				},
 				{
 					"name": "pattern",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "Glob pattern to match files"
 				}
 			],
 			"returnType": {
-				"type": "array",
+				"types": [
+					"array"
+				],
 				"description": "List of matching file paths"
 			},
-			"example": "locals { files = fileset(path.module, \"*.txt\") }"
+			"examples": [
+				"locals { files = fileset(path.module, \"*.txt\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "filesha1",
@@ -1212,16 +1988,29 @@
 			"parameters": [
 				{
 					"name": "path",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Path to the file to hash"
+					"description": "Path to the file to hash",
+					"validation": {
+						"pattern": "^[^<>:;,?\"*|]+$"
+					}
 				}
 			],
 			"returnType": {
-				"type": "string",
-				"description": "SHA1 hash of the file"
+				"types": [
+					"string"
+				],
+				"description": "SHA1 hash of the file",
+				"validation": {
+					"pattern": "^[a-f0-9]{40}$"
+				}
 			},
-			"example": "locals { hash = filesha1(\"${path.module}/data.bin\") }"
+			"examples": [
+				"locals { hash = filesha1(\"${path.module}/data.bin\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "filesha256",
@@ -1229,16 +2018,29 @@
 			"parameters": [
 				{
 					"name": "path",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Path to the file to hash"
+					"description": "Path to the file to hash",
+					"validation": {
+						"pattern": "^[^<>:;,?\"*|]+$"
+					}
 				}
 			],
 			"returnType": {
-				"type": "string",
-				"description": "SHA256 hash of the file"
+				"types": [
+					"string"
+				],
+				"description": "SHA256 hash of the file",
+				"validation": {
+					"pattern": "^[a-f0-9]{64}$"
+				}
 			},
-			"example": "locals { hash = filesha256(\"${path.module}/data.bin\") }"
+			"examples": [
+				"locals { hash = filesha256(\"${path.module}/data.bin\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "filesha512",
@@ -1246,16 +2048,29 @@
 			"parameters": [
 				{
 					"name": "path",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Path to the file to hash"
+					"description": "Path to the file to hash",
+					"validation": {
+						"pattern": "^[^<>:;,?\"*|]+$"
+					}
 				}
 			],
 			"returnType": {
-				"type": "string",
-				"description": "SHA512 hash of the file"
+				"types": [
+					"string"
+				],
+				"description": "SHA512 hash of the file",
+				"validation": {
+					"pattern": "^[a-f0-9]{128}$"
+				}
 			},
-			"example": "locals { hash = filesha512(\"${path.module}/data.bin\") }"
+			"examples": [
+				"locals { hash = filesha512(\"${path.module}/data.bin\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "flatten",
@@ -1263,16 +2078,23 @@
 			"parameters": [
 				{
 					"name": "list",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
 					"description": "Nested list to flatten"
 				}
 			],
 			"returnType": {
-				"type": "array",
+				"types": [
+					"array"
+				],
 				"description": "Flattened list with no nesting"
 			},
-			"example": "locals { flat = flatten([[1, 2], [3], [4, [5, 6]]]) }"
+			"examples": [
+				"locals { flat = flatten([[1, 2], [3], [4, [5, 6]]]) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "floor",
@@ -1280,16 +2102,23 @@
 			"parameters": [
 				{
 					"name": "number",
-					"type": "number",
+					"types": [
+						"number"
+					],
 					"required": true,
 					"description": "Number to round down"
 				}
 			],
 			"returnType": {
-				"type": "number",
+				"types": [
+					"number"
+				],
 				"description": "Largest integer less than or equal to the input"
 			},
-			"example": "locals { rounded = floor(1.7) }"
+			"examples": [
+				"locals { rounded = floor(1.7) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "format",
@@ -1297,23 +2126,40 @@
 			"parameters": [
 				{
 					"name": "format",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Format string"
+					"description": "Format string",
+					"validation": {
+						"pattern": ".*%[sdfgGbBoOxXeEv].*"
+					}
 				},
 				{
 					"name": "args",
-					"type": "any",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object",
+						"null"
+					],
 					"required": true,
 					"variadic": true,
 					"description": "Values to format"
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Formatted string"
 			},
-			"example": "locals { message = format(\"Hello, %s!\", var.name) }"
+			"examples": [
+				"locals { message = format(\"Hello, %s!\", var.name) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "formatdate",
@@ -1321,22 +2167,37 @@
 			"parameters": [
 				{
 					"name": "format",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Format specification"
+					"description": "Format specification",
+					"validation": {
+						"pattern": "%[YymdHMSjUwWcxX]"
+					}
 				},
 				{
 					"name": "timestamp",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Timestamp to format"
+					"description": "Timestamp to format",
+					"validation": {
+						"pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+					}
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Formatted timestamp"
 			},
-			"example": "locals { date = formatdate(\"YYYY-MM-DD\", \"2024-02-04T12:34:56Z\") }"
+			"examples": [
+				"locals { date = formatdate(\"YYYY-MM-DD\", \"2024-02-04T12:34:56Z\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "formatlist",
@@ -1344,23 +2205,35 @@
 			"parameters": [
 				{
 					"name": "format",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Format string"
+					"description": "Format string",
+					"validation": {
+						"pattern": ".*%[sdfgGbBoOxXeEv].*"
+					}
 				},
 				{
 					"name": "args",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
 					"variadic": true,
 					"description": "Lists of values to format"
 				}
 			],
 			"returnType": {
-				"type": "array",
+				"types": [
+					"array"
+				],
 				"description": "List of formatted strings"
 			},
-			"example": "locals { names = formatlist(\"user-%s\", [\"a\", \"b\", \"c\"]) }"
+			"examples": [
+				"locals { names = formatlist(\"user-%s\", [\"a\", \"b\", \"c\"]) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "indent",
@@ -1368,22 +2241,35 @@
 			"parameters": [
 				{
 					"name": "spaces",
-					"type": "number",
+					"types": [
+						"number"
+					],
 					"required": true,
-					"description": "Number of spaces to indent"
+					"description": "Number of spaces to indent",
+					"validation": {
+						"min": 0,
+						"max": 100
+					}
 				},
 				{
 					"name": "str",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to indent"
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Indented string"
 			},
-			"example": "locals { indented = indent(2, \"first\\nsecond\\nthird\") }"
+			"examples": [
+				"locals { indented = indent(2, \"first\\nsecond\\nthird\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "index",
@@ -1391,22 +2277,39 @@
 			"parameters": [
 				{
 					"name": "list",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
 					"description": "List to search"
 				},
 				{
 					"name": "value",
-					"type": "any",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object",
+						"null"
+					],
 					"required": true,
 					"description": "Value to find"
 				}
 			],
 			"returnType": {
-				"type": "number",
-				"description": "Index of the value in the list"
+				"types": [
+					"number"
+				],
+				"description": "Index of the value in the list",
+				"validation": {
+					"min": 0
+				}
 			},
-			"example": "locals { pos = index([\"a\", \"b\", \"c\"], \"b\") }"
+			"examples": [
+				"locals { pos = index([\"a\", \"b\", \"c\"], \"b\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "log",
@@ -1414,22 +2317,37 @@
 			"parameters": [
 				{
 					"name": "number",
-					"type": "number",
+					"types": [
+						"number"
+					],
 					"required": true,
-					"description": "Number to calculate logarithm of"
+					"description": "Number to calculate logarithm of",
+					"validation": {
+						"min": 0.000001
+					}
 				},
 				{
 					"name": "base",
-					"type": "number",
+					"types": [
+						"number"
+					],
 					"required": true,
-					"description": "Base of the logarithm"
+					"description": "Base of the logarithm",
+					"validation": {
+						"min": 0.000001
+					}
 				}
 			],
 			"returnType": {
-				"type": "number",
+				"types": [
+					"number"
+				],
 				"description": "Logarithm of the number"
 			},
-			"example": "locals { result = log(16, 2) } # Returns 4"
+			"examples": [
+				"locals { result = log(16, 2) } # Returns 4"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "lookup",
@@ -1437,28 +2355,49 @@
 			"parameters": [
 				{
 					"name": "map",
-					"type": "object",
+					"types": [
+						"object"
+					],
 					"required": true,
 					"description": "Map to look up value in"
 				},
 				{
 					"name": "key",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "Key to look up"
 				},
 				{
 					"name": "default",
-					"type": "any",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object",
+						"null"
+					],
 					"required": false,
 					"description": "Default value if key not found"
 				}
 			],
 			"returnType": {
-				"type": "any",
+				"types": [
+					"string",
+					"number",
+					"boolean",
+					"array",
+					"object",
+					"null"
+				],
 				"description": "Value from map or default"
 			},
-			"example": "locals { value = lookup(var.map, \"key\", \"default\") }"
+			"examples": [
+				"locals { value = lookup(var.map, \"key\", \"default\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "lower",
@@ -1466,16 +2405,23 @@
 			"parameters": [
 				{
 					"name": "str",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to convert to lowercase"
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Lowercase string"
 			},
-			"example": "locals { result = lower(\"HELLO\") }"
+			"examples": [
+				"locals { result = lower(\"HELLO\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "matchkeys",
@@ -1483,28 +2429,39 @@
 			"parameters": [
 				{
 					"name": "values",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
 					"description": "List of values to select from"
 				},
 				{
 					"name": "keys",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
 					"description": "List to match against"
 				},
 				{
 					"name": "searchset",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
 					"description": "Values to search for"
 				}
 			],
 			"returnType": {
-				"type": "array",
+				"types": [
+					"array"
+				],
 				"description": "List of matched values"
 			},
-			"example": "locals { matched = matchkeys([\"a\", \"b\", \"c\"], [1, 2, 1], [1]) }"
+			"examples": [
+				"locals { matched = matchkeys([\"a\", \"b\", \"c\"], [1, 2, 1], [1]) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "max",
@@ -1512,17 +2469,24 @@
 			"parameters": [
 				{
 					"name": "numbers",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
 					"description": "Numbers to compare",
 					"variadic": true
 				}
 			],
 			"returnType": {
-				"type": "number",
+				"types": [
+					"number"
+				],
 				"description": "Largest number from the input"
 			},
-			"example": "locals { highest = max(5, 12, 9) }"
+			"examples": [
+				"locals { highest = max(5, 12, 9) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "min",
@@ -1530,17 +2494,24 @@
 			"parameters": [
 				{
 					"name": "numbers",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
 					"description": "Numbers to compare",
 					"variadic": true
 				}
 			],
 			"returnType": {
-				"type": "number",
+				"types": [
+					"number"
+				],
 				"description": "Smallest number from the input"
 			},
-			"example": "locals { lowest = min(5, 12, 9) }"
+			"examples": [
+				"locals { lowest = min(5, 12, 9) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "one",
@@ -1548,16 +2519,28 @@
 			"parameters": [
 				{
 					"name": "list",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
 					"description": "List of values"
 				}
 			],
 			"returnType": {
-				"type": "any",
+				"types": [
+					"string",
+					"number",
+					"boolean",
+					"array",
+					"object",
+					"null"
+				],
 				"description": "First non-null value or last value"
 			},
-			"example": "locals { result = one([null, \"\", \"a\", \"b\"]) }"
+			"examples": [
+				"locals { result = one([null, \"\", \"a\", \"b\"]) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "parseint",
@@ -1565,22 +2548,36 @@
 			"parameters": [
 				{
 					"name": "number",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to parse"
 				},
 				{
 					"name": "base",
-					"type": "number",
+					"types": [
+						"number"
+					],
 					"required": false,
-					"description": "Base to parse in (default 10)"
+					"description": "Base to parse in (default 10)",
+					"defaultValue": 10,
+					"validation": {
+						"min": 2,
+						"max": 62
+					}
 				}
 			],
 			"returnType": {
-				"type": "number",
+				"types": [
+					"number"
+				],
 				"description": "Parsed integer value"
 			},
-			"example": "locals { value = parseint(\"FF\", 16) }"
+			"examples": [
+				"locals { value = parseint(\"FF\", 16) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "pow",
@@ -1588,22 +2585,31 @@
 			"parameters": [
 				{
 					"name": "base",
-					"type": "number",
+					"types": [
+						"number"
+					],
 					"required": true,
 					"description": "Base number"
 				},
 				{
 					"name": "exponent",
-					"type": "number",
+					"types": [
+						"number"
+					],
 					"required": true,
 					"description": "Power to raise to"
 				}
 			],
 			"returnType": {
-				"type": "number",
+				"types": [
+					"number"
+				],
 				"description": "Result of the power operation"
 			},
-			"example": "locals { squared = pow(2, 3) }"
+			"examples": [
+				"locals { squared = pow(2, 3) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "range",
@@ -1611,28 +2617,43 @@
 			"parameters": [
 				{
 					"name": "start",
-					"type": "number",
+					"types": [
+						"number"
+					],
 					"required": true,
 					"description": "First number in range"
 				},
 				{
 					"name": "end",
-					"type": "number",
+					"types": [
+						"number"
+					],
 					"required": true,
 					"description": "Last number in range"
 				},
 				{
 					"name": "step",
-					"type": "number",
+					"types": [
+						"number"
+					],
 					"required": false,
-					"description": "Increment between numbers"
+					"description": "Increment between numbers",
+					"defaultValue": 1,
+					"validation": {
+						"min": 0.000001
+					}
 				}
 			],
 			"returnType": {
-				"type": "array",
+				"types": [
+					"array"
+				],
 				"description": "List of numbers in the range"
 			},
-			"example": "locals { numbers = range(0, 10, 2) }"
+			"examples": [
+				"locals { numbers = range(0, 10, 2) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "regex",
@@ -1640,22 +2661,34 @@
 			"parameters": [
 				{
 					"name": "pattern",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Regular expression pattern"
+					"description": "Regular expression pattern",
+					"validation": {
+						"pattern": "^[^()]*$"
+					}
 				},
 				{
 					"name": "string",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to search"
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "First matching substring"
 			},
-			"example": "locals { match = regex(\"[0-9]+\", \"abc123def\") }"
+			"examples": [
+				"locals { match = regex(\"[0-9]+\", \"abc123def\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "regexall",
@@ -1663,22 +2696,34 @@
 			"parameters": [
 				{
 					"name": "pattern",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Regular expression pattern"
+					"description": "Regular expression pattern",
+					"validation": {
+						"pattern": "^[^()]*$"
+					}
 				},
 				{
 					"name": "string",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to search"
 				}
 			],
 			"returnType": {
-				"type": "array",
+				"types": [
+					"array"
+				],
 				"description": "List of all matching substrings"
 			},
-			"example": "locals { matches = regexall(\"[0-9]+\", \"abc123def456\") }"
+			"examples": [
+				"locals { matches = regexall(\"[0-9]+\", \"abc123def456\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "replace",
@@ -1686,28 +2731,39 @@
 			"parameters": [
 				{
 					"name": "string",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to perform replacement in"
 				},
 				{
 					"name": "search",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to search for"
 				},
 				{
 					"name": "replace",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to replace with"
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "String with replacements"
 			},
-			"example": "locals { result = replace(\"Hello World\", \"World\", \"Terraform\") }"
+			"examples": [
+				"locals { result = replace(\"Hello World\", \"World\", \"Terraform\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "reverse",
@@ -1715,16 +2771,23 @@
 			"parameters": [
 				{
 					"name": "list",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
 					"description": "List to reverse"
 				}
 			],
 			"returnType": {
-				"type": "array",
+				"types": [
+					"array"
+				],
 				"description": "Reversed list"
 			},
-			"example": "locals { reversed = reverse([1, 2, 3, 4, 5]) }"
+			"examples": [
+				"locals { reversed = reverse([1, 2, 3, 4, 5]) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "rsadecrypt",
@@ -1732,22 +2795,37 @@
 			"parameters": [
 				{
 					"name": "ciphertext",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Base64-encoded encrypted message"
+					"description": "Base64-encoded encrypted message",
+					"validation": {
+						"pattern": "^[A-Za-z0-9+/]*={0,2}$"
+					}
 				},
 				{
 					"name": "privatekey",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "RSA private key in PEM format"
+					"description": "RSA private key in PEM format",
+					"validation": {
+						"pattern": "^-----BEGIN RSA PRIVATE KEY-----[\\s\\S]*-----END RSA PRIVATE KEY-----$"
+					}
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Decrypted message"
 			},
-			"example": "locals { decrypted = rsadecrypt(var.encrypted_message, file(\"private.pem\")) }"
+			"examples": [
+				"locals { decrypted = rsadecrypt(var.encrypted_message, file(\"private.pem\")) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "setintersection",
@@ -1755,17 +2833,24 @@
 			"parameters": [
 				{
 					"name": "sets",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
 					"description": "Sets to intersect",
 					"variadic": true
 				}
 			],
 			"returnType": {
-				"type": "array",
+				"types": [
+					"array"
+				],
 				"description": "Set of elements common to all input sets"
 			},
-			"example": "locals { common = setintersection([\"a\", \"b\"], [\"b\", \"c\"]) }"
+			"examples": [
+				"locals { common = setintersection([\"a\", \"b\"], [\"b\", \"c\"]) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "setproduct",
@@ -1773,17 +2858,24 @@
 			"parameters": [
 				{
 					"name": "sets",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
 					"description": "Sets to combine",
 					"variadic": true
 				}
 			],
 			"returnType": {
-				"type": "array",
+				"types": [
+					"array"
+				],
 				"description": "List of all possible combinations"
 			},
-			"example": "locals { combinations = setproduct([\"a\", \"b\"], [1, 2]) }"
+			"examples": [
+				"locals { combinations = setproduct([\"a\", \"b\"], [1, 2]) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "setsubtract",
@@ -1791,22 +2883,31 @@
 			"parameters": [
 				{
 					"name": "a",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
 					"description": "First set"
 				},
 				{
 					"name": "b",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
 					"description": "Set to subtract"
 				}
 			],
 			"returnType": {
-				"type": "array",
+				"types": [
+					"array"
+				],
 				"description": "Set of elements in first set but not in second"
 			},
-			"example": "locals { difference = setsubtract([\"a\", \"b\", \"c\"], [\"b\", \"c\", \"d\"]) }"
+			"examples": [
+				"locals { difference = setsubtract([\"a\", \"b\", \"c\"], [\"b\", \"c\", \"d\"]) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "setunion",
@@ -1814,17 +2915,24 @@
 			"parameters": [
 				{
 					"name": "sets",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
 					"description": "Sets to unite",
 					"variadic": true
 				}
 			],
 			"returnType": {
-				"type": "array",
+				"types": [
+					"array"
+				],
 				"description": "Set of all unique elements"
 			},
-			"example": "locals { all = setunion([\"a\", \"b\"], [\"b\", \"c\"]) }"
+			"examples": [
+				"locals { all = setunion([\"a\", \"b\"], [\"b\", \"c\"]) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "slice",
@@ -1832,28 +2940,39 @@
 			"parameters": [
 				{
 					"name": "list",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
 					"description": "List to slice"
 				},
 				{
 					"name": "start_index",
-					"type": "number",
+					"types": [
+						"number"
+					],
 					"required": true,
 					"description": "Starting index"
 				},
 				{
 					"name": "end_index",
-					"type": "number",
+					"types": [
+						"number"
+					],
 					"required": true,
 					"description": "Ending index (exclusive)"
 				}
 			],
 			"returnType": {
-				"type": "array",
+				"types": [
+					"array"
+				],
 				"description": "Sliced portion of the list"
 			},
-			"example": "locals { portion = slice([\"a\", \"b\", \"c\", \"d\"], 1, 3) }"
+			"examples": [
+				"locals { portion = slice([\"a\", \"b\", \"c\", \"d\"], 1, 3) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "sort",
@@ -1861,16 +2980,28 @@
 			"parameters": [
 				{
 					"name": "list",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
-					"description": "List of strings to sort"
+					"description": "List of strings to sort",
+					"validation": {
+						"allowedTypes": [
+							"string"
+						]
+					}
 				}
 			],
 			"returnType": {
-				"type": "array",
+				"types": [
+					"array"
+				],
 				"description": "Sorted list"
 			},
-			"example": "locals { sorted = sort([\"c\", \"a\", \"b\"]) }"
+			"examples": [
+				"locals { sorted = sort([\"c\", \"a\", \"b\"]) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "split",
@@ -1878,22 +3009,31 @@
 			"parameters": [
 				{
 					"name": "separator",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to separate on"
 				},
 				{
 					"name": "string",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to split"
 				}
 			],
 			"returnType": {
-				"type": "array",
+				"types": [
+					"array"
+				],
 				"description": "List of substrings"
 			},
-			"example": "locals { parts = split(\",\", \"foo,bar,baz\") }"
+			"examples": [
+				"locals { parts = split(\",\", \"foo,bar,baz\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "strcontains",
@@ -1901,22 +3041,31 @@
 			"parameters": [
 				{
 					"name": "string",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to search in"
 				},
 				{
 					"name": "substr",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "Substring to search for"
 				}
 			],
 			"returnType": {
-				"type": "boolean",
+				"types": [
+					"boolean"
+				],
 				"description": "True if substring is found"
 			},
-			"example": "locals { contains = strcontains(\"Hello World\", \"World\") }"
+			"examples": [
+				"locals { contains = strcontains(\"Hello World\", \"World\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "strrev",
@@ -1924,16 +3073,23 @@
 			"parameters": [
 				{
 					"name": "string",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to reverse"
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Reversed string"
 			},
-			"example": "locals { reversed = strrev(\"Hello\") }"
+			"examples": [
+				"locals { reversed = strrev(\"Hello\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "substr",
@@ -1941,28 +3097,42 @@
 			"parameters": [
 				{
 					"name": "string",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to extract from"
 				},
 				{
 					"name": "offset",
-					"type": "number",
+					"types": [
+						"number"
+					],
 					"required": true,
 					"description": "Starting position"
 				},
 				{
 					"name": "length",
-					"type": "number",
+					"types": [
+						"number"
+					],
 					"required": false,
-					"description": "Length of substring to extract"
+					"description": "Length of substring to extract",
+					"validation": {
+						"min": 0
+					}
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Extracted substring"
 			},
-			"example": "locals { part = substr(\"Hello World\", 6, 5) }"
+			"examples": [
+				"locals { part = substr(\"Hello World\", 6, 5) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "tobool",
@@ -1970,16 +3140,37 @@
 			"parameters": [
 				{
 					"name": "value",
-					"type": "any",
+					"types": [
+						"string",
+						"number",
+						"boolean"
+					],
 					"required": true,
-					"description": "Value to convert"
+					"description": "Value to convert",
+					"validation": {
+						"allowedValues": [
+							"true",
+							"false",
+							"1",
+							"0",
+							true,
+							false,
+							1,
+							0
+						]
+					}
 				}
 			],
 			"returnType": {
-				"type": "boolean",
+				"types": [
+					"boolean"
+				],
 				"description": "Boolean representation of value"
 			},
-			"example": "locals { bool_value = tobool(\"true\") }"
+			"examples": [
+				"locals { bool_value = tobool(\"true\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "tolist",
@@ -1987,16 +3178,27 @@
 			"parameters": [
 				{
 					"name": "value",
-					"type": "any",
+					"types": [
+						"array",
+						"string",
+						"number",
+						"boolean",
+						"object"
+					],
 					"required": true,
 					"description": "Value to convert"
 				}
 			],
 			"returnType": {
-				"type": "array",
+				"types": [
+					"array"
+				],
 				"description": "List representation of value"
 			},
-			"example": "locals { list_value = tolist(var.set) }"
+			"examples": [
+				"locals { list_value = tolist(var.set) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "tomap",
@@ -2004,16 +3206,24 @@
 			"parameters": [
 				{
 					"name": "value",
-					"type": "any",
+					"types": [
+						"object",
+						"array"
+					],
 					"required": true,
 					"description": "Value to convert"
 				}
 			],
 			"returnType": {
-				"type": "object",
+				"types": [
+					"object"
+				],
 				"description": "Map representation of value"
 			},
-			"example": "locals { map_value = tomap(var.object) }"
+			"examples": [
+				"locals { map_value = tomap(var.object) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "tonumber",
@@ -2021,16 +3231,27 @@
 			"parameters": [
 				{
 					"name": "value",
-					"type": "any",
+					"types": [
+						"string",
+						"number"
+					],
 					"required": true,
-					"description": "Value to convert"
+					"description": "Value to convert",
+					"validation": {
+						"pattern": "^-?\\d*\\.?\\d+$"
+					}
 				}
 			],
 			"returnType": {
-				"type": "number",
+				"types": [
+					"number"
+				],
 				"description": "Numeric representation of value"
 			},
-			"example": "locals { num_value = tonumber(\"42\") }"
+			"examples": [
+				"locals { num_value = tonumber(\"42\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "toset",
@@ -2038,16 +3259,23 @@
 			"parameters": [
 				{
 					"name": "value",
-					"type": "any",
+					"types": [
+						"array"
+					],
 					"required": true,
 					"description": "Value to convert"
 				}
 			],
 			"returnType": {
-				"type": "array",
+				"types": [
+					"array"
+				],
 				"description": "Set representation of value"
 			},
-			"example": "locals { set_value = toset([\"a\", \"b\", \"a\"]) }"
+			"examples": [
+				"locals { set_value = toset([\"a\", \"b\", \"a\"]) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "tostring",
@@ -2055,16 +3283,25 @@
 			"parameters": [
 				{
 					"name": "value",
-					"type": "any",
+					"types": [
+						"string",
+						"number",
+						"boolean"
+					],
 					"required": true,
 					"description": "Value to convert"
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "String representation of value"
 			},
-			"example": "locals { str_value = tostring(42) }"
+			"examples": [
+				"locals { str_value = tostring(42) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "textdecodebase64",
@@ -2072,16 +3309,26 @@
 			"parameters": [
 				{
 					"name": "str",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Base64-encoded string to decode"
+					"description": "Base64-encoded string to decode",
+					"validation": {
+						"pattern": "^[A-Za-z0-9+/]*={0,2}$"
+					}
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Decoded UTF-8 text"
 			},
-			"example": "locals { text = textdecodebase64(var.encoded_data) }"
+			"examples": [
+				"locals { text = textdecodebase64(var.encoded_data) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "textencodebase64",
@@ -2089,16 +3336,26 @@
 			"parameters": [
 				{
 					"name": "str",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "UTF-8 text to encode"
 				}
 			],
 			"returnType": {
-				"type": "string",
-				"description": "Base64-encoded string"
+				"types": [
+					"string"
+				],
+				"description": "Base64-encoded string",
+				"validation": {
+					"pattern": "^[A-Za-z0-9+/]*={0,2}$"
+				}
 			},
-			"example": "locals { encoded = textencodebase64(\"Hello, World!\") }"
+			"examples": [
+				"locals { encoded = textencodebase64(\"Hello, World!\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "timeadd",
@@ -2106,22 +3363,40 @@
 			"parameters": [
 				{
 					"name": "timestamp",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Timestamp string to add to"
+					"description": "Timestamp string to add to",
+					"validation": {
+						"pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+					}
 				},
 				{
 					"name": "duration",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Duration to add (e.g., \"30m\", \"24h\")"
+					"description": "Duration to add (e.g., \"30m\", \"24h\")",
+					"validation": {
+						"pattern": "^\\d+[smh]$"
+					}
 				}
 			],
 			"returnType": {
-				"type": "string",
-				"description": "New timestamp"
+				"types": [
+					"string"
+				],
+				"description": "New timestamp",
+				"validation": {
+					"pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+				}
 			},
-			"example": "locals { future = timeadd(timestamp(), \"24h\") }"
+			"examples": [
+				"locals { future = timeadd(timestamp(), \"24h\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "timecmp",
@@ -2129,32 +3404,62 @@
 			"parameters": [
 				{
 					"name": "timestamp_a",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "First timestamp to compare"
+					"description": "First timestamp to compare",
+					"validation": {
+						"pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+					}
 				},
 				{
 					"name": "timestamp_b",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Second timestamp to compare"
+					"description": "Second timestamp to compare",
+					"validation": {
+						"pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+					}
 				}
 			],
 			"returnType": {
-				"type": "number",
-				"description": "Comparison result (-1, 0, or 1)"
+				"types": [
+					"number"
+				],
+				"description": "Comparison result (-1, 0, or 1)",
+				"validation": {
+					"allowedValues": [
+						-1,
+						0,
+						1
+					]
+				}
 			},
-			"example": "locals { is_later = timecmp(timestamp(), timeadd(timestamp(), \"1h\")) }"
+			"examples": [
+				"locals { is_later = timecmp(timestamp(), timeadd(timestamp(), \"1h\")) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "timestamp",
 			"description": "Returns the current timestamp.\n\n* Returns current time in RFC 3339 format.\n* Time is in UTC.\n* Precision is to seconds.",
 			"parameters": [],
 			"returnType": {
-				"type": "string",
-				"description": "Current timestamp"
+				"types": [
+					"string"
+				],
+				"description": "Current timestamp",
+				"validation": {
+					"pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+				}
 			},
-			"example": "locals { now = timestamp() }"
+			"examples": [
+				"locals { now = timestamp() }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "trim",
@@ -2162,22 +3467,32 @@
 			"parameters": [
 				{
 					"name": "string",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to trim"
 				},
 				{
 					"name": "chars",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": false,
-					"description": "Characters to trim (defaults to whitespace)"
+					"description": "Characters to trim (defaults to whitespace)",
+					"defaultValue": " \t\n\r"
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Trimmed string"
 			},
-			"example": "locals { cleaned = trim(\"  Hello!  \") }"
+			"examples": [
+				"locals { cleaned = trim(\"  Hello!  \") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "trimprefix",
@@ -2185,22 +3500,31 @@
 			"parameters": [
 				{
 					"name": "string",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to trim"
 				},
 				{
 					"name": "prefix",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "Prefix to remove"
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "String with prefix removed"
 			},
-			"example": "locals { name = trimprefix(\"prefix_name\", \"prefix_\") }"
+			"examples": [
+				"locals { name = trimprefix(\"prefix_name\", \"prefix_\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "trimspace",
@@ -2208,16 +3532,23 @@
 			"parameters": [
 				{
 					"name": "string",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to trim"
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "String with whitespace removed from ends"
 			},
-			"example": "locals { cleaned = trimspace(\"\\n  Hello World\\t  \") }"
+			"examples": [
+				"locals { cleaned = trimspace(\"\\n  Hello World\\t  \") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "trimsuffix",
@@ -2225,22 +3556,31 @@
 			"parameters": [
 				{
 					"name": "string",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to trim"
 				},
 				{
 					"name": "suffix",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "Suffix to remove"
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "String with suffix removed"
 			},
-			"example": "locals { name = trimsuffix(\"name_suffix\", \"_suffix\") }"
+			"examples": [
+				"locals { name = trimsuffix(\"name_suffix\", \"_suffix\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "transpose",
@@ -2248,16 +3588,28 @@
 			"parameters": [
 				{
 					"name": "map",
-					"type": "object",
+					"types": [
+						"object"
+					],
 					"required": true,
-					"description": "Map of lists to transpose"
+					"description": "Map of lists to transpose",
+					"validation": {
+						"allowedTypes": [
+							"array"
+						]
+					}
 				}
 			],
 			"returnType": {
-				"type": "object",
+				"types": [
+					"object"
+				],
 				"description": "Transposed map"
 			},
-			"example": "locals { transposed = transpose({\"a\"=[1,2], \"b\"=[3,4]}) }"
+			"examples": [
+				"locals { transposed = transpose({\"a\"=[1,2], \"b\"=[3,4]}) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "try",
@@ -2265,22 +3617,46 @@
 			"parameters": [
 				{
 					"name": "expression",
-					"type": "any",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object",
+						"null"
+					],
 					"required": true,
 					"description": "Expression to try evaluating"
 				},
 				{
 					"name": "default",
-					"type": "any",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object",
+						"null"
+					],
 					"required": true,
 					"description": "Value to return if evaluation fails"
 				}
 			],
 			"returnType": {
-				"type": "any",
+				"types": [
+					"string",
+					"number",
+					"boolean",
+					"array",
+					"object",
+					"null"
+				],
 				"description": "Result of expression or default value"
 			},
-			"example": "locals { value = try(var.map[\"key\"], \"default\") }"
+			"examples": [
+				"locals { value = try(var.map[\"key\"], \"default\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "type",
@@ -2288,16 +3664,38 @@
 			"parameters": [
 				{
 					"name": "value",
-					"type": "any",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object",
+						"null"
+					],
 					"required": true,
 					"description": "Value to check type of"
 				}
 			],
 			"returnType": {
-				"type": "string",
-				"description": "Type of the value"
+				"types": [
+					"string"
+				],
+				"description": "Type of the value",
+				"validation": {
+					"allowedValues": [
+						"string",
+						"number",
+						"bool",
+						"list",
+						"map",
+						"null"
+					]
+				}
 			},
-			"example": "locals { value_type = type(var.input) }"
+			"examples": [
+				"locals { value_type = type(var.input) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "upper",
@@ -2305,16 +3703,23 @@
 			"parameters": [
 				{
 					"name": "string",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to convert to uppercase"
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Uppercase string"
 			},
-			"example": "locals { upper_case = upper(\"Hello\") }"
+			"examples": [
+				"locals { upper_case = upper(\"Hello\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "urlencode",
@@ -2322,16 +3727,26 @@
 			"parameters": [
 				{
 					"name": "string",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to URL-encode"
 				}
 			],
 			"returnType": {
-				"type": "string",
-				"description": "URL-encoded string"
+				"types": [
+					"string"
+				],
+				"description": "URL-encoded string",
+				"validation": {
+					"pattern": "^[A-Za-z0-9_.~\\-%]*$"
+				}
 			},
-			"example": "locals { encoded = urlencode(\"Hello World\") }"
+			"examples": [
+				"locals { encoded = urlencode(\"Hello World\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "urldecode",
@@ -2339,26 +3754,44 @@
 			"parameters": [
 				{
 					"name": "string",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "URL-encoded string to decode"
+					"description": "URL-encoded string to decode",
+					"validation": {
+						"pattern": "^[A-Za-z0-9_.~\\-%]*$"
+					}
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Decoded string"
 			},
-			"example": "locals { decoded = urldecode(\"%20Hello%20World%20\") }"
+			"examples": [
+				"locals { decoded = urldecode(\"%20Hello%20World%20\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "uuid",
 			"description": "Generates a random UUID.\n\n* Generates a random UUID v4.\n* Returns a new UUID each time it's called.\n* Useful for creating unique identifiers.",
 			"parameters": [],
 			"returnType": {
-				"type": "string",
-				"description": "Random UUID"
+				"types": [
+					"string"
+				],
+				"description": "Random UUID",
+				"validation": {
+					"pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+				}
 			},
-			"example": "locals { id = uuid() }"
+			"examples": [
+				"locals { id = uuid() }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "uuidv5",
@@ -2366,22 +3799,37 @@
 			"parameters": [
 				{
 					"name": "namespace",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "UUID defining the namespace"
+					"description": "UUID defining the namespace",
+					"validation": {
+						"pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+					}
 				},
 				{
 					"name": "name",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "Name to generate UUID from"
 				}
 			],
 			"returnType": {
-				"type": "string",
-				"description": "Generated UUID"
+				"types": [
+					"string"
+				],
+				"description": "Generated UUID",
+				"validation": {
+					"pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+				}
 			},
-			"example": "locals { id = uuidv5(\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", \"example\") }"
+			"examples": [
+				"locals { id = uuidv5(\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", \"example\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "values",
@@ -2389,16 +3837,23 @@
 			"parameters": [
 				{
 					"name": "map",
-					"type": "object",
+					"types": [
+						"object"
+					],
 					"required": true,
 					"description": "Map to extract values from"
 				}
 			],
 			"returnType": {
-				"type": "array",
+				"types": [
+					"array"
+				],
 				"description": "List of map values"
 			},
-			"example": "locals { map_values = values({a = 1, b = 2, c = 3}) }"
+			"examples": [
+				"locals { map_values = values({a = 1, b = 2, c = 3}) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "zipmap",
@@ -2406,22 +3861,36 @@
 			"parameters": [
 				{
 					"name": "keys",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
-					"description": "List of keys"
+					"description": "List of keys",
+					"validation": {
+						"allowedTypes": [
+							"string"
+						]
+					}
 				},
 				{
 					"name": "values",
-					"type": "array",
+					"types": [
+						"array"
+					],
 					"required": true,
 					"description": "List of values"
 				}
 			],
 			"returnType": {
-				"type": "object",
+				"types": [
+					"object"
+				],
 				"description": "Map combining the keys and values"
 			},
-			"example": "locals { map = zipmap([\"a\", \"b\"], [1, 2]) }"
+			"examples": [
+				"locals { map = zipmap([\"a\", \"b\"], [1, 2]) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "pathexpand",
@@ -2429,16 +3898,29 @@
 			"parameters": [
 				{
 					"name": "path",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Path potentially starting with ~"
+					"description": "Path potentially starting with ~",
+					"validation": {
+						"pattern": "^~?[/\\\\].*$"
+					}
 				}
 			],
 			"returnType": {
-				"type": "string",
-				"description": "Expanded absolute path"
+				"types": [
+					"string"
+				],
+				"description": "Expanded absolute path",
+				"validation": {
+					"pattern": "^[/\\\\].*$"
+				}
 			},
-			"example": "locals { full_path = pathexpand(\"~/config/file.txt\") }"
+			"examples": [
+				"locals { full_path = pathexpand(\"~/config/file.txt\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "startswith",
@@ -2446,32 +3928,49 @@
 			"parameters": [
 				{
 					"name": "string",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "String to check"
 				},
 				{
 					"name": "prefix",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
 					"description": "Prefix to look for"
 				}
 			],
 			"returnType": {
-				"type": "boolean",
+				"types": [
+					"boolean"
+				],
 				"description": "True if string starts with prefix"
 			},
-			"example": "locals { has_prefix = startswith(\"terraform-\", \"terraform\") }"
+			"examples": [
+				"locals { has_prefix = startswith(\"terraform-\", \"terraform\") }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "plantimestamp",
 			"description": "Returns a UTC timestamp for use in plan-time references.\n\n* Returns timestamp string that remains consistent during plan.\n* Useful for avoiding unnecessary resource updates.\n* Format is RFC 3339.",
 			"parameters": [],
 			"returnType": {
-				"type": "string",
-				"description": "Plan-time timestamp string"
+				"types": [
+					"string"
+				],
+				"description": "Plan-time timestamp string",
+				"validation": {
+					"pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+				}
 			},
-			"example": "locals { plan_time = plantimestamp() }"
+			"examples": [
+				"locals { plan_time = plantimestamp() }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "sensitive",
@@ -2479,16 +3978,33 @@
 			"parameters": [
 				{
 					"name": "value",
-					"type": "any",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object",
+						"null"
+					],
 					"required": true,
 					"description": "Value to mark as sensitive"
 				}
 			],
 			"returnType": {
-				"type": "any",
+				"types": [
+					"string",
+					"number",
+					"boolean",
+					"array",
+					"object",
+					"null"
+				],
 				"description": "Value marked as sensitive"
 			},
-			"example": "locals { secret = sensitive(var.password) }"
+			"examples": [
+				"locals { secret = sensitive(var.password) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "nonsensitive",
@@ -2496,16 +4012,33 @@
 			"parameters": [
 				{
 					"name": "value",
-					"type": "any",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object",
+						"null"
+					],
 					"required": true,
 					"description": "Sensitive value to unwrap"
 				}
 			],
 			"returnType": {
-				"type": "any",
+				"types": [
+					"string",
+					"number",
+					"boolean",
+					"array",
+					"object",
+					"null"
+				],
 				"description": "Value with sensitive marking removed"
 			},
-			"example": "locals { visible = nonsensitive(var.sensitive_value) }"
+			"examples": [
+				"locals { visible = nonsensitive(var.sensitive_value) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "issensitive",
@@ -2513,16 +4046,28 @@
 			"parameters": [
 				{
 					"name": "value",
-					"type": "any",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object",
+						"null"
+					],
 					"required": true,
 					"description": "Value to check for sensitive marking"
 				}
 			],
 			"returnType": {
-				"type": "boolean",
+				"types": [
+					"boolean"
+				],
 				"description": "True if value is sensitive"
 			},
-			"example": "locals { is_secret = issensitive(var.value) }"
+			"examples": [
+				"locals { is_secret = issensitive(var.value) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "templatefile",
@@ -2530,22 +4075,34 @@
 			"parameters": [
 				{
 					"name": "path",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Path to template file"
+					"description": "Path to template file",
+					"validation": {
+						"pattern": "^[^<>:;,?\"*|]+$"
+					}
 				},
 				{
 					"name": "vars",
-					"type": "object",
+					"types": [
+						"object"
+					],
 					"required": true,
 					"description": "Map of variables to use in template"
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Rendered template content"
 			},
-			"example": "locals { rendered = templatefile(\"${path.module}/template.tpl\", { name = \"value\" }) }"
+			"examples": [
+				"locals { rendered = templatefile(\"${path.module}/template.tpl\", { name = \"value\" }) }"
+			],
+			"deprecated": false
 		},
 		{
 			"name": "templatestring",
@@ -2553,22 +4110,34 @@
 			"parameters": [
 				{
 					"name": "template",
-					"type": "string",
+					"types": [
+						"string"
+					],
 					"required": true,
-					"description": "Template string to render"
+					"description": "Template string to render",
+					"validation": {
+						"pattern": ".*\\$\\{.*\\}.*"
+					}
 				},
 				{
 					"name": "vars",
-					"type": "object",
+					"types": [
+						"object"
+					],
 					"required": true,
 					"description": "Map of variables to use in template"
 				}
 			],
 			"returnType": {
-				"type": "string",
+				"types": [
+					"string"
+				],
 				"description": "Rendered template string"
 			},
-			"example": "locals { rendered = templatestring(\"Hello, ${name}!\", { name = \"World\" }) }"
+			"examples": [
+				"locals { rendered = templatestring(\"Hello, ${name}!\", { name = \"World\" }) }"
+			],
+			"deprecated": false
 		}
 	]
 }
