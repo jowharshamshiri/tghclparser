@@ -58,7 +58,7 @@ export class CompletionsProvider {
   }
 
   private getAttributeCompletions(blockType: string): CompletionItem[] {
-    const template = this.schema.getBlockTemplate(blockType);
+    const template = this.schema.getBlockDefinition(blockType);
     if (!template?.attributes) return [];
 
     return template.attributes.map(attr => ({

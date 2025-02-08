@@ -15,7 +15,7 @@ export class Schema {
     }
 
     findNestedBlockTemplate(parentType: string, nestedType: string): BlockDefinition | undefined {
-        const parent = this.getBlockTemplate(parentType);
+        const parent = this.getBlockDefinition(parentType);
         if (!parent?.blocks) return undefined;
 
         return this.findBlockInHierarchy(parent.blocks, nestedType);
@@ -37,17 +37,17 @@ export class Schema {
         if (parentType) {
             return !!this.findNestedBlockTemplate(parentType, type);
         }
-        return !!this.getBlockTemplate(type);
+        return !!this.getBlockDefinition(type);
     }
 
-    getBlockTemplate(type: string): BlockDefinition | undefined {
+    getBlockDefinition(type: string): BlockDefinition | undefined {
         const result = blocks.blocks.find(b => b.type === type) as BlockDefinition;
         return result ?? undefined;
     }
 
     getAllBlockTemplates(): BlockDefinition[] {
         return blocks.blocks.map(block =>
-            this.getBlockTemplate(block.type)
+            this.getBlockDefinition(block.type)
         ).filter((block): block is BlockDefinition => block !== undefined);
     }
 
@@ -116,7 +116,7 @@ export class Schema {
     }
 
     validateBlockAttributes(blockType: string, attributes: Record<string, any>): boolean {
-        const template = this.getBlockTemplate(blockType);
+        const template = this.getBlockDefinition(blockType);
         if (!template) return false;
 
         // If the block allows arbitrary attributes, all attribute combinations are valid
@@ -160,7 +160,7 @@ export class Schema {
     }
 
     validateAttributeValue(blockType: string, attrName: string, value: any): boolean {
-        const template = this.getBlockTemplate(blockType);
+        const template = this.getBlockDefinition(blockType);
         if (!template) return false;
 
         const attr = template.attributes?.find(a => a.name === attrName);
