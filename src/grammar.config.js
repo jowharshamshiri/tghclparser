@@ -3,7 +3,7 @@ export default {
   output: 'terragrunt-parser.js',
   format: 'es',
   dts: true,
-  trace: true,
+  trace: false,
   cache: false,
   
   returnTypes: {

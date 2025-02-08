@@ -35,7 +35,7 @@ export class DiagnosticsProvider {
 
   private validateBlock(token: Token, seenBlocks: Set<string>, diagnostics: Diagnostic[]) {
     const blockValue = token.getDisplayText();
-    const template = this.schema.getBlockTemplate(blockValue);
+    const template = this.schema.getBlockDefinition(blockValue);
 
     if (!template) {
       diagnostics.push(this.createDiagnostic(
@@ -121,7 +121,7 @@ export class DiagnosticsProvider {
     if (token.parent?.type === 'block') {
       const blockValue = token.parent.getDisplayText();
       const identifierValue = token.getDisplayText();
-      const blockTemplate = this.schema.getBlockTemplate(blockValue);
+      const blockTemplate = this.schema.getBlockDefinition(blockValue);
       
       if (!blockTemplate?.attributes?.some(attr => attr.name === identifierValue) &&
           !blockTemplate?.arbitraryAttributes) {
@@ -143,7 +143,7 @@ export class DiagnosticsProvider {
     const blockToken = this.findParentBlock(token);
     
     if (blockToken) {
-      const blockTemplate = this.schema.getBlockTemplate(blockToken.getDisplayText());
+      const blockTemplate = this.schema.getBlockDefinition(blockToken.getDisplayText());
       const attribute = blockTemplate?.attributes?.find(attr => attr.name === attributeName);
 
       if (attribute) {
