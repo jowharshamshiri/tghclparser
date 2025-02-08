@@ -273,4 +273,8 @@ export class ParsedDocument {
 }
 
 
+export {CompletionsProvider} from './CompletionsProvider';
+export {DiagnosticsProvider} from './DiagnosticsProvider';
+export {HoverProvider} from './HoverProvider';
 export {Token} from './model';
+export {Schema} from './Schema';
