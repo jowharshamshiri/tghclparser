@@ -6,12 +6,6 @@ import { CompletionsProvider } from './CompletionsProvider';
 import { HoverProvider } from './HoverProvider';
 import { DiagnosticsProvider } from './DiagnosticsProvider';
 
-export interface IParseResult {
-	ast: any | null;
-	diagnostics: Diagnostic[];
-	tokens: Token[];
-}
-
 export interface HoverResult {
 	content: {
 		kind: 'markdown';
@@ -33,7 +27,8 @@ export class ParsedDocument {
 		this.completionsProvider = new CompletionsProvider(this.schema);
 		this.hoverProvider = new HoverProvider(this.schema);
 		this.diagnosticsProvider = new DiagnosticsProvider(this.schema);
-		this.parse(content);
+		this.content = content;
+		this.parseContent();
 	}
 
 	private createToken(node: any): Token | null {
@@ -94,92 +89,45 @@ export class ParsedDocument {
 		return token;
 	}
 
-	private parse(code: string): IParseResult {
+	private parseContent() {
 		try {
-			this.ast = tg_parse(code, { grammarSource: this.uri });
-			console.log("ast", this.ast);
+			this.ast = tg_parse(this.content, { grammarSource: this.uri });
 			this.tokens = [this.parseNode(this.ast)];
 
 			this.diagnostics = this.diagnosticsProvider.getDiagnostics(this.tokens);
-
-			return {
-				ast: this.ast,
-				diagnostics: this.diagnostics,
-				tokens: this.tokens
-			};
 		} catch (error) {
 			if (error instanceof SyntaxError && error.location) {
-				// Log the basic error location
-				console.error(`Syntax Error at line ${error.location.start.line}, column ${error.location.start.column}:`);
-				
-				// Log the full error location object for debugging
-				console.log('Location details:', {
-					start: error.location.start,
-					end: error.location.end
+				// Convert the parser's location format to VSCode's format
+				this.diagnostics.push( {
+					severity: 1,
+					range: {
+						start: {
+							line: error.location.start.line - 1,  // PEG.js uses 1-based line numbers
+							character: error.location.start.column - 1
+						},
+						end: {
+							line: error.location.end.line - 1,
+							character: error.location.end.column - 1
+						}
+					},
+					message: error.message,
+					source: 'terragrunt'
 				});
-			
-				// Log the expected rules/tokens
-				console.log('Expected rules/tokens:', error.expected);
-				
-				// Log what was actually found
-				console.log('Found:', error.found || 'end of input');
-				
-				// Log the rule stack if available
-				if ('rules' in error) {
-					console.log('Rule stack:', error.rules);
-				}
-				
-				    
-    // Get the failing rule name - this is often in the error message or rule stack
-    const failingRule = error.message.match(/Expected [^,]+ but /)?.[0]  // Extract from message
-        || (error as any).rule  // Some PEG implementations store it directly
-        || error.format([{ source: this.uri, text: code }]).split('\n')[0]; // First line often contains rule
-    
-    console.log('Failed at rule:', failingRule);
-    
-    
-    // Log what was actually found
-    console.log('\nFound:', error.found || 'end of input');
-    
 
-
-				// Get the specific line of code where the error occurred
-				const lines = code.split('\n');
-				const errorLine = lines[error.location.start.line-1];
-				console.log('\nProblematic line:', errorLine);
-				
-				// Create a pointer to the exact error position
-				const pointer = ' '.repeat("Problematic line:".length+error.location.start.column) + '^';
-				console.log(pointer);
-				
-				// Log the formatted error message
-				console.log('\nFormatted error:');
-				console.log(error.format([{ source: this.uri, text: code }]));
-				
-				// Log the full error object for debugging
-				console.log('\nFull error object:', error);
+				// Keep your console.log statements for debugging if needed
 			} else {
-				console.error("Unknown Parsing Error:", error);
-				if (error instanceof Error) {
-					console.log('Stack trace:', error.stack);
-				}
+				// Fallback for unknown errors
+				this.diagnostics.push({
+					severity: 1,
+					range: {
+						start: { line: 0, character: 0 },
+						end: { line: 0, character: 0 }
+					},
+					message: error instanceof Error ? error.message : 'Unknown error',
+					source: 'terragrunt'
+				});
 			}
 
-			const diagnostic: Diagnostic = {
-				severity: 1,
-				range: {
-					start: { line: 0, character: 0 },
-					end: { line: 0, character: 0 }
-				},
-				message: error instanceof Error ? error.message : 'Unknown error',
-				source: 'terragrunt'
-			};
-
-			return {
-				ast: null,
-				diagnostics: [diagnostic],
-				tokens: []
-			};
 		}
 	}
 
@@ -195,6 +143,11 @@ export class ParsedDocument {
 		return this.content;
 	}
 
+	public setContent(content: string) {
+		this.content = content;
+		this.parseContent();
+	}
+
 	public getAST(): any | null {
 		return this.ast;
 	}
@@ -205,11 +158,6 @@ export class ParsedDocument {
 
 	public getDiagnostics(): Diagnostic[] {
 		return this.diagnostics;
-	}
-
-	public update(newContent: string): IParseResult {
-		this.content = newContent;
-		return this.parse(newContent);
 	}
 
 	public getCompletionsAtPosition(position: Position): CompletionItem[] {
