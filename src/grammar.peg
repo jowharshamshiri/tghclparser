@@ -64,23 +64,61 @@ Start = _ statements:Statement* _ {
   return makeNode('root', null, location(), statements);
 }
 
-Statement = statement:(RootAssignment / Block) _ { return statement; }
+Statement = statement:(RootAssignment / Block) _ {
+  return statement;
+}
 
 RootAssignment = _ name:RootAssignmentIdentifier _ "=" _ value:(RootValue / Boolean / StringLiteral) {
   return makeNode('assignment', name.value, location(), [name, value]);
 }
 
-RootValue = val:(Block / RootObject / Array / TernaryExpression / ComparisonExpression / FunctionCall / Expression) {
+RootValue = val:(
+  Block / 
+  RootObject / 
+  Array / 
+  TernaryExpression / 
+  ComparisonExpression / 
+  FunctionCall / 
+  TypeConstraint /
+  TypeConstructor /
+  CollectionConstructor /
+  Expression
+) {
   return val;
 }
 
-Block = _ name:BlockIdentifier _ params:BlockParameter* _ "{" _ items:(Pair / ParameterizedBlock / Block)* _ "}" {
-  return makeNode('block', name.value, location(), [name, ...params, ...items]);
+Block = _ name:BlockIdentifier _ params:BlockParameter* _ metaArgs:MetaArguments? _ "{" _ items:BlockItems _ "}" {
+  return makeNode('block', name.value, location(), [
+    name, 
+    ...params, 
+    ...(metaArgs ? [metaArgs] : []),
+    ...(items || [])
+  ]);
 }
 
-ParameterizedBlock = name:BlockIdentifier _ param:StringLiteral _ "{" _ items:(Pair / Block)* _ "}" {
+BlockItems = items:(
+  Pair /
+  ParameterizedBlock /
+  DynamicBlock /
+  ValidationBlock /
+  Block
+)* {
+  return items;
+}
+
+ParameterizedBlock = name:BlockIdentifier _ param:StringLiteral _ "{" _ items:BlockItems _ "}" {
   const paramNode = makeNode('parameter', param.value, param.location, [param]);
-  return makeNode('block', name.value, location(), [name, paramNode, ...items]);
+  return makeNode('block', name.value, location(), [name, paramNode, ...(items || [])]);
+}
+
+DynamicBlock = "dynamic" _ blockType:StringLiteral _ "{" _
+  "for_each" _ "=" _ collection:Value _
+  content:Block _
+"}" {
+  return makeNode('dynamic_block', blockType.value, location(), [
+    makeNode('for_each', null, location(), [collection]),
+    content
+  ]);
 }
 
 BlockIdentifier = name:$([a-zA-Z_][a-zA-Z0-9_\-.*]*) {
@@ -113,12 +151,27 @@ UnquotedAttributeIdentifier
     return makeNode('attribute_identifier', name, location(), [], { quoted: false });
   }
 
-RootObject = "{" _ pairs:(Pair (_ ","? _ Pair)* (_ ",")?)? _ "}" {
+RootObject = "{" _ pairs:(Pair (_ ","? _ Pair)* (_ ",")?)? _ inherit:InheritanceExpression? _ "}" {
   const values = pairs ? [pairs[0], ...pairs[1].map(pair => pair[3])] : [];
-  return makeNode('object', null, location(), values);
+  return makeNode('object', null, location(), [...values, ...(inherit ? [inherit] : [])]);
 }
 
-Value = val:(TernaryExpression / ComparisonExpression / StringLiteral / Number / Boolean / Array / Object / FunctionCall / Expression / Reference) _ {
+PrimaryExpression =
+  StringLiteral /
+  Number /
+  Boolean /
+  FunctionCall /
+  Reference /
+  "(" _ expr:Expression _ ")" { return expr; } /
+  SimpleExpression
+
+Value = val:(
+  Expression /
+  Array /
+  Object /
+  TypeConstructor /
+  CollectionConstructor
+) _ {
   return val;
 }
 
@@ -138,8 +191,13 @@ Object = "{" _ pairs:(Pair (_ ","? _ Pair)* (_ ",")?)? _ "}" {
 
 StringLiteral = QuotedString / SingleQuotedString / Heredoc
 
-Heredoc = "<<"? beginMarker newline content:heredocContent endMarker {
-  return makeNode('string_lit', content, location());
+Heredoc = "<<" trim:"-"? beginMarker newline content:heredocContent endMarker {
+  let finalContent = content;
+  if (trim === "-") {
+    // Trim leading and trailing whitespace from each line
+    finalContent = content.split('\n').map(line => line.trim()).join('\n');
+  }
+  return makeNode('string_lit', finalContent, location());
 }
 
 beginMarker = marker:$[A-Z][A-Z0-9]* {
@@ -176,7 +234,17 @@ EscapeSequence = "\\" . { return text(); }
 EscapedChar = "\\" . { return text(); }
 InterpolatedExpr = "${" expr:(!("}") .)* "}" { return "${" + expr.map(e => e[1]).join('') + "}"; }
 
-Number = minus:"-"? int:Integer frac:Fraction? exp:Exponent? {
+Number = HexNumber / OctalNumber / DecimalNumber
+
+HexNumber = "0x" digits:$[0-9a-fA-F]+ {
+  return makeNode('number_lit', parseInt(digits, 16), location());
+}
+
+OctalNumber = "0o" digits:$[0-7]+ {
+  return makeNode('number_lit', parseInt(digits, 8), location());
+}
+
+DecimalNumber = minus:"-"? int:Integer frac:Fraction? exp:Exponent? {
   return makeNode('number_lit', parseFloat(text()), location());
 }
 
@@ -193,23 +261,127 @@ Array = "[" _ items:(ArrayItem (_ "," _ ArrayItem)* (_ ",")?)? _ "]" {
   return makeNode('array_lit', null, location(), values);
 }
 
-ArrayItem = val:(StringLiteral / Number / Boolean / Object / FunctionCall / Expression / Reference) {
+ArrayItem = val:(
+  StringLiteral /
+  Number /
+  Boolean /
+  Object /
+  FunctionCall /
+  PrimaryExpression /
+  Expression /
+  Reference
+) {
   return val;
 }
 
 SimpleExpression = "${" expr:(!("}") .)* "}" {
   return makeNode('interpolation', text(), location());
 }
-Expression = TernaryExpression / SimpleExpression / ComparisonExpression
 
-TernaryExpression = condition:(ComparisonExpression / FunctionCall) _ "?" _ trueExpr:(Boolean / Value) _ ":" _ falseExpr:(Boolean / Value) {
-  return makeNode('ternary_expression', null, location(), [condition, trueExpr, falseExpr]);
+Expression = ConditionalExpression
+
+ConditionalExpression = 
+  TernaryExpression /
+  LogicalExpression
+
+ForExpression = "for" _ identifier:Identifier _ "in" _ collection:Expression _ ":" _ body:Expression {
+  return makeNode('for_expression', null, location(), [
+    makeIdentifierNode(identifier, location()),
+    collection,
+    body
+  ]);
 }
 
-ComparisonOperator = "==" / "!=" / ">=" / "<=" / ">" / "<"
+SplatExpression = base:PrimaryExpression _ ".*" _ attr:("." Identifier)? {
+  return makeNode('splat_expression', null, location(), [
+    base,
+    ...(attr ? [makeIdentifierNode(attr[1], location())] : [])
+  ]);
+}
 
-ComparisonExpression = left:(FunctionCall / StringLiteral / SimpleExpression) _ operator:ComparisonOperator _ right:(StringLiteral / FunctionCall / SimpleExpression) {
-  return makeNode('comparison_expression', operator, location(), [left, right]);
+LogicalExpression = head:ComparisonExpression tail:(_ LogicalOperator _ ComparisonExpression)* {
+  return tail.reduce((left, [_, op, __, right]) => 
+    makeNode('logical_expression', op, location(), [left, right]),
+    head
+  );
+}
+
+UnaryLogicalExpression = "!" _ expr:Value {
+  return makeNode('logical_expression', "!", location(), [expr]);
+}
+
+BinaryLogicalExpression = left:Value _ operator:("&&" / "||") _ right:Value {
+  return makeNode('logical_expression', operator, location(), [left, right]);
+}
+
+TernaryExpression =
+  condition:LogicalExpression _
+  "?" _ trueExpr:LogicalExpression _
+  ":" _ falseExpr:LogicalExpression {
+    return makeNode('ternary_expression', null, location(), [condition, trueExpr, falseExpr]);
+}
+
+LogicalOperator = "&&" / "||"
+ComparisonOperator = "==" / "!=" / ">=" / "<=" / ">" / "<"
+AdditiveOperator = "+" / "-"
+MultiplicativeOperator = "*" / "/" / "%"
+
+ComparisonExpression = head:AdditiveExpression tail:(_ ComparisonOperator _ AdditiveExpression)* {
+  return tail.reduce((left, [_, op, __, right]) =>
+    makeNode('comparison_expression', op, location(), [left, right]),
+    head
+  );
+}
+
+AdditiveExpression = head:MultiplicativeExpression tail:(_ AdditiveOperator _ MultiplicativeExpression)* {
+  return tail.reduce((left, [_, op, __, right]) =>
+    makeNode('arithmetic_expression', op, location(), [left, right]),
+    head
+  );
+}
+
+MultiplicativeExpression = head:UnaryExpression tail:(_ MultiplicativeOperator _ UnaryExpression)* {
+  return tail.reduce((left, [_, op, __, right]) =>
+    makeNode('arithmetic_expression', op, location(), [left, right]),
+    head
+  );
+}
+
+UnaryExpression =
+  LogicalNotExpression /
+  NegationExpression /
+  PostfixExpression
+
+LogicalNotExpression = "!" _ expr:UnaryExpression {
+  return makeNode('logical_expression', "!", location(), [expr]);
+}
+
+NegationExpression = "-" _ expr:UnaryExpression {
+  return makeNode('arithmetic_expression', "-", location(), [expr]);
+}
+
+PostfixExpression = head:PrimaryExpression tail:(
+  IndexAccess /
+  SplatAccess /
+  MemberAccess
+)* {
+  return tail.reduce((expr, access) => access(expr), head);
+}
+
+IndexAccess = _ "[" _ index:(Number / StringLiteral / Expression) _ "]" {
+  return base => makeNode('index_expression', null, location(), [base, index]);
+}
+
+SplatAccess = _ ".*" _ attr:("." Identifier)? {
+  return base => makeNode('splat_expression', null, location(), [
+    base,
+    ...(attr ? [makeIdentifierNode(attr[1], location())] : [])
+  ]);
+}
+
+
+MemberAccess = _ "." _ member:Identifier {
+  return base => makeNode('member_access', null, location(), [base, makeIdentifierNode(member, location())]);
 }
 
 FunctionCall = identifier:FunctionIdentifier _ "(" _ args:FunctionArgs? _ ")" {
@@ -232,8 +404,9 @@ FunctionArg = arg:(
   Array /
   Object /
   FunctionCall /
-  Reference /
-  Expression
+  PrimaryExpression /
+  Expression /
+  Reference
 ) {
   return arg;
 }
@@ -251,3 +424,105 @@ Whitespace = [ \t\n\r]
 Comment = SingleLineComment / MultiLineComment
 SingleLineComment = ("#" / "//") [^\n]* "\n"?
 MultiLineComment = "/*" (!"*/" .)* "*/"
+
+TypeConstraint = 
+  PrimitiveType /
+  CollectionType /
+  StructType /
+  TupleType /
+  ObjectType /
+  AnyType
+
+PrimitiveType = ("string" / "number" / "bool") {
+  return makeNode('type_constraint', text(), location());
+}
+
+CollectionType = type:("list" / "set" / "map") "(" _ elementType:TypeConstraint _ ")" {
+  return makeNode('collection_type', type, location(), [elementType]);
+}
+
+StructType = "object" "(" _ attrs:StructTypeAttribute* _ ")" {
+  return makeNode('struct_type', null, location(), attrs);
+}
+
+StructTypeAttribute = name:Identifier _ "=" _ type:TypeConstraint _ "," _ {
+  return makeNode('struct_attribute', name, location(), [type]);
+}
+
+TupleType = "tuple" "(" _ types:(TypeConstraint (_ "," _ TypeConstraint)*)? _ ")" {
+  const typeList = types ? [types[0], ...types[1].map(t => t[3])] : [];
+  return makeNode('tuple_type', null, location(), typeList);
+}
+
+ObjectType = "object" {
+  return makeNode('type_constraint', 'object', location());
+}
+
+AnyType = "any" {
+  return makeNode('type_constraint', 'any', location());
+}
+
+TypeConstructor = type:("list" / "map" / "set") "(" _ value:Value _ ")" {
+  return makeNode('type_constructor', type, location(), [value]);
+}
+
+CollectionConstructor = func:("tolist" / "toset" / "tomap") "(" _ value:Value _ ")" {
+  return makeNode('collection_constructor', func, location(), [value]);
+}
+
+IndexExpression = base:PrimaryExpression _ "[" _ index:(Number / StringLiteral / Expression) _ "]" {
+  return makeNode('index_expression', null, location(), [base, index]);
+}
+
+InheritanceExpression = "inherit" _ "=" _ source:Value {
+  return makeNode('inheritance', null, location(), [source]);
+}
+
+MetaArguments = "[" _ args:MetaArgument* _ "]" {
+  return makeNode('meta_arguments', null, location(), args);
+}
+
+MetaArgument = 
+  CountArg /
+  ForEachArg /
+  DependsOnArg /
+  ProviderArg /
+  LifecycleArg
+
+CountArg = "count" _ "=" _ value:Value {
+  return makeNode('meta_count', null, location(), [value]);
+}
+
+ForEachArg = "for_each" _ "=" _ value:Value {
+  return makeNode('meta_for_each', null, location(), [value]);
+}
+
+DependsOnArg = "depends_on" _ "=" _ deps:Array {
+  return makeNode('meta_depends_on', null, location(), [deps]);
+}
+
+ProviderArg = "provider" _ "=" _ value:Value {
+  return makeNode('meta_provider', null, location(), [value]);
+}
+
+LifecycleArg = "lifecycle" _ "{" _ rules:LifecycleRule* _ "}" {
+  return makeNode('meta_lifecycle', null, location(), rules);
+}
+
+LifecycleRule = (
+  "create_before_destroy" _ "=" _ Boolean /
+  "prevent_destroy" _ "=" _ Boolean /
+  "ignore_changes" _ "=" _ Array
+) {
+  return makeNode('lifecycle_rule', null, location(), []);
+}
+
+ValidationBlock = "validation" _ "{" _
+  "condition" _ "=" _ condition:Expression _
+  "error_message" _ "=" _ message:StringLiteral _
+"}" {
+  return makeNode('validation', null, location(), [
+    makeNode('condition', null, location(), [condition]),
+    makeNode('error_message', null, location(), [message])
+  ]);
+}
