@@ -97,8 +97,65 @@ export class ParsedDocument {
 			this.diagnostics = this.diagnosticsProvider.getDiagnostics(this.tokens);
 		} catch (error) {
 			if (error instanceof SyntaxError && error.location) {
+				// Log the basic error location
+				console.error(`Syntax Error at line ${error.location.start.line}, column ${error.location.start.column}:`);
+
+				// Log the full error location object for debugging
+				console.log('Location details:', {
+					start: error.location.start,
+					end: error.location.end
+				});
+
+				// Log the expected rules/tokens
+				console.log('Expected rules/tokens:', error.expected);
+
+				// Log what was actually found
+				console.log('Found:', error.found || 'end of input');
+
+				// Log the rule stack if available
+				if ('rules' in error) {
+					console.log('Rule stack:', error.rules);
+				}
+
+
+				// Get the failing rule name - this is often in the error message or rule stack
+				const failingRule = error.message.match(/Expected [^,]+ but /)?.[0]  // Extract from message
+					|| (error as any).rule  // Some PEG implementations store it directly
+					|| error.format([{ source: this.uri, text: this.content }]).split('\n')[0]; // First line often contains rule
+
+				console.log('Failed at rule:', failingRule);
+
+
+				// Log what was actually found
+				console.log('\nFound:', error.found || 'end of input');
+
+
+
+				// Get the specific line of code where the error occurred
+				const lines = this.content.split('\n');
+				const errorLine = lines[error.location.start.line - 1];
+				console.log('\nProblematic line:', errorLine);
+
+				// Create a pointer to the exact error position
+				const pointer = ' '.repeat("Problematic line:".length + error.location.start.column) + '^';
+				console.log(pointer);
+
+				// Log the formatted error message
+				console.log('\nFormatted error:');
+				console.log(error.format([{ source: this.uri, text: this.content }]));
+
+				// Log the full error object for debugging
+				console.log('\nFull error object:', error);
+			} else {
+				console.error("Unknown Parsing Error:", error);
+				if (error instanceof Error) {
+					console.log('Stack trace:', error.stack);
+				}
+			}
+
+			if (error instanceof SyntaxError && error.location) {
 				// Convert the parser's location format to VSCode's format
-				this.diagnostics.push( {
+				this.diagnostics.push({
 					severity: 1,
 					range: {
 						start: {
