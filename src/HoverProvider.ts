@@ -1,30 +1,50 @@
 import { Schema } from './Schema';
-import { AttributeDefinition, BlockTemplate, FunctionDefinition, Token, TokenType, ValueType } from './model';
+import { AttributeDefinition, BlockDefinition, FunctionDefinition, Token, TokenType, ValueType } from './model';
 import type { HoverResult } from '.';
 
 export class HoverProvider {
   constructor(private schema: Schema) {}
 
-  private formatValueType(value: ValueType): string {
-    switch (value) {
+  private formatValueType(type: ValueType): string {
+    switch (type) {
       case 'array':
         return 'Array';
       case 'object':
         return 'Object';
-      case 'function_call':
-        return 'Function Call';
-      case 'property_access':
-        return 'Property Access';
+      case 'function':
+        return 'Function';
+      case 'block':
+        return 'Block';
+      case 'ternary':
+        return 'Ternary Expression';
+      case 'comparison':
+        return 'Comparison';
+      case 'logical':
+        return 'Logical Expression';
+      case 'arithmetic':
+        return 'Arithmetic Expression';
+      case 'null_coalescing':
+        return 'Null Coalescing';
+      case 'unary':
+        return 'Unary Expression';
+      case 'postfix':
+        return 'Postfix Expression';
+      case 'pipe':
+        return 'Pipe Expression';
+      case 'list_comprehension':
+        return 'List Comprehension';
+      case 'map_comprehension':
+        return 'Map Comprehension';
       case 'interpolation':
         return 'String Interpolation';
-      case 'heredoc':
-        return 'Heredoc';
+      case 'reference':
+        return 'Reference';
       default:
-        return value.charAt(0).toUpperCase() + value.slice(1);
+        return type.charAt(0).toUpperCase() + type.slice(1);
     }
   }
 
-  private getBlockDocumentation(blockTemplate: BlockTemplate, value: string): string[] {
+  private getBlockDocumentation(blockTemplate: BlockDefinition, value: string): string[] {
     const contents: string[] = [
       `# ${value} Block`,
       blockTemplate.description || ''
@@ -33,20 +53,20 @@ export class HoverProvider {
     if (blockTemplate.parameters?.length) {
       contents.push('## Parameters');
       contents.push(...blockTemplate.parameters.map(param => 
-        `- **${param.name}** (${param.type}${param.required ? '' : '?'}): ${param.description || ''}`
+        `- **${param.name}** (${param.types.map(t => this.formatValueType(t)).join(' | ')}${param.required ? '' : '?'}): ${param.description || ''}`
       ));
     }
 
     if (blockTemplate.attributes?.length) {
       contents.push('## Attributes');
       contents.push(...blockTemplate.attributes.map(attr => {
-        let attrDoc = `- **${attr.name}** (${this.formatValueType(attr.value.type)}${attr.required ? '' : '?'})`;
+        let attrDoc = `- **${attr.name}** (${attr.types.map(t => this.formatValueType(t)).join(' | ')}${attr.required ? '' : '?'})`;
         if (attr.description) attrDoc += `: ${attr.description}`;
-        if (attr.allowedValues?.length) {
-          attrDoc += `\n  - Allowed values: ${attr.allowedValues.join(', ')}`;
+        if (attr.validation?.allowedValues?.length) {
+          attrDoc += `\n  - Allowed values: ${attr.validation.allowedValues.join(', ')}`;
         }
-        if (attr.value.pattern) {
-          attrDoc += `\n  - Pattern: \`${attr.value.pattern}\``;
+        if (attr.validation?.pattern) {
+          attrDoc += `\n  - Pattern: \`${attr.validation.pattern}\``;
         }
         return attrDoc;
       }));
@@ -76,7 +96,7 @@ export class HoverProvider {
     if (funcDef.parameters.length) {
       contents.push('## Parameters');
       contents.push(...funcDef.parameters.map(param => {
-        let paramDoc = `- **${param.name}** (${param.type}${param.required ? '' : '?'})`;
+        let paramDoc = `- **${param.name}** (${param.types.map(t => this.formatValueType(t)).join(' | ')}${param.required ? '' : '?'})`;
         if (param.description) paramDoc += `: ${param.description}`;
         if (param.variadic) paramDoc += ' (variadic)';
         return paramDoc;
@@ -84,7 +104,7 @@ export class HoverProvider {
     }
 
     contents.push('## Return Type');
-    contents.push(`\`${funcDef.returnType.type}\`${funcDef.returnType.description ? `: ${funcDef.returnType.description}` : ''}`);
+    contents.push(`\`${funcDef.returnType.types.map(t => this.formatValueType(t)).join(' | ')}\`${funcDef.returnType.description ? `: ${funcDef.returnType.description}` : ''}`);
 
     return contents;
   }
@@ -96,23 +116,24 @@ export class HoverProvider {
     ];
 
     contents.push('## Details');
-    contents.push(`- **Type**: ${this.formatValueType(attr.value.type)}`);
+    contents.push(`- **Type**: ${attr.types.map(t => this.formatValueType(t)).join(' | ')}`);
     contents.push(`- **Required**: ${attr.required}`);
 
-    if (attr.value.pattern) {
-      contents.push(`- **Pattern**: \`${attr.value.pattern}\``);
+    if (attr.validation?.pattern) {
+      contents.push(`- **Pattern**: \`${attr.validation.pattern}\``);
     }
 
-    if (attr.allowedValues?.length) {
+    if (attr.validation?.allowedValues?.length) {
       contents.push('## Allowed Values');
-      contents.push(attr.allowedValues.map(value => `- \`${value}\``).join('\n'));
+      contents.push(attr.validation.allowedValues.map(value => `- \`${value}\``).join('\n'));
     }
 
-    if (attr.value.type === 'object' && attr.value.properties) {
+    // Only show properties if one of the types is 'object'
+    if (attr.types.includes('object') && attr.attributes?.length) {
       contents.push('## Properties');
-      Object.entries(attr.value.properties).forEach(([key, prop]) => {
-        contents.push(`- **${key}** (${this.formatValueType(prop.type)})`);
-        if (prop.description) contents.push(`  ${prop.description}`);
+      attr.attributes.forEach(nestedAttr => {
+        contents.push(`- **${nestedAttr.name}** (${nestedAttr.types.map(t => this.formatValueType(t)).join(' | ')})`);
+        if (nestedAttr.description) contents.push(`  ${nestedAttr.description}`);
       });
     }
 
@@ -123,26 +144,25 @@ export class HoverProvider {
     let contents: string[] = [];
     const value = token.getDisplayText();
 
-    switch (token.type) {
-      case 'block':
-      case 'block_with_param':
+    switch (token.type as TokenType) {
+      case 'block': {
         const blockTemplate = this.schema.getBlockTemplate(value);
         if (blockTemplate) {
           contents = this.getBlockDocumentation(blockTemplate, value);
         }
         break;
+      }
 
-      case 'function_call':
-        const functionName = token.children.find(child => 
-          child.type === 'identifier')?.getDisplayText() || value;
-        const funcDef = this.schema.getFunctionDefinition(functionName);
+      case 'function_identifier': {
+        const funcDef = this.schema.getFunctionDefinition(value);
         if (funcDef) {
           contents = this.getFunctionDocumentation(funcDef);
         }
         break;
+      }
 
-      case 'identifier':
-        if (token.parent?.type === 'block' || token.parent?.type === 'block_with_param') {
+      case 'attribute_identifier': {
+        if (token.parent?.type === 'block') {
           const parentBlockValue = token.parent.getDisplayText();
           const parentBlock = this.schema.getBlockTemplate(parentBlockValue);
           const attr = parentBlock?.attributes?.find(a => a.name === value);
@@ -151,36 +171,27 @@ export class HoverProvider {
           }
         }
         break;
+      }
 
-      case 'attribute':
-        const attrName = token.children.find(child => 
-          child.type === 'identifier')?.getDisplayText();
-        if ((token.parent?.type === 'block' || token.parent?.type === 'block_with_param') && attrName) {
-          const parentBlockValue = token.parent.getDisplayText();
-          const parentBlock = this.schema.getBlockTemplate(parentBlockValue);
-          const attr = parentBlock?.attributes?.find(a => a.name === attrName);
-          if (attr) {
-            contents = this.getAttributeDocumentation(attr);
-          }
-        }
-        break;
-
-      case 'block_parameter':
-        if (token.parent?.type === 'block_with_param') {
+      case 'parameter': {
+        if (token.parent?.type === 'block') {
           const blockTemplate = this.schema.getBlockTemplate(token.parent.getDisplayText());
-          const param = blockTemplate?.parameters?.find(p => p.pattern && new RegExp(p.pattern).test(value));
+          const param = blockTemplate?.parameters?.find(p => 
+            p.validation?.pattern && new RegExp(p.validation.pattern).test(value)
+          );
           if (param) {
             contents = [
               `# Block Parameter: ${param.name}`,
               param.description || '',
               '## Details',
-              `- **Type**: ${param.type}`,
+              `- **Type**: ${param.types.map(t => this.formatValueType(t)).join(' | ')}`,
               `- **Required**: ${param.required}`,
-              param.pattern ? `- **Pattern**: \`${param.pattern}\`` : ''
+              param.validation?.pattern ? `- **Pattern**: \`${param.validation.pattern}\`` : ''
             ].filter(Boolean);
           }
         }
         break;
+      }
     }
 
     return contents.length > 0 ? {

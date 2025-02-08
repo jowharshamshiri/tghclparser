@@ -1,4 +1,5 @@
 import type { Position } from 'vscode-languageserver';
+import { LocationRange } from './terragrunt-parser';
 
 export class AnError extends Error {
 	constructor(message: string) {
@@ -6,36 +7,72 @@ export class AnError extends Error {
 		this.name = "TGLS Error";
 	}
 }
+
 export type TokenType =
-	| 'conditional'
-	| 'bare_token'
+	| 'root'
 	| 'block'
 	| 'identifier'
+	| 'block_identifier'
+	| 'root_assignment_identifier'
+	| 'attribute_identifier'
+	| 'reference_identifier'
+	| 'function_identifier'
+	| 'parameter'
+	| 'attribute'
 	| 'string_lit'
+	| 'number_lit'
+	| 'boolean_lit'
+	| 'array_lit'
+	| 'object'
+	| 'reference'
+	| 'interpolation'
+	| 'ternary_expression'
+	| 'comparison_expression'
+	| 'logical_expression'
+	| 'arithmetic_expression'
+	| 'null_coalescing'
+	| 'unary_expression'
+	| 'postfix_expression'
+	| 'pipe_expression'
+	| 'list_comprehension'
+	| 'map_comprehension'
+	| 'function_call'
 	| 'block_comment'
-	| 'block_parameter'
 	| 'inline_comment'
 	| 'heredoc'
-	| 'heredoc_content'
-	| 'interpolation'
-	| 'function_call'
-	| 'block_assign'
-	| 'block_with_param'
-	| 'integer_lit'
-	| 'float_lit'
-	| 'float_lit_with_f'
-	| 'null_lit'
-	| 'boolean_lit'
 	| 'whitespace'
-	| 'property_access'
-	| 'array_lit'
-	| 'object_lit'
-	| 'unknown'
-	| 'number_lit'
-	| 'assignment'
-	| 'attribute'
-	| 'root'
-	| 'identifier';
+	| 'unknown';
+
+export type ValueType =
+	| PrimitiveValueType
+	| ComplexValueType
+	| ExpressionValueType;
+
+export type PrimitiveValueType =
+	| 'string'
+	| 'number'
+	| 'boolean'
+	| 'null';
+
+export type ComplexValueType =
+	| 'array'
+	| 'object'
+	| 'function'
+	| 'block';
+
+export type ExpressionValueType =
+	| 'ternary'
+	| 'comparison'
+	| 'logical'
+	| 'arithmetic'
+	| 'null_coalescing'
+	| 'unary'
+	| 'postfix'
+	| 'pipe'
+	| 'list_comprehension'
+	| 'map_comprehension'
+	| 'interpolation'
+	| 'reference';
 
 export interface Location {
 	start: {
@@ -55,7 +92,7 @@ export class Token {
 	readonly id: number;
 	type: TokenType;
 	value: string | number | boolean | null;
-	location: Location;
+	location: LocationRange;
 	children: Token[];
 	parent: Token | null;
 	decorators?: TokenDecorator[];
@@ -64,7 +101,7 @@ export class Token {
 		id: number,
 		type: TokenType,
 		value: string | number | boolean | null,
-		location: Location
+		location: LocationRange
 	) {
 		this.id = id;
 		this.type = type;
@@ -89,83 +126,22 @@ export class Token {
 		};
 	}
 
-	// Helper method to get displayable text for the token
 	getDisplayText(): string {
 		if (this.value === null) return '';
 		return String(this.value);
 	}
 }
+
 export enum PositionContext {
 	Block,
-	Function
+	Function,
+	Attribute,
+	Parameter,
+	Root,
+	RootAssignment,
+	Reference,
+	Unknown
 }
-
-export type PrimitiveValueType =
-	| 'string'
-	| 'number'
-	| 'boolean'
-	| 'null';
-
-export type ComplexValueType =
-	| 'array'
-	| 'object'
-	| 'function_call'
-	| 'property_access'
-	| 'interpolation'
-	| 'heredoc';
-
-export interface BlockDelimiter {
-	char: string;
-	line: number;
-	column: number;
-	type: 'brace' | 'bracket' | 'parenthesis';
-}
-
-export type ValueType = PrimitiveValueType | ComplexValueType;
-
-export interface TokenTypePatterns {
-	BLOCK: RegExp;
-	BLOCK_WITH_PARAM: RegExp;
-	BLOCK_ASSIGN: RegExp;
-	IDENTIFIER: RegExp;
-	FUNCTION_CALL: RegExp;
-	STRING: RegExp;
-	INTEGER: RegExp;
-	FLOAT: RegExp;
-	FLOAT_WITH_F: RegExp;
-	NULL: RegExp;
-	BOOLEAN: RegExp;
-	WHITESPACE: RegExp;
-	BLOCK_COMMENT: RegExp;
-	INLINE_COMMENT: RegExp;
-	HEREDOC: RegExp;
-	HEREDOC_CONTENT: RegExp;
-	HEREDOC_START: RegExp;
-	ARRAY: RegExp;
-	OBJECT: RegExp;
-}
-
-export const TOKEN_PATTERNS: TokenTypePatterns = {
-	BLOCK: /^\s*(\w+)\s*(?=\{)/,
-	BLOCK_WITH_PARAM: /^\s*(\w+)\s+"([^"]+)"\s*(?=\{)/,
-	BLOCK_ASSIGN: /^\s*(\w+)\s*=\s*\{/,
-	IDENTIFIER: /^\s*(\w+)\s*(?==)/,
-	FUNCTION_CALL: /^\s*(\w+)\s*(?=\()/,
-	STRING: /"([^"]*)"/,
-	INTEGER: /^-?\d+(?![.\d])/,
-	FLOAT: /^-?\d+\.\d+(?!f)/,
-	FLOAT_WITH_F: /^-?\d+\.\d+f\b/,
-	NULL: /^null\b/,
-	BOOLEAN: /^(?:true|false)\b/,
-	WHITESPACE: /^\s+/,
-	BLOCK_COMMENT: /^\/\*[\s\S]*?\*\//,
-	INLINE_COMMENT: /^(?:\/\/|#).*/,
-	HEREDOC: /^<<[-~]?(\w+)$/,
-	HEREDOC_CONTENT: /^.*$/,
-	HEREDOC_START: /^\s*<<[-~]?(\w+)\s*$/,
-	ARRAY: /^\[/,
-	OBJECT: /^\{/,
-};
 
 export interface DecoratorTypePatterns {
 	GIT_SSH_URL: RegExp;
@@ -206,42 +182,72 @@ export interface AttributeDefinition {
 	name: string;
 	description: string;
 	required: boolean;
-	value: ValueDefinition;
-	allowedValues?: string[];
-	isArray?: boolean;
+	types: ValueType[];
+	validation?: {
+		pattern?: string;
+		min?: number;
+		max?: number;
+		allowedValues?: any[];
+		customValidator?: (value: any) => boolean;
+	};
 	attributes?: AttributeDefinition[];
+	deprecated?: boolean;
+	deprecationMessage?: string;
 }
 
 export interface ParameterDefinition {
 	name: string;
-	type: PrimitiveValueType;
-	pattern?: string;
+	types: ValueType[];
 	required: boolean;
 	description?: string;
+	validation?: {
+		pattern?: string;
+		min?: number;
+		max?: number;
+		allowedValues?: any[];
+	};
 }
 
-export interface BlockTemplate {
+export interface BlockDefinition {
 	type: string;
 	parameters?: ParameterDefinition[];
 	attributes?: AttributeDefinition[];
-	blocks?: BlockTemplate[];
+	blocks?: BlockDefinition[];
 	min?: number;
 	max?: number;
 	description?: string;
 	arbitraryAttributes?: boolean;
+	validation?: {
+		requiredAttributes?: string[];
+		mutuallyExclusive?: string[][];
+		requiredChoice?: string[][];
+	};
 }
 
 export interface FunctionParameter {
 	name: string;
-	type: string;
+	types: ValueType[];
 	required: boolean;
 	description?: string;
 	variadic?: boolean;
+	defaultValue?: any;
+	validation?: {
+		pattern?: string;
+		min?: number;
+		max?: number;
+		allowedValues?: any[];
+	};
 }
 
 export interface FunctionReturnType {
-	type: string;
+	types: ValueType[];
 	description?: string;
+	validation?: {
+		pattern?: string;
+		min?: number;
+		max?: number;
+		allowedValues?: any[];
+	};
 }
 
 export interface FunctionDefinition {
@@ -249,50 +255,7 @@ export interface FunctionDefinition {
 	description: string;
 	parameters: FunctionParameter[];
 	returnType: FunctionReturnType;
-}
-
-
-export interface ValueDefinition {
-	type: ValueType;
-	elementType?: ValueType;  // For arrays, specifies the type of elements
-	properties?: Record<string, ValueDefinition>;  // For objects, defines nested property types
-	pattern?: string;  // For strings, regex pattern for validation
-	enum?: Array<string | number | boolean>;  // Allowed values for primitives
-	minItems?: number;  // For arrays
-	maxItems?: number;  // For arrays
-	required?: boolean;
-	description?: string;
-}
-
-export interface Location {
-	start: {
-		offset: number;
-		line: number;
-		column: number;
-	};
-	end: {
-		offset: number;
-		line: number;
-		column: number;
-	};
-	source?: string;
-}
-
-export interface ASTValue {
-	key?: string;
-	value: any;
-	location?: Location;
-}
-
-export interface BlockValue {
-	identifier: string;
-	blockType?: string;
-	pairs: ASTValue[];
-	location: Location;
-}
-
-export interface ASTNode {
-	type: string;
-	value: string | number | boolean | BlockValue | Record<string, ASTValue>;
-	location: Location;
+	examples?: string[];
+	deprecated?: boolean;
+	deprecationMessage?: string;
 }
