@@ -76,13 +76,11 @@ RootValue = val:(
   Block / 
   RootObject / 
   Array / 
-  TernaryExpression / 
-  ComparisonExpression / 
+  Expression /
   FunctionCall / 
   TypeConstraint /
   TypeConstructor /
-  CollectionConstructor /
-  Expression
+  CollectionConstructor
 ) {
   return val;
 }
@@ -101,9 +99,55 @@ BlockItems = items:(
   ParameterizedBlock /
   DynamicBlock /
   ValidationBlock /
+  MovedBlock /
+  CheckBlock /
+  ImportBlock /
+  LocalsBlock /
   Block
 )* {
   return items;
+}
+MovedBlock = "moved" _ "{" _
+  "from" _ "=" _ from:Reference _
+  "to" _ "=" _ to:Reference _
+"}" {
+  return makeNode('moved_block', null, location(), [from, to]);
+}
+
+CheckBlock = "check" _ "{" _
+  assertions:AssertionBlock* _
+"}" {
+  return makeNode('check_block', null, location(), assertions);
+}
+
+AssertionBlock = "assert" _ "{" _
+  "condition" _ "=" _ condition:Expression _
+  "error_message" _ "=" _ message:StringLiteral _
+"}" {
+  return makeNode('assertion', null, location(), [
+    makeNode('condition', null, location(), [condition]),
+    makeNode('error_message', null, location(), [message])
+  ]);
+}
+
+ImportBlock = "import" _ "{" _
+  "id" _ "=" _ id:StringLiteral _
+  "to" _ "=" _ to:Reference _
+"}" {
+  return makeNode('import_block', null, location(), [id, to]);
+}
+
+LocalsBlock = "locals" _ "{" _
+  assignments:LocalAssignment* _
+"}" {
+  return makeNode('locals_block', null, location(), assignments);
+}
+
+LocalAssignment = name:Identifier _ "=" _ value:Expression {
+  return makeNode('local_assignment', name, location(), [
+    makeIdentifierNode(name, location()),
+    value
+  ]);
 }
 
 ParameterizedBlock = name:BlockIdentifier _ param:StringLiteral _ "{" _ items:BlockItems _ "}" {
@@ -175,14 +219,141 @@ Value = val:(
   return val;
 }
 
-Reference = !FunctionCall head:ReferenceIdentifier tail:("." ReferenceIdentifier)* {
-  return makeNode('reference', head.value + tail.map(t => "." + t[1].value).join(''), location());
+Reference = !FunctionCall ref:(
+  DependencyReference /
+  LocalReference /
+  ModuleReference /
+  TerraformReference /
+  VarReference /
+  DataReference /
+  PathReference
+) {
+  return ref;
 }
 
-ReferenceIdentifier
-  = name:$([a-zA-Z_][a-zA-Z0-9_\-.]*) {
-    return makeNode('reference_identifier', name, location());
-  }
+DependencyReference = "dependency" "." name:ReferenceIdentifier chain:("." ReferenceIdentifier)* {
+  const accessChain = chain.map(c => c[1]);
+  return makeNode('dependency_reference', null, location(), [
+    makeNode('dependency_name', name.value, location(), [name]),
+    makeNode('access_chain', null, location(), accessChain)
+  ]);
+}
+
+LocalReference = 
+  namespace:"local" "." 
+  first:ReferenceIdentifier 
+  rest:("." ReferenceIdentifier)* {
+    const accessChain = [first, ...rest.map(r => r[1])];
+    return makeNode('local_reference', null, location(), [
+      makeNode('namespace', namespace, location()),
+      makeNode('access_chain', null, location(), accessChain, {
+        // Add order metadata
+        resolution_order: accessChain.map((id, index) => ({
+          level: index + 1,
+          identifier: id.value
+        }))
+      })
+    ]);
+}
+
+ModuleReference = 
+  namespace:"module" "."
+  moduleName:ReferenceIdentifier "."
+  first:ReferenceIdentifier
+  rest:("." ReferenceIdentifier)* {
+    const accessChain = [first, ...rest.map(r => r[1])];
+    return makeNode('module_reference', null, location(), [
+      makeNode('namespace', namespace, location()),
+      makeNode('module_name', moduleName.value, location(), [moduleName]),
+      makeNode('access_chain', null, location(), accessChain, {
+        resolution_order: accessChain.map((id, index) => ({
+          level: index + 1,
+          identifier: id.value
+        }))
+      })
+    ]);
+}
+
+TerraformReference = 
+  namespace:"terraform" "."
+  attribute:ReferenceIdentifier {
+    return makeNode('terraform_reference', null, location(), [
+      makeNode('namespace', namespace, location()),
+      makeNode('terraform_attribute', attribute.value, location(), [attribute])
+    ]);
+}
+
+VarReference = 
+  namespace:"var" "."
+  first:ReferenceIdentifier
+  rest:("." ReferenceIdentifier)* {
+    const accessChain = [first, ...rest.map(r => r[1])];
+    return makeNode('var_reference', null, location(), [
+      makeNode('namespace', namespace, location()),
+      makeNode('access_chain', null, location(), accessChain, {
+        resolution_order: accessChain.map((id, index) => ({
+          level: index + 1,
+          identifier: id.value
+        }))
+      })
+    ]);
+}
+
+DataReference = 
+  namespace:"data" "."
+  provider:ReferenceIdentifier "."
+  resourceName:ReferenceIdentifier
+  rest:("." ReferenceIdentifier)* {
+    const accessChain = [resourceName, ...rest.map(r => r[1])];
+    return makeNode('data_reference', null, location(), [
+      makeNode('namespace', namespace, location()),
+      makeNode('provider', provider.value, location(), [provider]),
+      makeNode('access_chain', null, location(), accessChain, {
+        resolution_order: accessChain.map((id, index) => ({
+          level: index + 1,
+          identifier: id.value
+        }))
+      })
+    ]);
+}
+
+PathReference = 
+  namespace:"path" "."
+  attribute:("module" / "root" / "cwd") {
+    return makeNode('path_reference', null, location(), [
+      makeNode('namespace', namespace, location()),
+      makeNode('path_attribute', attribute, location())
+    ]);
+}
+
+ReferenceChain = head:ReferenceIdentifier tail:("." ReferenceIdentifier)* {
+  return [head, ...tail.map(t => t[1])];
+}
+
+ReferenceIdentifier = (
+  SimpleIdentifier /
+  IndexIdentifier /
+  QuotedIdentifier
+)
+
+SimpleIdentifier = name:$([a-zA-Z_][a-zA-Z0-9_\-]*) {
+  return makeNode('reference_identifier', name, location());
+}
+
+IndexIdentifier = "[" index:(
+  DecimalNumber /
+  QuotedIndex /
+  UnquotedIndex
+) "]" {
+  return makeNode('index_identifier', index, location());
+}
+
+QuotedIndex = '"' content:$([^"]*) '"' { return content; }
+UnquotedIndex = content:$([^\]]*) { return content; }
+
+QuotedIdentifier = '"' name:$([^"]*) '"' {
+  return makeNode('reference_identifier', name, location(), [], { quoted: true });
+}
 
 Object = "{" _ pairs:(Pair (_ ","? _ Pair)* (_ ",")?)? _ "}" {
   const values = pairs ? [pairs[0], ...pairs[1].map(pair => pair[3])] : [];
@@ -232,7 +403,53 @@ SingleStringChar = [^'\\${] / EscapedChar / InterpolatedExpr
 
 EscapeSequence = "\\" . { return text(); }
 EscapedChar = "\\" . { return text(); }
-InterpolatedExpr = "${" expr:(!("}") .)* "}" { return "${" + expr.map(e => e[1]).join('') + "}"; }
+InterpolatedExpr = (
+  SimpleInterpolation /
+  DirectiveInterpolation /
+  LegacyInterpolation
+)
+
+StringContent = chars:(
+  [^%] /
+  "%" ![{}] /
+  InterpolatedExpr
+)* {
+  return makeNode('string_content', chars.join(''), location());
+}
+
+LegacyInterpolation = "${" expr:(!("}") .)* "}" {
+  return makeNode('legacy_interpolation', expr.map(e => e[1]).join(''), location());
+}
+
+SimpleInterpolation = "%{" _ expr:Expression _ "}" {
+  return makeNode('interpolation', null, location(), [expr]);
+}
+
+DirectiveInterpolation = 
+  IfDirective /
+  ForDirective /
+  ElseDirective /
+  EndifDirective
+
+IfDirective = "%{" _ "if" _ condition:Expression _ "}" content:StringContent {
+  return makeNode('if_directive', null, location(), [condition, content]);
+}
+
+ForDirective = "%{" _ "for" _ item:Identifier _ "in" _ collection:Expression _ "}" content:StringContent {
+  return makeNode('for_directive', null, location(), [
+    makeIdentifierNode(item, location()),
+    collection,
+    content
+  ]);
+}
+
+ElseDirective = "%{" _ "else" _ "}" content:StringContent {
+  return makeNode('else_directive', null, location(), [content]);
+}
+
+EndifDirective = "%{" _ "endif" _ "}" {
+  return makeNode('endif_directive', null, location());
+}
 
 Number = HexNumber / OctalNumber / DecimalNumber
 
@@ -278,11 +495,75 @@ SimpleExpression = "${" expr:(!("}") .)* "}" {
   return makeNode('interpolation', text(), location());
 }
 
-Expression = ConditionalExpression
-
-ConditionalExpression = 
+Expression = 
   TernaryExpression /
+  ComprehensionExpression /
+  PipeExpression
+
+ComprehensionExpression = 
+  ListComprehension /
+  MapComprehension
+
+PipeableExpression = 
+  ConditionalExpression /
+  NullCoalescingExpression /
+  RangeExpression /
+  PrimaryExpression
+
+PipeExpression = head:ConditionalExpression tail:(_ "|>" _ FunctionCall)* {
+  return tail.reduce((expr, [_, __, ___, func]) => {
+    func.children = [expr, ...func.children.slice(1)];
+    return func;
+  }, head);
+}
+
+ListComprehension = "[" _ 
+  "for" _ item:Identifier _ 
+  "in" _ collection:PipeableExpression _
+  OptionalCondition? _
+  ":" _ expr:PipeableExpression _ 
+"]" {
+  return makeNode('list_comprehension', null, location(), [
+    makeIdentifierNode(item, location()),
+    collection,
+    expr
+  ]);
+}
+
+MapComprehension = "{" _
+  "for" _ item:Identifier _ 
+  "in" _ collection:PipeableExpression _
+  OptionalCondition? _
+  "=>" _ key:PipeableExpression _ 
+  ":" _ value:PipeableExpression _
+"}" {
+  return makeNode('map_comprehension', null, location(), [
+    makeIdentifierNode(item, location()),
+    collection,
+    key,
+    value
+  ]);
+}
+
+OptionalCondition = "if" _ condition:PipeableExpression {
+  return condition;
+}
+
+ConditionalExpression =
+  NullCoalescingExpression /
   LogicalExpression
+
+
+NullCoalescingExpression = head:LogicalExpression tail:(_ "??" _ LogicalExpression)* {
+  return tail.reduce((left, [_, __, ___, right]) =>
+    makeNode('null_coalescing', null, location(), [left, right]),
+    head
+  );
+}
+
+RangeExpression = "range" "(" _ start:PipeableExpression _ "," _ end:PipeableExpression _ ")" {
+  return makeNode('range_expression', null, location(), [start, end]);
+}
 
 ForExpression = "for" _ identifier:Identifier _ "in" _ collection:Expression _ ":" _ body:Expression {
   return makeNode('for_expression', null, location(), [
@@ -315,9 +596,9 @@ BinaryLogicalExpression = left:Value _ operator:("&&" / "||") _ right:Value {
 }
 
 TernaryExpression =
-  condition:LogicalExpression _
-  "?" _ trueExpr:LogicalExpression _
-  ":" _ falseExpr:LogicalExpression {
+  condition:ComparisonExpression _
+  "?" _ trueExpr:Expression _
+  ":" _ falseExpr:Expression {
     return makeNode('ternary_expression', null, location(), [condition, trueExpr, falseExpr]);
 }
 
@@ -384,17 +665,50 @@ MemberAccess = _ "." _ member:Identifier {
   return base => makeNode('member_access', null, location(), [base, makeIdentifierNode(member, location())]);
 }
 
-FunctionCall = identifier:FunctionIdentifier _ "(" _ args:FunctionArgs? _ ")" {
-  const argArray = args || [];
-  return makeNode('function_call', null, location(), [identifier, ...argArray]);
+FunctionCall = 
+  identifier:FunctionIdentifier _
+  TypeParameters? _
+  "(" _ args:FunctionArgs? _ ")" {
+    return makeNode('function_call', identifier.value, location(), [
+      identifier,
+      ...(args || [])
+    ]);
 }
 
-FunctionArgs = first:FunctionArg rest:(_ "," _ FunctionArg?)* {
-  // Filter out null/undefined args from optional trailing arguments
-  const additionalArgs = rest
-    .map(r => r[3])
-    .filter(arg => arg !== null && arg !== undefined);
-  return [first, ...additionalArgs];
+TypeParameters = "<" _ types:TypeConstraint (_ "," _ TypeConstraint)* _ ">" {
+  return makeNode('type_parameters', null, location(), [
+    types,
+    ...($2 || []).map(t => t[3])
+  ]);
+}
+
+FunctionArgs = args:(
+  PositionalArgs /
+  NamedArgs /
+  VariadicArgs /
+  EmptyArgs
+) {
+  return args;
+}
+
+EmptyArgs = "" {
+  return [];
+}
+
+PositionalArgs = first:FunctionArg rest:(_ "," _ FunctionArg)* _ ","? {
+  return [first, ...rest.map(r => r[3])];
+}
+
+NamedArgs = first:NamedArg rest:(_ "," _ NamedArg)* {
+  return [first, ...rest.map(r => r[3])];
+}
+
+NamedArg = name:Identifier _ "=" _ value:Expression {
+  return makeNode('named_argument', name, location(), [value]);
+}
+
+VariadicArgs = args:Expression _ "..." {
+  return makeNode('variadic_arguments', null, location(), [args]);
 }
 
 FunctionArg = arg:(
@@ -421,7 +735,24 @@ Identifier = first:[a-zA-Z_] rest:[a-zA-Z0-9_\-.]* {
 
 _ = (Whitespace / Comment)*
 Whitespace = [ \t\n\r]
-Comment = SingleLineComment / MultiLineComment
+Comment = 
+  DirectiveComment /
+  DocumentationComment /
+  SingleLineComment /
+  MultiLineComment
+
+DirectiveComment = "#@" directive:DirectiveIdentifier _ content:[^\n]* "\n" {
+  return makeNode('directive_comment', directive, location(), [
+    makeNode('comment_content', content.join(''), location())
+  ]);
+}
+
+DirectiveIdentifier = "description" / "example" / "deprecated" / "internal"
+
+DocumentationComment = "/**" _ content:(!"*/" .)* _ "*/" {
+  return makeNode('documentation_comment', content.map(c => c[1]).join(''), location());
+}
+
 SingleLineComment = ("#" / "//") [^\n]* "\n"?
 MultiLineComment = "/*" (!"*/" .)* "*/"
 
@@ -487,7 +818,34 @@ MetaArgument =
   ForEachArg /
   DependsOnArg /
   ProviderArg /
-  LifecycleArg
+  LifecycleArg /
+  PreconditionBlock /
+  PostconditionBlock /
+  ReplaceTriggerBlock
+
+PreconditionBlock = "precondition" _ "{" _
+  "condition" _ "=" _ condition:Expression _
+  "error_message" _ "=" _ message:StringLiteral _
+"}" {
+  return makeNode('precondition', null, location(), [
+    makeNode('condition', null, location(), [condition]),
+    makeNode('error_message', null, location(), [message])
+  ]);
+}
+
+PostconditionBlock = "postcondition" _ "{" _
+  "condition" _ "=" _ condition:Expression _
+  "error_message" _ "=" _ message:StringLiteral _
+"}" {
+  return makeNode('postcondition', null, location(), [
+    makeNode('condition', null, location(), [condition]),
+    makeNode('error_message', null, location(), [message])
+  ]);
+}
+
+ReplaceTriggerBlock = "replace_triggered_by" _ "=" _ triggers:Array {
+  return makeNode('replace_triggered_by', null, location(), [triggers]);
+}
 
 CountArg = "count" _ "=" _ value:Value {
   return makeNode('meta_count', null, location(), [value]);
