@@ -206,8 +206,10 @@ TernaryExpression = condition:(ComparisonExpression / FunctionCall) _ "?" _ true
   return makeNode('ternary_expression', null, location(), [condition, trueExpr, falseExpr]);
 }
 
-ComparisonExpression = left:(FunctionCall / StringLiteral / SimpleExpression) _ "==" _ right:(StringLiteral / FunctionCall / SimpleExpression) {
-  return makeNode('comparison_expression', null, location(), [left, right]);
+ComparisonOperator = "==" / "!=" / ">=" / "<=" / ">" / "<"
+
+ComparisonExpression = left:(FunctionCall / StringLiteral / SimpleExpression) _ operator:ComparisonOperator _ right:(StringLiteral / FunctionCall / SimpleExpression) {
+  return makeNode('comparison_expression', operator, location(), [left, right]);
 }
 
 FunctionCall = identifier:FunctionIdentifier _ "(" _ args:FunctionArgs? _ ")" {
