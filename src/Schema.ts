@@ -1,7 +1,8 @@
 import blocks from './blocks.json';
 import functionsJson from './functions.json';
-const functions = functionsJson as { functions: FunctionDefinition[] };
 import type { AttributeDefinition, BlockDefinition, FunctionDefinition, ValueType } from './model';
+
+const functions = functionsJson as { functions: FunctionDefinition[] };
 
 export class Schema {
     private static instance: Schema;
@@ -151,7 +152,7 @@ export class Schema {
         }
 
         // Check if too many arguments (unless the last parameter is variadic)
-        const lastParam = funcDef.parameters[funcDef.parameters.length - 1];
+        const lastParam = funcDef.parameters.at(-1);
         if (!lastParam?.variadic && args.length > funcDef.parameters.length) {
             return false;
         }
@@ -169,24 +170,31 @@ export class Schema {
         // Check if value type matches any of the allowed types
         const isValidType = attr.types.some(type => {
             switch (type) {
-                case 'string':
+                case 'string': {
                     return typeof value === 'string' && 
                            (!attr.validation?.pattern || new RegExp(attr.validation.pattern).test(value));
-                case 'number':
+                }
+                case 'number': {
                     return typeof value === 'number' &&
                            (!attr.validation?.min || value >= attr.validation.min) &&
                            (!attr.validation?.max || value <= attr.validation.max);
-                case 'boolean':
+                }
+                case 'boolean': {
                     return typeof value === 'boolean';
-                case 'array':
+                }
+                case 'array': {
                     return Array.isArray(value);
-                case 'object':
+                }
+                case 'object': {
                     return typeof value === 'object' && value !== null && !Array.isArray(value);
-                case 'null':
+                }
+                case 'null': {
                     return value === null;
+                }
                 // Add other type validations as needed
-                default:
+                default: {
                     return false;
+                }
             }
         });
 

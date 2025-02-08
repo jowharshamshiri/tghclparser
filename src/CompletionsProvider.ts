@@ -1,6 +1,9 @@
-import { Schema } from './Schema';
-import { BlockDefinition, Token } from './model';
-import { CompletionItem, CompletionItemKind, Position } from 'vscode-languageserver';
+import type { CompletionItem, Position } from 'vscode-languageserver';
+import { CompletionItemKind } from 'vscode-languageserver';
+
+import type { BlockDefinition, Token } from './model';
+import type { Schema } from './Schema';
+
 type CompletionContext =
 	| { type: 'block'; parentBlock?: string }
 	| { type: 'nested_block'; parentBlock: string }
@@ -21,16 +24,21 @@ export class CompletionsProvider {
 		const context = this.determineCompletionContext(token, line, position);
 
 		switch (context.type) {
-			case 'block':
+			case 'block': {
 				return this.getBlockCompletions(context.parentBlock);
-			case 'attribute':
+			}
+			case 'attribute': {
 				return this.getAttributeCompletions(context.parentBlock);
-			case 'value':
+			}
+			case 'value': {
 				return this.getValueCompletions(context.parentBlock, context.attributeName);
-			case 'nested_block':
+			}
+			case 'nested_block': {
 				return this.getNestedBlockCompletions(context.parentBlock);
-			default:
+			}
+			default: {
 				return [];
+			}
 		}
 	}
 
@@ -47,7 +55,7 @@ export class CompletionsProvider {
 		return parentTemplate.blocks
 			.map(blockDef => {
 				const template = this.schema.getBlockDefinition(blockDef.type);
-				if (!template) return undefined;
+				if (!template) return;
 
 				return {
 					label: template.type,

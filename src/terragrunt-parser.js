@@ -33,7 +33,7 @@ function peg$padEnd(str, targetLength, padString) {
 }
 
 peg$SyntaxError.prototype.format = function(sources) {
-  var str = "Error: " + this.message;
+  var str = `Error: ${  this.message}`;
   if (this.location) {
     var src = null;
     var k;
@@ -47,20 +47,20 @@ peg$SyntaxError.prototype.format = function(sources) {
     var offset_s = (this.location.source && (typeof this.location.source.offset === "function"))
       ? this.location.source.offset(s)
       : s;
-    var loc = this.location.source + ":" + offset_s.line + ":" + offset_s.column;
+    var loc = `${this.location.source  }:${  offset_s.line  }:${  offset_s.column}`;
     if (src) {
       var e = this.location.end;
       var filler = peg$padEnd("", offset_s.line.toString().length, ' ');
       var line = src[s.line - 1];
       var last = s.line === e.line ? e.column : line.length + 1;
       var hatLen = (last - s.column) || 1;
-      str += "\n --> " + loc + "\n"
-          + filler + " |\n"
-          + offset_s.line + " | " + line + "\n"
-          + filler + " | " + peg$padEnd("", s.column - 1, ' ')
-          + peg$padEnd("", hatLen, "^");
+      str += `\n --> ${  loc  }\n${
+           filler  } |\n${
+           offset_s.line  } | ${  line  }\n${
+           filler  } | ${  peg$padEnd("", s.column - 1, ' ')
+           }${peg$padEnd("", hatLen, "^")}`;
     } else {
-      str += "\n at " + loc;
+      str += `\n at ${  loc}`;
     }
   }
   return str;
@@ -68,29 +68,29 @@ peg$SyntaxError.prototype.format = function(sources) {
 
 peg$SyntaxError.buildMessage = function(expected, found) {
   var DESCRIBE_EXPECTATION_FNS = {
-    literal: function(expectation) {
-      return "\"" + literalEscape(expectation.text) + "\"";
+    literal(expectation) {
+      return `"${  literalEscape(expectation.text)  }"`;
     },
 
-    class: function(expectation) {
-      var escapedParts = expectation.parts.map(function(part) {
+    class(expectation) {
+      var escapedParts = expectation.parts.map((part) => {
         return Array.isArray(part)
-          ? classEscape(part[0]) + "-" + classEscape(part[1])
+          ? `${classEscape(part[0])  }-${  classEscape(part[1])}`
           : classEscape(part);
       });
 
-      return "[" + (expectation.inverted ? "^" : "") + escapedParts.join("") + "]";
+      return `[${  expectation.inverted ? "^" : ""  }${escapedParts.join("")  }]`;
     },
 
-    any: function() {
+    any() {
       return "any character";
     },
 
-    end: function() {
+    end() {
       return "end of input";
     },
 
-    other: function(expectation) {
+    other(expectation) {
       return expectation.description;
     }
   };
@@ -101,28 +101,28 @@ peg$SyntaxError.buildMessage = function(expected, found) {
 
   function literalEscape(s) {
     return s
-      .replace(/\\/g, "\\\\")
-      .replace(/"/g,  "\\\"")
-      .replace(/\0/g, "\\0")
-      .replace(/\t/g, "\\t")
-      .replace(/\n/g, "\\n")
-      .replace(/\r/g, "\\r")
-      .replace(/[\x00-\x0F]/g,          function(ch) { return "\\x0" + hex(ch); })
-      .replace(/[\x10-\x1F\x7F-\x9F]/g, function(ch) { return "\\x"  + hex(ch); });
+      .replaceAll('\\', "\\\\")
+      .replaceAll('"',  "\\\"")
+      .replaceAll('\0', "\\0")
+      .replaceAll('\t', "\\t")
+      .replaceAll('\n', "\\n")
+      .replaceAll('\r', "\\r")
+      .replaceAll(/[\x00-\x0F]/g,          (ch) => { return `\\x0${  hex(ch)}`; })
+      .replaceAll(/[\x10-\x1F\x7F-\x9F]/g, (ch) => { return `\\x${   hex(ch)}`; });
   }
 
   function classEscape(s) {
     return s
-      .replace(/\\/g, "\\\\")
-      .replace(/\]/g, "\\]")
-      .replace(/\^/g, "\\^")
-      .replace(/-/g,  "\\-")
-      .replace(/\0/g, "\\0")
-      .replace(/\t/g, "\\t")
-      .replace(/\n/g, "\\n")
-      .replace(/\r/g, "\\r")
-      .replace(/[\x00-\x0F]/g,          function(ch) { return "\\x0" + hex(ch); })
-      .replace(/[\x10-\x1F\x7F-\x9F]/g, function(ch) { return "\\x"  + hex(ch); });
+      .replaceAll('\\', "\\\\")
+      .replaceAll(']', "\\]")
+      .replaceAll('^', "\\^")
+      .replaceAll('-',  "\\-")
+      .replaceAll('\0', "\\0")
+      .replaceAll('\t', "\\t")
+      .replaceAll('\n', "\\n")
+      .replaceAll('\r', "\\r")
+      .replaceAll(/[\x00-\x0F]/g,          (ch) => { return `\\x0${  hex(ch)}`; })
+      .replaceAll(/[\x10-\x1F\x7F-\x9F]/g, (ch) => { return `\\x${   hex(ch)}`; });
   }
 
   function describeExpectation(expectation) {
@@ -146,24 +146,27 @@ peg$SyntaxError.buildMessage = function(expected, found) {
     }
 
     switch (descriptions.length) {
-      case 1:
+      case 1: {
         return descriptions[0];
+      }
 
-      case 2:
-        return descriptions[0] + " or " + descriptions[1];
+      case 2: {
+        return `${descriptions[0]  } or ${  descriptions[1]}`;
+      }
 
-      default:
-        return descriptions.slice(0, -1).join(", ")
-          + ", or "
-          + descriptions[descriptions.length - 1];
+      default: {
+        return `${descriptions.slice(0, -1).join(", ")
+           }, or ${
+           descriptions.at(-1)}`;
+      }
     }
   }
 
   function describeFound(found) {
-    return found ? "\"" + literalEscape(found) + "\"" : "end of input";
+    return found ? `"${  literalEscape(found)  }"` : "end of input";
   }
 
-  return "Expected " + describeExpected(expected) + " but " + describeFound(found) + " found.";
+  return `Expected ${  describeExpected(expected)  } but ${  describeFound(found)  } found.`;
 };
 
 function peg$parse(input, options) {
@@ -276,10 +279,10 @@ function peg$parse(input, options) {
   var peg$c98 = "ignore_changes";
   var peg$c99 = "validation";
 
-  var peg$r0 = /^[a-zA-Z_]/;
-  var peg$r1 = /^[a-zA-Z0-9_\-.*]/;
-  var peg$r2 = /^[a-zA-Z0-9_\-.]/;
-  var peg$r3 = /^[a-zA-Z0-9_\-]/;
+  var peg$r0 = /^[a-z_]/i;
+  var peg$r1 = /^[\w\-.*]/;
+  var peg$r2 = /^[\w\-.]/;
+  var peg$r3 = /^[\w\-]/;
   var peg$r4 = /^[^"]/;
   var peg$r5 = /^[^\]]/;
   var peg$r6 = /^[A-Z]/;
@@ -289,15 +292,15 @@ function peg$parse(input, options) {
   var peg$r10 = /^[^'\\${]/;
   var peg$r11 = /^[^%]/;
   var peg$r12 = /^[{}]/;
-  var peg$r13 = /^[0-9a-fA-F]/;
+  var peg$r13 = /^[0-9a-f]/i;
   var peg$r14 = /^[0-7]/;
   var peg$r15 = /^[1-9]/;
-  var peg$r16 = /^[0-9]/;
-  var peg$r17 = /^[eE]/;
+  var peg$r16 = /^\d/;
+  var peg$r17 = /^e/i;
   var peg$r18 = /^[+\-]/;
   var peg$r19 = /^[<>]/;
-  var peg$r20 = /^[%*\/]/;
-  var peg$r21 = /^[a-zA-Z0-9_]/;
+  var peg$r20 = /^[%*/]/;
+  var peg$r21 = /^\w/;
   var peg$r22 = /^[ \t\n\r]/;
   var peg$r23 = /^[^\n]/;
 
@@ -658,13 +661,13 @@ function peg$parse(input, options) {
   return makeNode('endif_directive', null, location());
 };
   var peg$f53 = function(digits) {
-  return makeNode('number_lit', parseInt(digits, 16), location());
+  return makeNode('number_lit', Number.parseInt(digits, 16), location());
 };
   var peg$f54 = function(digits) {
-  return makeNode('number_lit', parseInt(digits, 8), location());
+  return makeNode('number_lit', Number.parseInt(digits, 8), location());
 };
   var peg$f55 = function(minus, int, frac, exp) {
-  return makeNode('number_lit', parseFloat(text()), location());
+  return makeNode('number_lit', Number.parseFloat(text()), location());
 };
   var peg$f56 = function(val) { 
   return makeNode('boolean_lit', val === 'true', location()); 
@@ -913,7 +916,7 @@ function peg$parse(input, options) {
 
   if (options.startRule) {
     if (!(options.startRule in peg$startRuleFunctions)) {
-      throw new Error("Can't start parsing from rule \"" + options.startRule + "\".");
+      throw new Error(`Can't start parsing from rule "${  options.startRule  }".`);
     }
 
     peg$startRuleFunction = peg$startRuleFunctions[options.startRule];
@@ -960,11 +963,11 @@ function peg$parse(input, options) {
   }
 
   function peg$literalExpectation(text, ignoreCase) {
-    return { type: "literal", text: text, ignoreCase: ignoreCase };
+    return { type: "literal", text, ignoreCase };
   }
 
   function peg$classExpectation(parts, inverted, ignoreCase) {
-    return { type: "class", parts: parts, inverted: inverted, ignoreCase: ignoreCase };
+    return { type: "class", parts, inverted, ignoreCase };
   }
 
   function peg$anyExpectation() {
@@ -976,7 +979,7 @@ function peg$parse(input, options) {
   }
 
   function peg$otherExpectation(description) {
-    return { type: "other", description: description };
+    return { type: "other", description };
   }
 
   function peg$computePosDetails(pos) {
@@ -8726,13 +8729,13 @@ function peg$parse(input, options) {
       // Check if text is a string
       if (typeof text == 'string') {
         preview = text?.substring(Math.max(0, pos - 20), pos + 20)
-          .replace(/\n/g, '\\n');
+          .replaceAll('\n', '\\n');
       } else {
         if (typeof text == 'function') {
           preview = text().substring(Math.max(0, pos - 20), pos + 20);
         } else {
           preview = '';
-          console.log('text is not a function, it is a ' + typeof text);
+          console.log(`text is not a function, it is a ${  typeof text}`);
         }
       }
       const positionMarker = '→';
@@ -8808,7 +8811,6 @@ const peg$allowedStartRules = [
 ];
 
 export {
+  peg$parse as parse,
   peg$allowedStartRules as StartRules,
-  peg$SyntaxError as SyntaxError,
-  peg$parse as parse
-};
+  peg$SyntaxError as SyntaxError};

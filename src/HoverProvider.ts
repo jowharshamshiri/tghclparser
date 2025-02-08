@@ -1,46 +1,63 @@
-import { Schema } from './Schema';
-import { AttributeDefinition, BlockDefinition, FunctionDefinition, Token, TokenType, ValueType } from './model';
 import type { HoverResult } from '.';
+import type { AttributeDefinition, BlockDefinition, FunctionDefinition, Token, TokenType, ValueType } from './model';
+import type { Schema } from './Schema';
 
 export class HoverProvider {
 	constructor(private schema: Schema) { }
 
 	private formatValueType(type: ValueType): string {
 		switch (type) {
-			case 'array':
+			case 'array': {
 				return 'Array';
-			case 'object':
+			}
+			case 'object': {
 				return 'Object';
-			case 'function':
+			}
+			case 'function': {
 				return 'Function';
-			case 'block':
+			}
+			case 'block': {
 				return 'Block';
-			case 'ternary':
+			}
+			case 'ternary': {
 				return 'Ternary Expression';
-			case 'comparison':
+			}
+			case 'comparison': {
 				return 'Comparison';
-			case 'logical':
+			}
+			case 'logical': {
 				return 'Logical Expression';
-			case 'arithmetic':
+			}
+			case 'arithmetic': {
 				return 'Arithmetic Expression';
-			case 'null_coalescing':
+			}
+			case 'null_coalescing': {
 				return 'Null Coalescing';
-			case 'unary':
+			}
+			case 'unary': {
 				return 'Unary Expression';
-			case 'postfix':
+			}
+			case 'postfix': {
 				return 'Postfix Expression';
-			case 'pipe':
+			}
+			case 'pipe': {
 				return 'Pipe Expression';
-			case 'list_comprehension':
+			}
+			case 'list_comprehension': {
 				return 'List Comprehension';
-			case 'map_comprehension':
+			}
+			case 'map_comprehension': {
 				return 'Map Comprehension';
-			case 'interpolation':
+			}
+			case 'interpolation': {
 				return 'String Interpolation';
-			case 'reference':
+			}
+			case 'reference': {
 				return 'Reference';
-			default:
+			}
+			default: {
 				return type.charAt(0).toUpperCase() + type.slice(1);
+			}
 		}
 	}
 
@@ -52,8 +69,7 @@ export class HoverProvider {
 	
 		// Add description with proper formatting
 		if (blockTemplate.description) {
-		  contents.push(blockTemplate.description, '');
-		  contents.push('---', '');  // Add horizontal rule for section separation
+		  contents.push(blockTemplate.description, '', '---', '');  // Add horizontal rule for section separation
 		}
 	
 		// Parameters section with better structure
@@ -61,8 +77,7 @@ export class HoverProvider {
 		  contents.push('### Parameters', '');
 		  blockTemplate.parameters.forEach(param => {
 			const typeStr = param.types.map(t => `\`${this.formatValueType(t)}\``).join(' | ');
-			contents.push(`**${param.name}** ${param.required ? '(required)' : '(optional)'}`);
-			contents.push(`- *Type:* ${typeStr}`);
+			contents.push(`**${param.name}** ${param.required ? '(required)' : '(optional)'}`, `- *Type:* ${typeStr}`);
 			if (param.description) {
 			  contents.push(`- *Description:* ${param.description}`);
 			}
@@ -143,12 +158,11 @@ export class HoverProvider {
 		  contents.push(funcDef.description, '', '---', '');
 		}
 	
-		if (funcDef.parameters.length) {
+		if (funcDef.parameters.length > 0) {
 		  contents.push('### Parameters', '');
 		  funcDef.parameters.forEach(param => {
 			const typeStr = param.types.map(t => `\`${this.formatValueType(t)}\``).join(' | ');
-			contents.push(`**${param.name}** ${param.required ? '(required)' : '(optional)'}`);
-			contents.push(`- *Type:* ${typeStr}${param.variadic ? ' (variadic)' : ''}`);
+			contents.push(`**${param.name}** ${param.required ? '(required)' : '(optional)'}`, `- *Type:* ${typeStr}${param.variadic ? ' (variadic)' : ''}`);
 			if (param.description) {
 			  contents.push(`- *Description:* ${param.description}`);
 			}
@@ -200,8 +214,7 @@ export class HoverProvider {
 	
 		contents.push('### Details', '');
 		const typeStr = attr.types.map(t => `\`${this.formatValueType(t)}\``).join(' | ');
-		contents.push(`- *Type:* ${typeStr}`);
-		contents.push(`- *Required:* ${attr.required ? 'Yes' : 'No'}`);
+		contents.push(`- *Type:* ${typeStr}`, `- *Required:* ${attr.required ? 'Yes' : 'No'}`);
 	
 		if (attr.validation) {
 		  contents.push('', '### Validation', '');
@@ -226,8 +239,7 @@ export class HoverProvider {
 		  contents.push('', '### Properties', '');
 		  attr.attributes.forEach(nestedAttr => {
 			const nestedTypeStr = nestedAttr.types.map(t => `\`${this.formatValueType(t)}\``).join(' | ');
-			contents.push(`**${nestedAttr.name}** ${nestedAttr.required ? '(required)' : '(optional)'}`);
-			contents.push(`- *Type:* ${nestedTypeStr}`);
+			contents.push(`**${nestedAttr.name}** ${nestedAttr.required ? '(required)' : '(optional)'}`, `- *Type:* ${nestedTypeStr}`);
 			if (nestedAttr.description) {
 			  contents.push(`- *Description:* ${nestedAttr.description}`);
 			}
@@ -263,7 +275,7 @@ export class HoverProvider {
 
 			case 'attribute_identifier': {
 				if (token.parent?.parent?.type === 'block') {
-					let parentBlock = token.parent.parent;
+					const parentBlock = token.parent.parent;
 					const parentBlockDefinition = this.schema.getBlockDefinition(parentBlock.getDisplayText());
 					const attr = parentBlockDefinition?.attributes?.find(a => a.name === value);
 					if (attr) {

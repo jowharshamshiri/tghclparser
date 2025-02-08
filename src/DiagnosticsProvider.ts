@@ -1,6 +1,8 @@
-import { Schema } from './Schema';
-import { Token, AttributeDefinition, FunctionDefinition, BlockDefinition, ValueType } from './model';
-import { Diagnostic, DiagnosticSeverity } from 'vscode-languageserver';
+import type { Diagnostic} from 'vscode-languageserver';
+import { DiagnosticSeverity } from 'vscode-languageserver';
+
+import type { AttributeDefinition, BlockDefinition, FunctionDefinition, Token, ValueType } from './model';
+import type { Schema } from './Schema';
 
 export class DiagnosticsProvider {
 	constructor(private schema: Schema) { }
@@ -11,27 +13,33 @@ export class DiagnosticsProvider {
 
 		const validateToken = (token: Token) => {
 			switch (token.type) {
-				case 'block':
+				case 'block': {
 					this.validateBlock(token, seenBlocks, diagnostics);
 					break;
-				case 'function_call':
+				}
+				case 'function_call': {
 					this.validateFunction(token, diagnostics);
 					break;
+				}
 				// case 'identifier':
 				// 	this.validateIdentifier(token, diagnostics);
 				// 	break;
-				case 'attribute':
+				case 'attribute': {
 					this.validateAttribute(token, diagnostics);
 					break;
-				case 'parameter':
+				}
+				case 'parameter': {
 					this.validateParameter(token, diagnostics);
 					break;
-				case 'reference':
+				}
+				case 'reference': {
 					this.validateReference(token, diagnostics);
 					break;
-				case 'interpolation':
+				}
+				case 'interpolation': {
 					this.validateInterpolation(token, diagnostics);
 					break;
+				}
 			}
 
 			// Recursively validate children
@@ -62,7 +70,7 @@ export class DiagnosticsProvider {
 				if (attribute.deprecated) {
 					diagnostics.push(this.createDiagnostic(
 						token,
-						`Attribute "${attributeName}" is deprecated${attribute.deprecationMessage ? ': ' + attribute.deprecationMessage : ''}`,
+						`Attribute "${attributeName}" is deprecated${attribute.deprecationMessage ? `: ${  attribute.deprecationMessage}` : ''}`,
 						DiagnosticSeverity.Warning
 					));
 				}
@@ -256,7 +264,7 @@ export class DiagnosticsProvider {
 	private collectAllBlocks(token: Token): Token[] {
 		const blocks: Token[] = [];
 		
-		const collect = (t: Token, isRoot: boolean = false) => {
+		const collect = (t: Token, isRoot = false) => {
 			// Only add to blocks collection if it's not the root block
 			if (t.type === 'block' && !isRoot) {
 				blocks.push(t);
@@ -330,7 +338,7 @@ export class DiagnosticsProvider {
 		if (funcDef.deprecated) {
 			diagnostics.push(this.createDiagnostic(
 				token,
-				`Function "${funcName}" is deprecated${funcDef.deprecationMessage ? ': ' + funcDef.deprecationMessage : ''}`,
+				`Function "${funcName}" is deprecated${funcDef.deprecationMessage ? `: ${  funcDef.deprecationMessage}` : ''}`,
 				DiagnosticSeverity.Warning
 			));
 		}
@@ -354,7 +362,7 @@ export class DiagnosticsProvider {
 		}
 	
 		// Check if too many parameters (unless last parameter is variadic)
-		const lastParam = funcDef.parameters[funcDef.parameters.length - 1];
+		const lastParam = funcDef.parameters.at(-1);
 		if (!lastParam?.variadic && parameters.length > funcDef.parameters.length) {
 			diagnostics.push(this.createDiagnostic(
 				token,
@@ -382,15 +390,13 @@ export class DiagnosticsProvider {
 			if (value === null) return;
 			
 			if (paramDef.validation) {
-				if (paramDef.validation.pattern && typeof value === 'string') {
-					if (!new RegExp(paramDef.validation.pattern).test(value)) {
+				if (paramDef.validation.pattern && typeof value === 'string' && !new RegExp(paramDef.validation.pattern).test(value)) {
 						diagnostics.push(this.createDiagnostic(
 							token,
 							`Parameter value does not match required pattern: ${paramDef.validation.pattern}`,
 							DiagnosticSeverity.Error
 						));
 					}
-				}
 	
 				if (paramDef.validation.allowedValues && 
 					Array.isArray(paramDef.validation.allowedValues) &&
@@ -407,37 +413,45 @@ export class DiagnosticsProvider {
 		// Determine the type and validate accordingly
 		let valueType: ValueType | undefined;
 		switch (token.type) {
-			case 'string_lit':
+			case 'string_lit': {
 				valueType = 'string';
 				validateValue(token.value);
 				break;
-			case 'number_lit':
+			}
+			case 'number_lit': {
 				valueType = 'number';
 				validateValue(token.value);
 				break;
-			case 'boolean_lit':
+			}
+			case 'boolean_lit': {
 				valueType = 'boolean';
 				validateValue(token.value);
 				break;
-			case 'array_lit':
+			}
+			case 'array_lit': {
 				valueType = 'array';
 				break;
-			case 'object':
+			}
+			case 'object': {
 				valueType = 'object';
 				break;
-			case 'function_call':
+			}
+			case 'function_call': {
 				const funcName = (token.children.find(c => c.type === 'function_identifier')?.value || '').toString();
 				if (funcName) {
 					const funcDef = this.schema.getFunctionDefinition(funcName);
 					valueType = funcDef?.returnType.types[0];
 				}
 				break;
-			case 'reference':
+			}
+			case 'reference': {
 				valueType = this.inferReferenceType(token);
 				break;
-			case 'interpolation':
+			}
+			case 'interpolation': {
 				valueType = 'string';
 				break;
+			}
 		}
 	
 		// Validate type
@@ -452,41 +466,35 @@ export class DiagnosticsProvider {
 	
 
 	private validateValueConstraints(token: Token, attribute: AttributeDefinition, diagnostics: Diagnostic[]) {
-		const validation = attribute.validation;
+		const {validation} = attribute;
 		if (!validation) return;
 	
-		const value = token.value;
+		const {value} = token;
 		if (value === null) return;
 	
-		if (validation.pattern && typeof value === 'string') {
-			if (!new RegExp(validation.pattern).test(value)) {
+		if (validation.pattern && typeof value === 'string' && !new RegExp(validation.pattern).test(value)) {
 				diagnostics.push(this.createDiagnostic(
 					token,
 					`Value does not match required pattern: ${validation.pattern}`,
 					DiagnosticSeverity.Error
 				));
 			}
-		}
 	
-		if (validation.min !== undefined && typeof value === 'number') {
-			if (value < validation.min) {
+		if (validation.min !== undefined && typeof value === 'number' && value < validation.min) {
 				diagnostics.push(this.createDiagnostic(
 					token,
 					`Value must be greater than or equal to ${validation.min}`,
 					DiagnosticSeverity.Error
 				));
 			}
-		}
 	
-		if (validation.max !== undefined && typeof value === 'number') {
-			if (value > validation.max) {
+		if (validation.max !== undefined && typeof value === 'number' && value > validation.max) {
 				diagnostics.push(this.createDiagnostic(
 					token,
 					`Value must be less than or equal to ${validation.max}`,
 					DiagnosticSeverity.Error
 				));
 			}
-		}
 	
 		if (validation.allowedValues && Array.isArray(validation.allowedValues)) {
 			// Convert value to string for comparison
@@ -606,16 +614,14 @@ export class DiagnosticsProvider {
 				'Invalid parameter value',
 				DiagnosticSeverity.Error
 			));
-		} else if (matchingParam.validation?.allowedValues) {
-			// Check allowed values with proper type checking
-			if (!matchingParam.validation.allowedValues.includes(paramValue)) {
+		} else if (matchingParam.validation?.allowedValues && // Check allowed values with proper type checking
+			!matchingParam.validation.allowedValues.includes(paramValue)) {
 				diagnostics.push(this.createDiagnostic(
 					token,
 					`Invalid parameter value. Allowed values: ${matchingParam.validation.allowedValues.join(', ')}`,
 					DiagnosticSeverity.Error
 				));
 			}
-		}
 	}
 
 	private validateReference(token: Token, diagnostics: Diagnostic[]) {
@@ -675,27 +681,35 @@ export class DiagnosticsProvider {
 
 	private inferValueType(token: Token): ValueType | undefined {
 		switch (token.type) {
-			case 'string_lit':
+			case 'string_lit': {
 				return 'string';
-			case 'number_lit':
+			}
+			case 'number_lit': {
 				return 'number';
-			case 'boolean_lit':
+			}
+			case 'boolean_lit': {
 				return 'boolean';
-			case 'array_lit':
+			}
+			case 'array_lit': {
 				return 'array';
-			case 'object':
+			}
+			case 'object': {
 				return 'object';
-			case 'function_call':
+			}
+			case 'function_call': {
 				const funcName = token.children.find(c => c.type === 'identifier')?.getDisplayText();
 				if (funcName) {
 					const funcDef = this.schema.getFunctionDefinition(funcName);
 					return funcDef?.returnType.types[0];
 				}
 				break;
-			case 'reference':
+			}
+			case 'reference': {
 				return this.inferReferenceType(token);
-			case 'interpolation':
+			}
+			case 'interpolation': {
 				return 'string';
+			}
 			// Add other expression types as needed
 		}
 		return undefined;
