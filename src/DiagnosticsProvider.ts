@@ -18,7 +18,6 @@ export class DiagnosticsProvider {
           this.validateFunction(token, diagnostics);
           break;
         case 'identifier':
-        case 'identifier':
           this.validateIdentifier(token, diagnostics);
           break;
         case 'attribute':
