@@ -46,99 +46,197 @@ export class HoverProvider {
 
 	private getBlockDocumentation(blockTemplate: BlockDefinition, value: string): string[] {
 		const contents: string[] = [
-			`# ${value} Block`,
-			blockTemplate.description || ''
+		  `## ${value} Block`,
+		  '',  // Empty line for better readability
 		];
-
+	
+		// Add description with proper formatting
+		if (blockTemplate.description) {
+		  contents.push(blockTemplate.description, '');
+		  contents.push('---', '');  // Add horizontal rule for section separation
+		}
+	
+		// Parameters section with better structure
 		if (blockTemplate.parameters?.length) {
-			contents.push('## Parameters');
-			contents.push(...blockTemplate.parameters.map(param =>
-				`- **${param.name}** (${param.types.map(t => this.formatValueType(t)).join(' | ')}${param.required ? '' : '?'}): ${param.description || ''}`
-			));
+		  contents.push('### Parameters', '');
+		  blockTemplate.parameters.forEach(param => {
+			const typeStr = param.types.map(t => `\`${this.formatValueType(t)}\``).join(' | ');
+			contents.push(`**${param.name}** ${param.required ? '(required)' : '(optional)'}`);
+			contents.push(`- *Type:* ${typeStr}`);
+			if (param.description) {
+			  contents.push(`- *Description:* ${param.description}`);
+			}
+			if (param.validation?.pattern) {
+			  contents.push(`- *Pattern:* \`${param.validation.pattern}\``);
+			}
+			if (param.validation?.allowedValues?.length) {
+			  contents.push(`- *Allowed values:* ${param.validation.allowedValues.map(v => `\`${v}\``).join(', ')}`);
+			}
+			contents.push('');  // Add space between parameters
+		  });
+		  contents.push('---', '');
 		}
-
+	
+		// Attributes section with enhanced formatting
 		if (blockTemplate.attributes?.length) {
-			contents.push('## Attributes');
-			contents.push(...blockTemplate.attributes.map(attr => {
-				let attrDoc = `- **${attr.name}** (${attr.types.map(t => this.formatValueType(t)).join(' | ')}${attr.required ? '' : '?'})`;
-				if (attr.description) attrDoc += `: ${attr.description}`;
-				if (attr.validation?.allowedValues?.length) {
-					attrDoc += `\n  - Allowed values: ${attr.validation.allowedValues.join(', ')}`;
-				}
-				if (attr.validation?.pattern) {
-					attrDoc += `\n  - Pattern: \`${attr.validation.pattern}\``;
-				}
-				return attrDoc;
-			}));
+		  contents.push('### Attributes', '');
+		  blockTemplate.attributes.forEach(attr => {
+			const typeStr = attr.types.map(t => `\`${this.formatValueType(t)}\``).join(' | ');
+			contents.push(`**${attr.name}** ${attr.required ? '(required)' : '(optional)'}`);
+			if (attr.deprecated) {
+			  contents.push('> ⚠️ *Deprecated*');
+			  if (attr.deprecationMessage) {
+				contents.push(`> ${attr.deprecationMessage}`);
+			  }
+			  contents.push('');
+			}
+			contents.push(`- *Type:* ${typeStr}`);
+			if (attr.description) {
+			  contents.push(`- *Description:* ${attr.description}`);
+			}
+			if (attr.validation?.pattern) {
+			  contents.push(`- *Pattern:* \`${attr.validation.pattern}\``);
+			}
+			if (attr.validation?.allowedValues?.length) {
+			  contents.push(`- *Allowed values:* ${attr.validation.allowedValues.map(v => `\`${v}\``).join(', ')}`);
+			}
+			contents.push('');  // Add space between attributes
+		  });
+		  contents.push('---', '');
 		}
-
+	
+		// Nested blocks section with improved structure
 		if (blockTemplate.blocks?.length) {
-			contents.push('## Nested Blocks');
-			contents.push(...blockTemplate.blocks.map(block => {
-				let blockDoc = `- **${block.type}**`;
-				if (block.description) blockDoc += `: ${block.description}`;
-				if (block.min !== undefined || block.max !== undefined) {
-					blockDoc += `\n  - Occurrences: ${block.min || 0} to ${block.max || '∞'}`;
-				}
-				return blockDoc;
-			}));
+		  contents.push('### Nested Blocks', '');
+		  blockTemplate.blocks.forEach(block => {
+			contents.push(`**${block.type}**`);
+			if (block.description) {
+			  contents.push(`- *Description:* ${block.description}`);
+			}
+			if (block.min !== undefined || block.max !== undefined) {
+			  const min = block.min ?? 0;
+			  const max = block.max ?? '∞';
+			  contents.push(`- *Occurrences:* ${min} to ${max}`);
+			}
+			contents.push('');  // Add space between blocks
+		  });
 		}
-
+	
 		return contents;
-	}
-
-	private getFunctionDocumentation(funcDef: FunctionDefinition): string[] {
+	  }
+	
+	  private getFunctionDocumentation(funcDef: FunctionDefinition): string[] {
 		const contents: string[] = [
-			`# ${funcDef.name}()`,
-			funcDef.description
+		  `## ${funcDef.name}()`,
+		  ''  // Empty line for better readability
 		];
-
+	
+		if (funcDef.deprecated) {
+		  contents.push('> ⚠️ *This function is deprecated*');
+		  if (funcDef.deprecationMessage) {
+			contents.push(`> ${funcDef.deprecationMessage}`);
+		  }
+		  contents.push('');
+		}
+	
+		if (funcDef.description) {
+		  contents.push(funcDef.description, '', '---', '');
+		}
+	
 		if (funcDef.parameters.length) {
-			contents.push('## Parameters');
-			contents.push(...funcDef.parameters.map(param => {
-				let paramDoc = `- **${param.name}** (${param.types.map(t => this.formatValueType(t)).join(' | ')}${param.required ? '' : '?'})`;
-				if (param.description) paramDoc += `: ${param.description}`;
-				if (param.variadic) paramDoc += ' (variadic)';
-				return paramDoc;
-			}));
+		  contents.push('### Parameters', '');
+		  funcDef.parameters.forEach(param => {
+			const typeStr = param.types.map(t => `\`${this.formatValueType(t)}\``).join(' | ');
+			contents.push(`**${param.name}** ${param.required ? '(required)' : '(optional)'}`);
+			contents.push(`- *Type:* ${typeStr}${param.variadic ? ' (variadic)' : ''}`);
+			if (param.description) {
+			  contents.push(`- *Description:* ${param.description}`);
+			}
+			if (param.validation?.pattern) {
+			  contents.push(`- *Pattern:* \`${param.validation.pattern}\``);
+			}
+			if (param.validation?.allowedValues?.length) {
+			  contents.push(`- *Allowed values:* ${param.validation.allowedValues.map(v => `\`${v}\``).join(', ')}`);
+			}
+			contents.push('');  // Add space between parameters
+		  });
+		  contents.push('---', '');
 		}
-
-		contents.push('## Return Type');
-		contents.push(`\`${funcDef.returnType.types.map(t => this.formatValueType(t)).join(' | ')}\`${funcDef.returnType.description ? `: ${funcDef.returnType.description}` : ''}`);
-
+	
+		contents.push('### Return Type', '');
+		const returnTypeStr = funcDef.returnType.types.map(t => `\`${this.formatValueType(t)}\``).join(' | ');
+		contents.push(`*Type:* ${returnTypeStr}`);
+		if (funcDef.returnType.description) {
+		  contents.push(`*Description:* ${funcDef.returnType.description}`);
+		}
+	
+		if (funcDef.examples?.length) {
+		  contents.push('', '### Examples', '');
+		  funcDef.examples.forEach(example => {
+			contents.push('```hcl', example, '```', '');
+		  });
+		}
+	
 		return contents;
-	}
-
-	private getAttributeDocumentation(attr: AttributeDefinition): string[] {
+	  }
+	
+	  private getAttributeDocumentation(attr: AttributeDefinition): string[] {
 		const contents: string[] = [
-			`# ${attr.name}`,
-			attr.description
+		  `## ${attr.name} Attribute`,
+		  ''  // Empty line for better readability
 		];
-
-		contents.push('## Details');
-		contents.push(`- **Type**: ${attr.types.map(t => this.formatValueType(t)).join(' | ')}`);
-		contents.push(`- **Required**: ${attr.required}`);
-
-		if (attr.validation?.pattern) {
-			contents.push(`- **Pattern**: \`${attr.validation.pattern}\``);
+	
+		if (attr.deprecated) {
+		  contents.push('> ⚠️ *This attribute is deprecated*');
+		  if (attr.deprecationMessage) {
+			contents.push(`> ${attr.deprecationMessage}`);
+		  }
+		  contents.push('');
 		}
-
-		if (attr.validation?.allowedValues?.length) {
-			contents.push('## Allowed Values');
-			contents.push(attr.validation.allowedValues.map(value => `- \`${value}\``).join('\n'));
+	
+		if (attr.description) {
+		  contents.push(attr.description, '', '---', '');
 		}
-
-		// Only show properties if one of the types is 'object'
-		if (attr.types.includes('object') && attr.attributes?.length) {
-			contents.push('## Properties');
-			attr.attributes.forEach(nestedAttr => {
-				contents.push(`- **${nestedAttr.name}** (${nestedAttr.types.map(t => this.formatValueType(t)).join(' | ')})`);
-				if (nestedAttr.description) contents.push(`  ${nestedAttr.description}`);
+	
+		contents.push('### Details', '');
+		const typeStr = attr.types.map(t => `\`${this.formatValueType(t)}\``).join(' | ');
+		contents.push(`- *Type:* ${typeStr}`);
+		contents.push(`- *Required:* ${attr.required ? 'Yes' : 'No'}`);
+	
+		if (attr.validation) {
+		  contents.push('', '### Validation', '');
+		  if (attr.validation.pattern) {
+			contents.push(`- *Pattern:* \`${attr.validation.pattern}\``);
+		  }
+		  if (attr.validation.allowedValues?.length) {
+			contents.push('- *Allowed values:*');
+			attr.validation.allowedValues.forEach(value => {
+			  contents.push(`  - \`${value}\``);
 			});
+		  }
+		  if (attr.validation.min !== undefined) {
+			contents.push(`- *Minimum:* ${attr.validation.min}`);
+		  }
+		  if (attr.validation.max !== undefined) {
+			contents.push(`- *Maximum:* ${attr.validation.max}`);
+		  }
 		}
-
+	
+		if (attr.types.includes('object') && attr.attributes?.length) {
+		  contents.push('', '### Properties', '');
+		  attr.attributes.forEach(nestedAttr => {
+			const nestedTypeStr = nestedAttr.types.map(t => `\`${this.formatValueType(t)}\``).join(' | ');
+			contents.push(`**${nestedAttr.name}** ${nestedAttr.required ? '(required)' : '(optional)'}`);
+			contents.push(`- *Type:* ${nestedTypeStr}`);
+			if (nestedAttr.description) {
+			  contents.push(`- *Description:* ${nestedAttr.description}`);
+			}
+			contents.push('');  // Add space between nested attributes
+		  });
+		}
+	
 		return contents;
-	}
+	  }
 
 	getHoverInfo(token: Token): HoverResult | null {
 		let contents: string[] = [];
