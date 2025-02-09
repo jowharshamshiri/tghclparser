@@ -119,29 +119,42 @@ export class DiagnosticsProvider {
 
 	private validateBlock(token: Token, seenBlocks: Map<string, number>, diagnostics: Diagnostic[]) {
 		const blockValue = token.getDisplayText();
-		const definition = this.schema.getBlockDefinition(blockValue);
-
+		
+		// Find the parent block to check if this is a nested block
+		const parentBlock = this.findParentBlock(token);
+		let definition: BlockDefinition | undefined;
+		
+		if (parentBlock) {
+			// This is a nested block, look it up in the parent's allowed blocks
+			const parentDef = this.schema.getBlockDefinition(parentBlock.getDisplayText());
+			definition = parentDef?.blocks?.find(b => b.type === blockValue);
+		} else {
+			// This is a root block, look it up directly
+			definition = this.schema.getBlockDefinition(blockValue);
+		}
+	
 		if (!definition) {
+			const parentContext = parentBlock ? ` in ${parentBlock.getDisplayText()} block` : '';
 			diagnostics.push(this.createDiagnostic(
 				token,
-				`Unknown block type: ${blockValue}`,
+				`Unknown block type: ${blockValue}${parentContext}`,
 				DiagnosticSeverity.Error
 			));
 			return;
 		}
-
+	
 		// Track block occurrences
 		seenBlocks.set(blockValue, (seenBlocks.get(blockValue) || 0) + 1);
-
+	
 		// Validate block constraints
 		this.validateBlockConstraints(token, definition, diagnostics);
-
+	
 		// Validate required attributes
 		this.validateRequiredAttributes(token, definition, diagnostics);
-
+	
 		// Validate attribute combinations
 		this.validateAttributeCombinations(token, definition, diagnostics);
-
+	
 		// Validate nested blocks
 		this.validateNestedBlocks(token, definition, diagnostics);
 	}
