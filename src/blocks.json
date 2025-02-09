@@ -905,6 +905,16 @@
 		{
 			"type": "include",
 			"description": "Includes other Terragrunt configurations, allowing for modular and reusable configurations.",
+			"parameters":[
+				{
+					"name": "name",
+					"types": [
+						"string"
+					],
+					"required": false,
+					"description": "The name of the include block"
+				}
+			],
 			"attributes": [
 				{
 					"name": "path",
