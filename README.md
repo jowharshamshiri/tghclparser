@@ -11,6 +11,14 @@ A parser for the Terragrunt HCL language.
 
 ## Installation
 
+### NPM
+
+   ```
+   npm install tghclparser
+   ```   
+
+### From Source
+
 1. Clone this repository:
 
    ```
