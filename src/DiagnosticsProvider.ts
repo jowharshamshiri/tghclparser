@@ -187,7 +187,6 @@ export class DiagnosticsProvider {
 		});
 	}
 
-
 	private collectAllAttributes(token: Token): Token[] {
 		const attributes: Token[] = [];
 		
@@ -211,8 +210,6 @@ export class DiagnosticsProvider {
 		// Get all attributes from the block, including nested ones
 		const attributes = this.collectAllAttributes(token);
 
-		console.log('presentAttrs for', token.getDisplayText(), attributes);
-	
 		// Check required attributes
 		definition.attributes
 			.filter(attr => attr.required)
