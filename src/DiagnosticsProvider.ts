@@ -149,6 +149,16 @@ export class DiagnosticsProvider {
 	private validateBlockConstraints(token: Token, definition: BlockDefinition, diagnostics: Diagnostic[]) {
 		const attributes = this.collectAllAttributes(token);
 		const nestedBlocks = this.collectAllBlocks(token);
+		
+		// Add parameter validation
+		const parameters = token.children.filter(child => child.type === 'parameter');
+		if (parameters.length > 0 && !definition.parameters) {
+			diagnostics.push(this.createDiagnostic(
+				token,
+				`Block "${token.getDisplayText()}" does not accept parameters`,
+				DiagnosticSeverity.Error
+			));
+		}
 	
 		// Check for unknown attributes if arbitraryAttributes is false
 		if (!definition.arbitraryAttributes) {
