@@ -611,27 +611,33 @@ export class DiagnosticsProvider {
 		const blockDef = this.schema.getBlockDefinition(parentBlock.getDisplayText());
 		if (!blockDef?.parameters) return;
 	
-		const paramValue = token.getDisplayText();
-		if (paramValue === null) return;
+		// Get parameter position within the block
+		const parameterIndex = parentBlock.children
+			.filter(child => child.type === 'parameter')
+			.indexOf(token);
 	
-		const matchingParam = blockDef.parameters.find(param =>
-			param.validation?.pattern && new RegExp(param.validation.pattern).test(paramValue)
-		);
-	
-		if (!matchingParam) {
+		// Get the parameter definition for this position
+		const paramDef = blockDef.parameters[parameterIndex];
+		if (!paramDef) {
 			diagnostics.push(this.createDiagnostic(
 				token,
-				'Invalid parameter value',
+				`Too many parameters for block "${parentBlock.getDisplayText()}"`,
 				DiagnosticSeverity.Error
 			));
-		} else if (matchingParam.validation?.allowedValues && // Check allowed values with proper type checking
-			!matchingParam.validation.allowedValues.includes(paramValue)) {
-				diagnostics.push(this.createDiagnostic(
-					token,
-					`Invalid parameter value. Allowed values: ${matchingParam.validation.allowedValues.join(', ')}`,
-					DiagnosticSeverity.Error
-				));
-			}
+			return;
+		}
+	
+		// Get the parameter value and validate it matches the type
+		// const paramValue = token.getDisplayText();
+		const valueType = this.inferValueType(token);
+	
+		if (valueType && !paramDef.types.includes(valueType)) {
+			diagnostics.push(this.createDiagnostic(
+				token,
+				`Invalid parameter type for "${paramDef.name}". Expected one of: ${paramDef.types.join(', ')}, got: ${valueType}`,
+				DiagnosticSeverity.Error
+			));
+		}
 	}
 
 	private validateReference(token: Token, diagnostics: Diagnostic[]) {
