@@ -3,6 +3,29 @@
   let heredocMarker = null;
   let nextId = 1;
 
+  function consolidateStringChars(chars) {
+	const result = [];
+	let currentString = '';
+		
+	for (const char of chars) {
+	  if (typeof char === 'string') {
+	  	currentString += char;
+	  } else {
+		if (currentString) {
+		  result.push(currentString);
+		  currentString = '';
+		}
+		result.push(char);
+	  }
+	}
+	
+	if (currentString) {
+	  result.push(currentString);
+	}
+	
+  	return result;
+  }
+
   function debugLog(rule, text, pos, context = {}) {
     if (debugEnabled) {
       let preview = '';
@@ -391,15 +414,61 @@ heredocContent = $((!endMarker .)*) {
 newline = [\r\n]+
 
 QuotedString = '"' chars:DoubleStringChar* '"' {
-  return makeNode('string_lit', chars.join(''), location());
+  // Group consecutive string characters together
+  const consolidated = consolidateStringChars(chars);
+  
+  // If there's only one part and it's a string, return as string_lit
+  if (consolidated.length === 1 && typeof consolidated[0] === 'string') {
+    return makeNode('string_lit', consolidated[0], location());
+  }
+  
+  // If all parts are strings (no interpolation), join them
+  if (consolidated.every(c => typeof c === 'string')) {
+    return makeNode('string_lit', consolidated.join(''), location());
+  }
+  
+  // Create interpolated string with proper string chunks
+  return makeNode('interpolated_string', null, location(), 
+    consolidated.map(c => {
+      if (typeof c === 'string') {
+        return makeNode('string_lit', c, location());
+      }
+      return c;
+    })
+  );
 }
 
 SingleQuotedString = "'" chars:SingleStringChar* "'" {
-  return makeNode('string_lit', chars.join(''), location());
+  // Use same consolidation logic as QuotedString
+  const consolidated = consolidateStringChars(chars);
+  
+  if (consolidated.length === 1 && typeof consolidated[0] === 'string') {
+    return makeNode('string_lit', consolidated[0], location());
+  }
+  
+  if (consolidated.every(c => typeof c === 'string')) {
+    return makeNode('string_lit', consolidated.join(''), location());
+  }
+  
+  return makeNode('interpolated_string', null, location(),
+    consolidated.map(c => {
+      if (typeof c === 'string') {
+        return makeNode('string_lit', c, location());
+      }
+      return c;
+    })
+  );
 }
 
-DoubleStringChar = [^"\\${] / EscapedChar / InterpolatedExpr
-SingleStringChar = [^'\\${] / EscapedChar / InterpolatedExpr
+DoubleStringChar = 
+  [^"\\${%] / 
+  EscapedChar / 
+  InterpolatedExpr
+
+SingleStringChar = 
+  [^'\\${%] / 
+  EscapedChar / 
+  InterpolatedExpr
 
 EscapeSequence = "\\" . { return text(); }
 EscapedChar = "\\" . { return text(); }
@@ -414,11 +483,24 @@ StringContent = chars:(
   "%" ![{}] /
   InterpolatedExpr
 )* {
-  return makeNode('string_content', chars.join(''), location());
+  // If no interpolations, join as simple string
+  if (chars.every(c => typeof c === 'string')) {
+    return makeNode('string_lit', chars.join(''), location());
+  }
+  
+  // Otherwise create interpolated string with proper structure
+  return makeNode('string_content', null, location(),
+    chars.map(c => {
+      if (typeof c === 'string') {
+        return makeNode('string_lit', c, location());
+      }
+      return c;
+    })
+  );
 }
 
-LegacyInterpolation = "${" expr:(!("}") .)* "}" {
-  return makeNode('legacy_interpolation', expr.map(e => e[1]).join(''), location());
+LegacyInterpolation = "${" expr:Expression "}" {
+  return makeNode('legacy_interpolation', null, location(), [expr]);
 }
 
 SimpleInterpolation = "%{" _ expr:Expression _ "}" {
@@ -432,7 +514,10 @@ DirectiveInterpolation =
   EndifDirective
 
 IfDirective = "%{" _ "if" _ condition:Expression _ "}" content:StringContent {
-  return makeNode('if_directive', null, location(), [condition, content]);
+  return makeNode('if_directive', null, location(), [
+    condition,
+    content
+  ]);
 }
 
 ForDirective = "%{" _ "for" _ item:Identifier _ "in" _ collection:Expression _ "}" content:StringContent {
@@ -553,7 +638,6 @@ ConditionalExpression =
   NullCoalescingExpression /
   LogicalExpression
 
-
 NullCoalescingExpression = head:LogicalExpression tail:(_ "??" _ LogicalExpression)* {
   return tail.reduce((left, [_, __, ___, right]) =>
     makeNode('null_coalescing', null, location(), [left, right]),
@@ -659,7 +743,6 @@ SplatAccess = _ ".*" _ attr:("." Identifier)? {
     ...(attr ? [makeIdentifierNode(attr[1], location())] : [])
   ]);
 }
-
 
 MemberAccess = _ "." _ member:Identifier {
   return base => makeNode('member_access', null, location(), [base, makeIdentifierNode(member, location())]);

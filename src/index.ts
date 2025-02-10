@@ -94,6 +94,7 @@ export class ParsedDocument {
 	private parseContent() {
 		try {
 			this.ast = tg_parse(this.content, { grammarSource: this.uri });
+			
 			this.tokens = [this.parseNode(this.ast)];
 
 			this.diagnostics = this.diagnosticsProvider.getDiagnostics(this.tokens);
