@@ -218,10 +218,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "The name of the environment variable to retrieve",
-					"validation": {
-						"pattern": "^[A-Z][A-Z0-9_]*$"
-					}
+					"description": "The name of the environment variable to retrieve"
 				},
 				{
 					"name": "default",

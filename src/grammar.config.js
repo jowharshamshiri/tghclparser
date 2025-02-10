@@ -1,5 +1,5 @@
 export default {
-	input: 'terragrunt.peggy',
+  input: 'terragrunt.peggy',
   output: 'terragrunt-parser.js',
   format: 'es',
   dts: true,
