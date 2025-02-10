@@ -329,8 +329,7 @@ export class CompletionsProvider {
 			}
 		});
 
-		parts.push('\nReturn Type:');
-		parts.push(`${func.returnType.types.join(' | ')}`);
+		parts.push(`\nReturn Type: ${func.returnType.types.join(' | ')}`);
 		if (func.returnType.description) {
 			parts.push(func.returnType.description);
 		}
