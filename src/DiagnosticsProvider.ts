@@ -1,20 +1,25 @@
-import type { Diagnostic} from 'vscode-languageserver';
+
+import path from 'node:path';
+
+import type { Diagnostic } from 'vscode-languageserver';
 import { DiagnosticSeverity } from 'vscode-languageserver';
+import { URI } from 'vscode-uri';
 
 import type { AttributeDefinition, BlockDefinition, FunctionDefinition, Token, ValueType } from './model';
+import type { ParsedDocument } from './ParsedDocument';
 import type { Schema } from './Schema';
 
 export class DiagnosticsProvider {
 	constructor(private schema: Schema) { }
 
-	getDiagnostics(tokens: Token[]): Diagnostic[] {
+	getDiagnostics(parsedDocument: ParsedDocument): Diagnostic[] {
 		const diagnostics: Diagnostic[] = [];
 		const seenBlocks = new Map<string, number>(); // Track block counts by type
 
 		const validateToken = (token: Token) => {
 			switch (token.type) {
 				case 'block': {
-					this.validateBlock(token, seenBlocks, diagnostics);
+					this.validateBlock(parsedDocument, token, seenBlocks, diagnostics);
 					break;
 				}
 				case 'function_call': {
@@ -46,7 +51,7 @@ export class DiagnosticsProvider {
 			token.children.forEach(validateToken);
 		};
 
-		tokens.forEach(validateToken);
+		parsedDocument.getTokens().forEach(validateToken);
 
 		// Validate block occurrences after processing all tokens
 		this.validateBlockOccurrences(seenBlocks, diagnostics);
@@ -56,25 +61,25 @@ export class DiagnosticsProvider {
 	private validateAttribute(token: Token, diagnostics: Diagnostic[]) {
 		const attributeIdentifier = token.children.find(child => child.type === 'identifier');
 		if (!attributeIdentifier) return;
-	
+
 		const attributeName = attributeIdentifier.getDisplayText();
 		const blockToken = this.findParentBlock(token);
-	
+
 		if (blockToken) {
 			const blockTemplate = this.schema.getBlockDefinition(blockToken.getDisplayText());
 			// Convert to string explicitly
 			const value = token.value != null ? String(token.value) : '';
 			const attribute = blockTemplate?.attributes?.find(attr => attr.name === attributeName);
-	
+
 			if (attribute) {
 				if (attribute.deprecated) {
 					diagnostics.push(this.createDiagnostic(
 						token,
-						`Attribute "${attributeName}" is deprecated${attribute.deprecationMessage ? `: ${  attribute.deprecationMessage}` : ''}`,
+						`Attribute "${attributeName}" is deprecated${attribute.deprecationMessage ? `: ${attribute.deprecationMessage}` : ''}`,
 						DiagnosticSeverity.Warning
 					));
 				}
-	
+
 				// Validate attribute value
 				const valueToken = token.children.find(child => child.type !== 'identifier');
 				if (valueToken) {
@@ -88,7 +93,7 @@ export class DiagnosticsProvider {
 		for (const [blockType, count] of seenBlocks) {
 			const blockDef = this.schema.getBlockDefinition(blockType);
 			if (!blockDef) continue;
-	
+
 			if (blockDef.min !== undefined && count < blockDef.min) {
 				// We need a token to create a diagnostic, but this is a global check
 				// You might want to store the first occurrence of each block type
@@ -102,7 +107,7 @@ export class DiagnosticsProvider {
 					source: 'terragrunt'
 				});
 			}
-	
+
 			if (blockDef.max !== undefined && count > blockDef.max) {
 				diagnostics.push({
 					range: {
@@ -117,13 +122,13 @@ export class DiagnosticsProvider {
 		}
 	}
 
-	private validateBlock(token: Token, seenBlocks: Map<string, number>, diagnostics: Diagnostic[]) {
+	private async validateBlock(parsedDocument: ParsedDocument, token: Token, seenBlocks: Map<string, number>, diagnostics: Diagnostic[]) {
 		const blockValue = token.getDisplayText();
-		
+
 		// Find the parent block to check if this is a nested block
 		const parentBlock = this.findParentBlock(token);
 		let definition: BlockDefinition | undefined;
-		
+
 		if (parentBlock) {
 			// This is a nested block, look it up in the parent's allowed blocks
 			const parentDef = this.schema.getBlockDefinition(parentBlock.getDisplayText());
@@ -132,7 +137,7 @@ export class DiagnosticsProvider {
 			// This is a root block, look it up directly
 			definition = this.schema.getBlockDefinition(blockValue);
 		}
-	
+
 		if (!definition) {
 			const parentContext = parentBlock ? ` in ${parentBlock.getDisplayText()} block` : '';
 			diagnostics.push(this.createDiagnostic(
@@ -142,27 +147,268 @@ export class DiagnosticsProvider {
 			));
 			return;
 		}
-	
+
 		// Track block occurrences
 		seenBlocks.set(blockValue, (seenBlocks.get(blockValue) || 0) + 1);
-	
+
 		// Validate block constraints
 		this.validateBlockConstraints(token, definition, diagnostics);
-	
+
 		// Validate required attributes
 		this.validateRequiredAttributes(token, definition, diagnostics);
-	
+
 		// Validate attribute combinations
 		this.validateAttributeCombinations(token, definition, diagnostics);
-	
+
 		// Validate nested blocks
 		this.validateNestedBlocks(token, definition, diagnostics);
+
+		if (token.value === 'dependency') {
+			await this.validateDependencyBlock(parsedDocument, token, diagnostics);
+		}
+
+		if (token.value === 'dependencies') {
+			await this.validateDependenciesBlock(parsedDocument, token, diagnostics);
+		}
+	}
+
+	private async validateDependencyBlock(parsedDocument: ParsedDocument, token: Token, diagnostics: Diagnostic[]) {
+		// Validate the required name parameter
+		const parameters = token.children.filter(child => child.type === 'parameter');
+		if (parameters.length === 0) {
+			diagnostics.push(this.createDiagnostic(
+				token,
+				'Dependency block requires a name parameter',
+				DiagnosticSeverity.Error
+			));
+			return;
+		}
+
+		// Find the configPath attribute
+		const configPathAttr = token.children.find(child =>
+			child.type === 'attribute' &&
+			child.children.some(c => c.type === 'attribute_identifier' && c.value === 'config_path')
+		);
+
+		if (!configPathAttr) {
+			diagnostics.push(this.createDiagnostic(
+				token,
+				'Dependency block missing required config_path attribute',
+				DiagnosticSeverity.Error
+			));
+			return;
+		}
+
+		// Get the string literal value
+		const stringLit = configPathAttr.children.find(c => c.type === 'string_lit');
+		if (!stringLit || typeof stringLit.value !== 'string') {
+			diagnostics.push(this.createDiagnostic(
+				configPathAttr,
+				'config_path must be a string literal',
+				DiagnosticSeverity.Error
+			));
+			return;
+		}
+
+		await this.validateDependencyPath(parsedDocument, stringLit.value, configPathAttr, token, diagnostics);
+	}
+
+	private async validateDependenciesBlock(parsedDocument: ParsedDocument, token: Token, diagnostics: Diagnostic[]) {
+		// Validate the required paths attribute for dependencies block
+		const pathsAttr = token.children.find(child =>
+			child.type === 'attribute' &&
+			child.children.some(c => c.type === 'attribute_identifier' && c.value === 'paths')
+		);
+
+		if (!pathsAttr) {
+			diagnostics.push(this.createDiagnostic(
+				token,
+				'Dependencies block missing required paths attribute',
+				DiagnosticSeverity.Error
+			));
+			return;
+		}
+
+		// Get the array literal value
+		const arrayLit = pathsAttr.children.find(c => c.type === 'array_lit');
+		if (!arrayLit) {
+			diagnostics.push(this.createDiagnostic(
+				pathsAttr,
+				'paths must be an array',
+				DiagnosticSeverity.Error
+			));
+			return;
+		}
+
+		// Validate each path in the array
+		for (const pathElement of arrayLit.children) {
+			if (pathElement.type !== 'string_lit' || typeof pathElement.value !== 'string') {
+				diagnostics.push(this.createDiagnostic(
+					pathElement,
+					'Each path must be a string literal',
+					DiagnosticSeverity.Error
+				));
+				continue;
+			}
+
+			await this.validateDependencyPath(parsedDocument, pathElement.value, pathElement, token, diagnostics);
+		}
+	}
+
+	// In DiagnosticsProvider.ts
+
+	private async validateDependencyPath(
+		parsedDocument: ParsedDocument,
+		path: string,
+		pathToken: Token,
+		blockToken: Token,
+		diagnostics: Diagnostic[]
+	) {
+		const workspaceManager = parsedDocument.getWorkspace();
+		const sourceUri = URI.parse(parsedDocument.getUri());
+		const targetPath = this.resolveDependencyPath(path, sourceUri.fsPath);
+		const targetUri = URI.file(targetPath).toString();
+
+		try {
+			// Try to load and parse the dependency
+			const dependencyDoc = await workspaceManager.getDocument(targetUri);
+
+			if (!dependencyDoc) {
+				// Add a diagnostic for the missing file
+				diagnostics.push(this.createDiagnostic(
+					pathToken,
+					`Terragrunt dependency not found: ${path} (looked for terragrunt.hcl in this directory)`,
+					DiagnosticSeverity.Error
+				));
+				return;
+			}
+
+			// Validate that the dependency file is valid Terragrunt configuration
+			const depDiagnostics = dependencyDoc.getDiagnostics();
+			if (depDiagnostics.some(d => d.severity === DiagnosticSeverity.Error)) {
+				diagnostics.push(this.createDiagnostic(
+					pathToken,
+					`Referenced Terragrunt file contains errors: ${path}`,
+					DiagnosticSeverity.Error
+				));
+			}
+
+			// Check for circular dependencies
+			const deps = await workspaceManager.getDependencies(targetUri);
+			if (this.hasCircularDependency(parsedDocument, deps)) {
+				diagnostics.push(this.createDiagnostic(
+					blockToken,
+					'Circular dependency detected',
+					DiagnosticSeverity.Error
+				));
+			}
+
+		} catch (error) {
+			// Be more specific about the error message
+			let errorMessage = 'Error loading dependency';
+			if (error instanceof Error) {
+				if (error.message.includes('ENOENT')) {
+					errorMessage = `Terragrunt dependency not found: ${path} (looked for terragrunt.hcl in this directory)`;
+				} else {
+					errorMessage = `Error loading dependency: ${error.message}`;
+				}
+			}
+
+			diagnostics.push(this.createDiagnostic(
+				pathToken,
+				errorMessage,
+				DiagnosticSeverity.Error
+			));
+		}
+	}
+
+	private hasCircularDependency(parsedDocument: ParsedDocument, dependencies: { targetPath: string }[]): boolean {
+		const visited = new Set<string>();
+
+		const visit = async (uri: string): Promise<boolean> => {
+			if (visited.has(uri)) {
+				return uri === parsedDocument.getUri(); // Circular if we're back at source
+			}
+
+			visited.add(uri);
+
+			const workspaceManager = parsedDocument.getWorkspace();
+			const deps = await workspaceManager.getDependencies(uri);
+
+			for (const dep of deps) {
+				const targetUri = URI.file(dep.targetPath).toString();
+				if (await visit(targetUri)) {
+					return true;
+				}
+			}
+
+			visited.delete(uri);
+			return false;
+		};
+
+		return dependencies.some(async dep => {
+			const targetUri = URI.file(dep.targetPath).toString();
+			return visit(targetUri);
+		});
+	}
+
+	private resolveDependencyPath(path_value: string, sourcePath: string): string {
+		if (path.isAbsolute(path_value)) {
+			return path_value;
+		}
+
+		const sourceDir = path.dirname(sourcePath);
+		return path.resolve(sourceDir, path_value);
+	}
+
+	// Add these imports at the top
+	private validateDependencyOutputs(token: Token, dependencyDoc: ParsedDocument, diagnostics: Diagnostic[]) {
+		// Find outputs reference attributes
+		const outputRefs = token.children.filter(child =>
+			child.type === 'attribute' &&
+			child.children.some(c => c.type === 'identifier' && typeof c.value === 'string' && c.value.startsWith('outputs.'))
+		);
+
+		for (const ref of outputRefs) {
+			const identifier = ref.children.find(c => c.type === 'identifier');
+			const outputName = identifier && typeof identifier.value === 'string' ? identifier.value.split('.')[1] : undefined;
+
+			if (!outputName) continue;
+
+			// Verify the output exists in the dependency
+			const outputExists = this.checkOutputExistsInDependency(dependencyDoc, outputName);
+			if (!outputExists) {
+				diagnostics.push(this.createDiagnostic(
+					ref,
+					`Referenced output "${outputName}" not found in dependency`,
+					DiagnosticSeverity.Error
+				));
+			}
+		}
+	}
+
+	private checkOutputExistsInDependency(dependencyDoc: ParsedDocument, outputName: string): boolean {
+		// This would need to be implemented based on how outputs are defined in your Terragrunt files
+		// For example, looking for output blocks or checking against a schema
+		const ast = dependencyDoc.getAST();
+		if (!ast) return false;
+
+		// Example implementation - adjust based on your actual AST structure
+		const hasOutput = (node: any): boolean => {
+			if (node.type === 'block' && node.value === 'output' &&
+				node.children.some(c => c.type === 'identifier' && c.value === outputName)) {
+				return true;
+			}
+			return node.children?.some(hasOutput) ?? false;
+		};
+
+		return hasOutput(ast);
 	}
 
 	private validateBlockConstraints(token: Token, definition: BlockDefinition, diagnostics: Diagnostic[]) {
 		const attributes = this.collectAllAttributes(token);
 		const nestedBlocks = this.collectAllBlocks(token);
-		
+
 		// Add parameter validation
 		const parameters = token.children.filter(child => child.type === 'parameter');
 		if (parameters.length > 0 && !definition.parameters) {
@@ -172,7 +418,7 @@ export class DiagnosticsProvider {
 				DiagnosticSeverity.Error
 			));
 		}
-	
+
 		// Check for unknown attributes if arbitraryAttributes is false
 		if (!definition.arbitraryAttributes) {
 			attributes.forEach(attr => {
@@ -186,7 +432,7 @@ export class DiagnosticsProvider {
 				}
 			});
 		}
-	
+
 		// Check for unknown nested blocks
 		nestedBlocks.forEach(block => {
 			const blockType = block.getDisplayText();
@@ -202,16 +448,16 @@ export class DiagnosticsProvider {
 
 	private collectAllAttributes(token: Token): Token[] {
 		const attributes: Token[] = [];
-		
+
 		const collect = (t: Token) => {
 			if (t.type === 'attribute') {
 				attributes.push(t);
 			}
-			
+
 			// Check children recursively
 			t.children.forEach(collect);
 		};
-		
+
 		collect(token);
 
 		return attributes;
@@ -219,7 +465,7 @@ export class DiagnosticsProvider {
 
 	private validateRequiredAttributes(token: Token, definition: BlockDefinition, diagnostics: Diagnostic[]) {
 		if (!definition.attributes) return;
-	
+
 		// Get all attributes from the block, including nested ones
 		const attributes = this.collectAllAttributes(token);
 
@@ -235,8 +481,8 @@ export class DiagnosticsProvider {
 					));
 				}
 			}
-		);
-		
+			);
+
 		// Check required attribute combinations
 		if (definition.validation?.requiredChoice) {
 			definition.validation.requiredChoice.forEach(choices => {
@@ -262,14 +508,14 @@ export class DiagnosticsProvider {
 
 	private validateAttributeCombinations(token: Token, definition: BlockDefinition, diagnostics: Diagnostic[]) {
 		if (!definition.validation?.mutuallyExclusive) return;
-	
+
 		const attributes = this.collectAllAttributes(token);
 		const presentAttrs = new Set(
 			attributes
 				.map(attr => attr.children.find(c => c.type === 'identifier')?.getDisplayText())
 				.filter(Boolean)
 		);
-	
+
 		definition.validation.mutuallyExclusive.forEach(group => {
 			const presentCount = group.filter(attr => presentAttrs.has(attr)).length;
 			if (presentCount > 1) {
@@ -283,37 +529,37 @@ export class DiagnosticsProvider {
 	}
 	private collectAllBlocks(token: Token): Token[] {
 		const blocks: Token[] = [];
-		
+
 		const collect = (t: Token, isRoot = false) => {
 			// Only add to blocks collection if it's not the root block
 			if (t.type === 'block' && !isRoot) {
 				blocks.push(t);
 			}
-			
+
 			// Recursively check children
 			t.children.forEach(child => collect(child, false));
 		};
-		
+
 		// Start collection with root flag true
 		collect(token, true);
 		return blocks;
 	}
-	
+
 	private validateNestedBlocks(token: Token, definition: BlockDefinition, diagnostics: Diagnostic[]) {
 		if (!definition.blocks) return;
-	
+
 		const nestedBlocks = this.collectAllBlocks(token);
 		const nestedBlockCounts = new Map<string, number>();
-		
+
 		nestedBlocks.forEach(block => {
 			const blockType = block.getDisplayText();
 			nestedBlockCounts.set(blockType, (nestedBlockCounts.get(blockType) || 0) + 1);
 		});
-	
+
 		// Check min/max occurrences for each block type
 		definition.blocks.forEach(blockDef => {
 			const count = nestedBlockCounts.get(blockDef.type) || 0;
-			
+
 			if (blockDef.min !== undefined && count < blockDef.min) {
 				diagnostics.push(this.createDiagnostic(
 					token,
@@ -342,10 +588,10 @@ export class DiagnosticsProvider {
 			));
 			return;
 		}
-	
+
 		const funcName = (funcIdentifier.value || '').toString();
 		const funcDef = this.schema.getFunctionDefinition(funcName);
-	
+
 		if (!funcDef) {
 			diagnostics.push(this.createDiagnostic(
 				token,
@@ -354,15 +600,15 @@ export class DiagnosticsProvider {
 			));
 			return;
 		}
-	
+
 		if (funcDef.deprecated) {
 			diagnostics.push(this.createDiagnostic(
 				token,
-				`Function "${funcName}" is deprecated${funcDef.deprecationMessage ? `: ${  funcDef.deprecationMessage}` : ''}`,
+				`Function "${funcName}" is deprecated${funcDef.deprecationMessage ? `: ${funcDef.deprecationMessage}` : ''}`,
 				DiagnosticSeverity.Warning
 			));
 		}
-	
+
 		this.validateFunctionParameters(token, funcDef, diagnostics);
 	}
 
@@ -370,7 +616,7 @@ export class DiagnosticsProvider {
 		// Get parameters by excluding the function identifier
 		const parameters = token.children.filter(child => child.type !== 'function_identifier');
 		const requiredParams = funcDef.parameters.filter(param => param.required);
-	
+
 		// Check required parameter count
 		if (parameters.length < requiredParams.length) {
 			diagnostics.push(this.createDiagnostic(
@@ -380,7 +626,7 @@ export class DiagnosticsProvider {
 			));
 			return;
 		}
-	
+
 		// Check if too many parameters (unless last parameter is variadic)
 		const lastParam = funcDef.parameters.at(-1);
 		if (!lastParam?.variadic && parameters.length > funcDef.parameters.length) {
@@ -391,13 +637,13 @@ export class DiagnosticsProvider {
 			));
 			return;
 		}
-	
+
 		// Validate each parameter
 		parameters.forEach((param, index) => {
-			const paramDef = index < funcDef.parameters.length 
-				? funcDef.parameters[index] 
+			const paramDef = index < funcDef.parameters.length
+				? funcDef.parameters[index]
 				: (lastParam?.variadic ? lastParam : undefined);
-	
+
 			if (paramDef) {
 				this.validateParameterValue(param, paramDef, diagnostics);
 			}
@@ -408,17 +654,17 @@ export class DiagnosticsProvider {
 		// Handle literal values directly with type checking
 		const validateValue = (value: string | number | boolean | null) => {
 			if (value === null) return;
-			
+
 			if (paramDef.validation) {
 				if (paramDef.validation.pattern && typeof value === 'string' && !new RegExp(paramDef.validation.pattern).test(value)) {
-						diagnostics.push(this.createDiagnostic(
-							token,
-							`Parameter value does not match required pattern: ${paramDef.validation.pattern}`,
-							DiagnosticSeverity.Error
-						));
-					}
-	
-				if (paramDef.validation.allowedValues && 
+					diagnostics.push(this.createDiagnostic(
+						token,
+						`Parameter value does not match required pattern: ${paramDef.validation.pattern}`,
+						DiagnosticSeverity.Error
+					));
+				}
+
+				if (paramDef.validation.allowedValues &&
 					Array.isArray(paramDef.validation.allowedValues) &&
 					!paramDef.validation.allowedValues.includes(value)) {
 					diagnostics.push(this.createDiagnostic(
@@ -429,7 +675,7 @@ export class DiagnosticsProvider {
 				}
 			}
 		};
-	
+
 		// Determine the type and validate accordingly
 		let valueType: ValueType | undefined;
 		switch (token.type) {
@@ -473,7 +719,7 @@ export class DiagnosticsProvider {
 				break;
 			}
 		}
-	
+
 		// Validate type
 		if (valueType && !paramDef.types.includes(valueType)) {
 			diagnostics.push(this.createDiagnostic(
@@ -483,39 +729,39 @@ export class DiagnosticsProvider {
 			));
 		}
 	}
-	
+
 
 	private validateValueConstraints(token: Token, attribute: AttributeDefinition, diagnostics: Diagnostic[]) {
-		const {validation} = attribute;
+		const { validation } = attribute;
 		if (!validation) return;
-	
-		const {value} = token;
+
+		const { value } = token;
 		if (value === null) return;
-	
+
 		if (validation.pattern && typeof value === 'string' && !new RegExp(validation.pattern).test(value)) {
-				diagnostics.push(this.createDiagnostic(
-					token,
-					`Value does not match required pattern: ${validation.pattern}`,
-					DiagnosticSeverity.Error
-				));
-			}
-	
+			diagnostics.push(this.createDiagnostic(
+				token,
+				`Value does not match required pattern: ${validation.pattern}`,
+				DiagnosticSeverity.Error
+			));
+		}
+
 		if (validation.min !== undefined && typeof value === 'number' && value < validation.min) {
-				diagnostics.push(this.createDiagnostic(
-					token,
-					`Value must be greater than or equal to ${validation.min}`,
-					DiagnosticSeverity.Error
-				));
-			}
-	
+			diagnostics.push(this.createDiagnostic(
+				token,
+				`Value must be greater than or equal to ${validation.min}`,
+				DiagnosticSeverity.Error
+			));
+		}
+
 		if (validation.max !== undefined && typeof value === 'number' && value > validation.max) {
-				diagnostics.push(this.createDiagnostic(
-					token,
-					`Value must be less than or equal to ${validation.max}`,
-					DiagnosticSeverity.Error
-				));
-			}
-	
+			diagnostics.push(this.createDiagnostic(
+				token,
+				`Value must be less than or equal to ${validation.max}`,
+				DiagnosticSeverity.Error
+			));
+		}
+
 		if (validation.allowedValues && Array.isArray(validation.allowedValues)) {
 			// Convert value to string for comparison
 			const stringValue = String(value);
@@ -527,7 +773,7 @@ export class DiagnosticsProvider {
 				));
 			}
 		}
-	
+
 		if (validation.customValidator) {
 			try {
 				if (!validation.customValidator(value)) {
@@ -572,14 +818,14 @@ export class DiagnosticsProvider {
 
 	private validateNestedAttributes(token: Token, attributes: AttributeDefinition[], diagnostics: Diagnostic[]) {
 		if (token.type !== 'object' || !token.children) return;
-	
+
 		const nestedAttributes = this.collectAllAttributes(token);
 		const presentAttrs = new Set(
 			nestedAttributes
 				.map(attr => attr.children.find(c => c.type === 'identifier')?.getDisplayText())
 				.filter(Boolean)
 		);
-	
+
 		// Check for required nested attributes
 		attributes
 			.filter(attr => attr.required)
@@ -592,12 +838,12 @@ export class DiagnosticsProvider {
 					));
 				}
 			});
-	
+
 		// Validate each present nested attribute
 		nestedAttributes.forEach(attr => {
 			const attrName = attr.children.find(c => c.type === 'identifier')?.getDisplayText();
 			const attrDef = attributes.find(a => a.name === attrName);
-	
+
 			if (!attrDef) {
 				diagnostics.push(this.createDiagnostic(
 					attr,
@@ -606,7 +852,7 @@ export class DiagnosticsProvider {
 				));
 				return;
 			}
-	
+
 			const valueToken = attr.children.find(c => c.type !== 'identifier');
 			if (valueToken) {
 				this.validateAttributeValue(valueToken, attrDef, diagnostics);
@@ -617,15 +863,15 @@ export class DiagnosticsProvider {
 	private validateParameter(token: Token, diagnostics: Diagnostic[]) {
 		const parentBlock = this.findParentBlock(token);
 		if (!parentBlock) return;
-	
+
 		const blockDef = this.schema.getBlockDefinition(parentBlock.getDisplayText());
 		if (!blockDef?.parameters) return;
-	
+
 		// Get parameter position within the block
 		const parameterIndex = parentBlock.children
 			.filter(child => child.type === 'parameter')
 			.indexOf(token);
-	
+
 		// Get the parameter definition for this position
 		const paramDef = blockDef.parameters[parameterIndex];
 		if (!paramDef) {
@@ -636,11 +882,11 @@ export class DiagnosticsProvider {
 			));
 			return;
 		}
-	
+
 		// Get the parameter value and validate it matches the type
 		// const paramValue = token.getDisplayText();
 		const valueType = this.inferValueType(token);
-	
+
 		if (valueType && !paramDef.types.includes(valueType)) {
 			diagnostics.push(this.createDiagnostic(
 				token,

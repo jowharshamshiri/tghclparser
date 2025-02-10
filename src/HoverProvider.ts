@@ -1,6 +1,17 @@
-import type { HoverResult } from '.';
+import path from 'node:path';
+
+import { URI } from 'vscode-uri';
+
 import type { AttributeDefinition, BlockDefinition, FunctionDefinition, Token, TokenType, ValueType } from './model';
 import type { Schema } from './Schema';
+
+export interface HoverResult {
+	content: {
+		kind: 'markdown';
+		value: string;
+	};
+}
+
 
 export class HoverProvider {
 	constructor(private schema: Schema) { }
@@ -249,68 +260,109 @@ export class HoverProvider {
 	
 		return contents;
 	  }
+		  private getPathLinkMarkdown(value: string, sourceLocation: string): string {
+			  const sourceUri = URI.parse(sourceLocation);
+			  const sourceDir = path.dirname(sourceUri.fsPath);
+			  const depPath = path.resolve(sourceDir, value);
+			  const targetUri = URI.file(path.join(depPath, 'terragrunt.hcl')).toString();
+			  
+			  return `[Open terragrunt.hcl](${targetUri})`;
+		  }
+	  
+		  getHoverInfo(token: Token): HoverResult | null {
+			  let contents: string[] = [];
+			  const value = token.getDisplayText();
+	  
+			  switch (token.type as TokenType) {
+				  case 'string_lit': {
+					  if (token.parent?.type === 'attribute') {
+						  // Handle single dependency path
+						  if (token.parent.value === 'config_path' &&
+							  token.parent.parent?.type === 'block' &&
+							  token.parent.parent.value === 'dependency') {
+							  
+							  contents = [
+								  `## Terragrunt Dependency`,
+								  '',
+								  `Path: \`${value}\``,
+								  '',
+								  this.getPathLinkMarkdown(value as string, String(token.location.source) || '')
+							  ];
+							  break;
+						  }
+						  
+						  // Handle paths array in dependencies block
+						  if (token.parent.value === 'paths' &&
+							  token.parent.parent?.type === 'block' &&
+							  token.parent.parent.value === 'dependencies') {
+							  
+							  contents = [
+								  `## Terragrunt Dependencies Path`,
+								  '',
+								  `Path: \`${value}\``,
+								  '',
+								  this.getPathLinkMarkdown(value as string, String(token.location.source) || '')
+							  ];
+							  break;
+						  }
+					  }
+					  // Fall through to other cases if not a dependency
+				  }
+            case 'block_identifier':
+            case 'root_assignment_identifier': {
+                const blockDefinition = this.schema.getBlockDefinition(value);
+                if (blockDefinition) {
+                    contents = this.getBlockDocumentation(blockDefinition, value);
+                }
+                break;
+            }
 
-	getHoverInfo(token: Token): HoverResult | null {
-		let contents: string[] = [];
-		const value = token.getDisplayText();
+            case 'function_identifier': {
+                const funcDef = this.schema.getFunctionDefinition(value);
+                if (funcDef) {
+                    contents = this.getFunctionDocumentation(funcDef);
+                }
+                break;
+            }
 
-		switch (token.type as TokenType) {
-			case 'block_identifier':
-			case 'root_assignment_identifier':
-				{
-					const blockDefinition = this.schema.getBlockDefinition(value);
-					if (blockDefinition) {
-						contents = this.getBlockDocumentation(blockDefinition, value);
-					}
-					break;
-				}
+            case 'attribute_identifier': {
+                if (token.parent?.parent?.type === 'block') {
+                    const parentBlock = token.parent.parent;
+                    const parentBlockDefinition = this.schema.getBlockDefinition(parentBlock.getDisplayText());
+                    const attr = parentBlockDefinition?.attributes?.find(a => a.name === value);
+                    if (attr) {
+                        contents = this.getAttributeDocumentation(attr);
+                    }
+                }
+                break;
+            }
 
-			case 'function_identifier': {
-				const funcDef = this.schema.getFunctionDefinition(value);
-				if (funcDef) {
-					contents = this.getFunctionDocumentation(funcDef);
-				}
-				break;
-			}
+            case 'parameter': {
+                if (token.parent?.type === 'block') {
+                    const blockTemplate = this.schema.getBlockDefinition(token.parent.getDisplayText());
+                    const param = blockTemplate?.parameters?.find(p =>
+                        p.validation?.pattern && new RegExp(p.validation.pattern).test(value)
+                    );
+                    if (param) {
+                        contents = [
+                            `# Block Parameter: ${param.name}`,
+                            param.description || '',
+                            '## Details',
+                            `- **Type**: ${param.types.map(t => this.formatValueType(t)).join(' | ')}`,
+                            `- **Required**: ${param.required}`,
+                            param.validation?.pattern ? `- **Pattern**: \`${param.validation.pattern}\`` : ''
+                        ].filter(Boolean);
+                    }
+                }
+                break;
+            }
+        }
 
-			case 'attribute_identifier': {
-				if (token.parent?.parent?.type === 'block') {
-					const parentBlock = token.parent.parent;
-					const parentBlockDefinition = this.schema.getBlockDefinition(parentBlock.getDisplayText());
-					const attr = parentBlockDefinition?.attributes?.find(a => a.name === value);
-					if (attr) {
-						contents = this.getAttributeDocumentation(attr);
-					}
-				}
-				break;
-			}
-
-			case 'parameter': {
-				if (token.parent?.type === 'block') {
-					const blockTemplate = this.schema.getBlockDefinition(token.parent.getDisplayText());
-					const param = blockTemplate?.parameters?.find(p =>
-						p.validation?.pattern && new RegExp(p.validation.pattern).test(value)
-					);
-					if (param) {
-						contents = [
-							`# Block Parameter: ${param.name}`,
-							param.description || '',
-							'## Details',
-							`- **Type**: ${param.types.map(t => this.formatValueType(t)).join(' | ')}`,
-							`- **Required**: ${param.required}`,
-							param.validation?.pattern ? `- **Pattern**: \`${param.validation.pattern}\`` : ''
-						].filter(Boolean);
-					}
-				}
-				break;
-			}
-		}
-
-		return contents.length > 0 ? {
-			content: {
-				kind: 'markdown',
-				value: contents.join('\n\n')
-			}
-		} : null;
-	}
+        return contents.length > 0 ? {
+            content: {
+                kind: 'markdown',
+                value: contents.join('\n')
+            }
+        } : null;
+    }
 }
