@@ -1,7 +1,7 @@
 {
 	"name": "tghclparser",
 	"type": "module",
-	"version": "0.1.7",
+	"version": "0.1.9",
 	"packageManager": "pnpm@9.6.0",
 	"description": "Parser for .hcl files developed to be used as a vscode language server.",
 	"author": {
@@ -35,20 +35,21 @@
 		"dist"
 	],
 	"scripts": {
-    "build": "tsup src/index.ts --format cjs,esm --dts --external vscode-languageserver-types --external vscode-languageserver",
-    "format": "prettier --write \"src/**/*.ts\"",
-    "lint": "eslint --fix",
-    "prepare": "npm run build",
-    "prepublishOnly": "npm test && npm run lint",
-    "test": "mocha -r ts-node/register --loader=ts-node/esm 'tests/**/*.test.ts'"
-  },
+		"build": "tsup src/index.ts --format cjs,esm --dts --external vscode-languageserver-types --external vscode-languageserver",
+		"format": "prettier --write \"src/**/*.ts\"",
+		"lint": "eslint --fix",
+		"prepare": "npm run build",
+		"prepublishOnly": "npm test && npm run lint",
+		"test": "mocha -r ts-node/register --loader=ts-node/esm 'tests/**/*.test.ts'"
+	},
 	"peerDependencies": {
 		"typescript": ">=4.7.0"
 	},
 	"dependencies": {
 		"lodash-es": "4.17.21",
 		"vscode-languageserver": "^9.0.1",
-		"vscode-languageserver-types": "^3.17.5"
+		"vscode-languageserver-types": "^3.17.5",
+		"vscode-uri": "^3.1.0"
 	},
 	"devDependencies": {
 		"@types/lodash-es": "4.17.12",
