@@ -1,7 +1,19 @@
 {
   let debugEnabled = false;
-  let heredocMarker = null;
+  let heredocMarkerStack = [];
   let nextId = 1;
+
+  function pushHeredocMarker(marker) {
+    heredocMarkerStack.push(marker);
+  }
+  
+  function popHeredocMarker() {
+    return heredocMarkerStack.pop();
+  }
+  
+  function peekHeredocMarker() {
+    return heredocMarkerStack[heredocMarkerStack.length - 1];
+  }
 
   function consolidateStringChars(chars) {
 	const result = [];
@@ -385,33 +397,36 @@ Object = "{" _ pairs:(Pair (_ ","? _ Pair)* (_ ",")?)? _ "}" {
 
 StringLiteral = QuotedString / SingleQuotedString / Heredoc
 
-Heredoc = "<<" trim:"-"? beginMarker newline content:heredocContent endMarker {
+Heredoc = "<<" trim:"-"? marker:beginMarker newline content:heredocContent endMarkerLine {
+  popHeredocMarker();
   let finalContent = content;
   if (trim === "-") {
-    // Trim leading and trailing whitespace from each line
-    finalContent = content.split('\n').map(line => line.trim()).join('\n');
+    finalContent = finalContent.split('\n').map(line => line.trim()).join('\n');
   }
   return makeNode('string_lit', finalContent, location());
 }
 
 beginMarker = marker:$[A-Z][A-Z0-9]* {
-  heredocMarker = marker;
+  pushHeredocMarker(marker);
   return marker;
 }
 
-endMarker = newline end:$[A-Z][A-Z0-9]* &{
-  const matched = heredocMarker === end;
-  if (!matched) {
-    error(`Expected heredoc end marker "${heredocMarker}", but found "${end}"`);
+newline = "\n" / "\r\n"
+
+whitespace = [ \t]* 
+
+endMarkerLine = 
+  newline 
+  whitespace
+  marker:$[A-Z][A-Z0-9]* 
+  whitespace
+  &{
+    return marker === peekHeredocMarker();
   }
-  return matched;
-}
 
-heredocContent = $((!endMarker .)*) {
-  return text();
+heredocContent = content:$((!endMarkerLine .)*) {
+  return content;
 }
-
-newline = [\r\n]+
 
 QuotedString = '"' chars:DoubleStringChar* '"' {
   // Group consecutive string characters together
