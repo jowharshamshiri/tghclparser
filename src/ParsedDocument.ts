@@ -120,7 +120,6 @@ export class ParsedDocument {
 					console.log('Rule stack:', error.rules);
 				}
 
-
 				// Get the failing rule name - this is often in the error message or rule stack
 				const failingRule = error.message.match(/Expected [^,]+ but /)?.[0]  // Extract from message
 					|| (error as any).rule  // Some PEG implementations store it directly
