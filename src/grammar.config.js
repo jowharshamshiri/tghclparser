@@ -5,7 +5,6 @@ export default {
   dts: true,
   trace: false,
   cache: false,
-  
   returnTypes: {
     Start: 'RootNode',
     Statement: 'Statement',
