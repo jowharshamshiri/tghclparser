@@ -1,7 +1,9 @@
 import type { CompletionItem, Position } from 'vscode-languageserver';
 import { CompletionItemKind, InsertTextFormat } from 'vscode-languageserver';
 
-import type { AttributeDefinition, BlockDefinition, FunctionDefinition, Token } from './model';
+import type { AttributeDefinition, BlockDefinition, FunctionDefinition, RuntimeValue, ValueType } from './model';
+import { Token } from './model';
+import type { ParsedDocument } from './ParsedDocument';
 import type { Schema } from './Schema';
 
 type CompletionContext =
@@ -47,6 +49,142 @@ type CompletionContext =
 
 export class CompletionsProvider {
 	constructor(private schema: Schema) { }
+	private findBlock(ast: any, type: string): any {
+		if (ast.type === 'block' && ast.value === type) return ast;
+		if (!ast.children) return null;
+		for (const child of ast.children) {
+			const found = this.findBlock(child, type);
+			if (found) return found;
+		}
+		return null;
+	}
+
+	private async getLocalCompletions(parsedDoc: ParsedDocument, currentWord: string): Promise<CompletionItem[]> {
+		const completions: CompletionItem[] = [];
+		const ast = parsedDoc.getAST();
+		if (!ast) return completions;
+
+		// Find locals block
+		const localsBlock = this.findBlock(ast, 'locals');
+		if (!localsBlock) return completions;
+
+		// Process each attribute in locals block
+		for (const attr of localsBlock.children) {
+			if (attr.type === 'attribute') {
+				const name = attr.children.find(c => c.type === 'identifier')?.value;
+				const valueToken = attr.children.find(c => c.type !== 'identifier');
+				if (typeof name === 'string' && valueToken && valueToken instanceof Token) {
+					// Create a more basic completion without evaluated value for now
+					completions.push({
+						label: name,
+						kind: CompletionItemKind.Variable,
+						detail: `local.${name}`,
+						documentation: {
+							kind: 'markdown',
+							value: `Local variable defined in ${parsedDoc.getUri()}`
+						}
+					});
+				}
+			}
+		}
+
+		return completions;
+	}
+
+	private async getDependencyCompletions(parsedDoc: ParsedDocument, currentWord: string): Promise<CompletionItem[]> {
+		const completions: CompletionItem[] = [];
+		const dependencies = await parsedDoc.getWorkspace().getDependencies(parsedDoc.getUri());
+
+		for (const dep of dependencies) {
+			const depDoc = await parsedDoc.getWorkspace().getDocument(dep.sourcePath);
+			if (!depDoc) continue;
+
+			// Extract dependency name from the block
+			const depName = this.getDependencyName(dep.block);
+			if (!depName) continue;
+
+			// Find outputs block
+			const ast = depDoc.getAST();
+			if (!ast) continue;
+
+			const outputsBlock = this.findBlock(ast, 'outputs');
+			if (!outputsBlock) continue;
+
+			// Add completions for each output
+			for (const attr of outputsBlock.children) {
+				if (attr.type === 'attribute') {
+					const outputName = attr.children.find(c => c.type === 'identifier')?.value;
+					if (typeof outputName === 'string') {
+						completions.push({
+							label: `${depName}.outputs.${outputName}`,
+							kind: CompletionItemKind.Property,
+							detail: `Output from ${depName}`,
+							documentation: {
+								kind: 'markdown',
+								value: `Output variable from dependency "${depName}"`
+							}
+						});
+					}
+				}
+			}
+		}
+
+		return completions;
+	}
+
+	private getDependencyName(block: Token): string | undefined {
+		// For dependency blocks, name is in the parameter
+		if (block.value === 'dependency') {
+			const param = block.children.find(c => c.type === 'parameter');
+			return param?.value?.toString();
+		}
+		// For dependencies block, name might be in the paths array
+		else if (block.value === 'dependencies') {
+			const pathsAttr = block.children.find(c =>
+				c.type === 'attribute' &&
+				c.children.some(cc => cc.type === 'identifier' && cc.value === 'paths')
+			);
+			if (pathsAttr) {
+				const arrayLit = pathsAttr.children.find(c => c.type === 'array_lit');
+				if (arrayLit && arrayLit.children[0]) {
+					return arrayLit.children[0].value?.toString();
+				}
+			}
+		}
+		return undefined;
+	}
+
+	private formatRuntimeValue(value: RuntimeValue<ValueType>): string {
+		switch (value.type) {
+			case 'string': {
+				return `"${value.value}"`;
+			}
+			case 'number':
+			case 'boolean': {
+				return String(value.value);
+			}
+			case 'array': {
+				if (Array.isArray(value.value)) {
+					return `[${value.value.map(v => this.formatRuntimeValue(v)).join(', ')}]`;
+				}
+				return '[]';
+			}
+			case 'object':
+			case 'block': {
+				if (value.value instanceof Map) {
+					const entries: string[] = [];
+					value.value.forEach((v, k) => {
+						entries.push(`${k} = ${this.formatRuntimeValue(v)}`);
+					});
+					return `{${entries.join(', ')}}`;
+				}
+				return '{}';
+			}
+			default: {
+				return value.type;
+			}
+		}
+	}
 	private determineCompletionContext(token: Token | null, line: string, position: Position): CompletionContext {
 		const lineUptoCursor = line.slice(0, position.character);
 		const currentWord = this.getCurrentWord(lineUptoCursor);
@@ -135,6 +273,56 @@ export class CompletionsProvider {
 		return { type: 'root_level', currentWord };
 	}
 
+	private async getAllLocals(doc: ParsedDocument): Promise<Map<string, RuntimeValue<ValueType>>> {
+		const locals = new Map<string, RuntimeValue<ValueType>>();
+		const ast = doc.getAST();
+		if (!ast) return locals;
+
+		// Find locals block
+		const localsBlock = this.findBlock(ast, 'locals');
+		if (!localsBlock) return locals;
+
+		// Process each attribute in locals block
+		for (const attr of localsBlock.children) {
+			if (attr.type === 'attribute') {
+				const name = attr.children.find(c => c.type === 'identifier')?.value;
+				const valueToken = attr.children.find(c => c.type !== 'identifier');
+				if (name && valueToken) {
+					const value = await doc.evaluateValue(valueToken);
+					if (value) {
+						locals.set(name.toString(), value);
+					}
+				}
+			}
+		}
+
+		return locals;
+	}
+
+	private async getOutputs(doc: ParsedDocument): Promise<Map<string, RuntimeValue<ValueType>>> {
+		const outputs = new Map<string, RuntimeValue<ValueType>>();
+		const ast = doc.getAST();
+		if (!ast) return outputs;
+
+		const outputsBlock = this.findBlock(ast, 'outputs');
+		if (!outputsBlock) return outputs;
+
+		for (const attr of outputsBlock.children) {
+			if (attr.type === 'attribute') {
+				const name = attr.children.find(c => c.type === 'identifier')?.value;
+				const valueToken = attr.children.find(c => c.type !== 'identifier');
+				if (name && valueToken) {
+					const value = await doc.evaluateValue(valueToken);
+					if (value) {
+						outputs.set(name.toString(), value);
+					}
+				}
+			}
+		}
+
+		return outputs;
+	}
+
 	private getValueCompletions(
 		blockType: string,
 		attributeName: string,
@@ -179,48 +367,57 @@ export class CompletionsProvider {
 			/[a-z_]\w*$/i.test(trimmed);
 	}
 
-	getCompletions(line: string, position: Position, token: Token | null): CompletionItem[] {
+	async getCompletions(line: string, position: Position, token: Token | null, parsedDoc: ParsedDocument): Promise<CompletionItem[]> {
 		const context = this.determineCompletionContext(token, line, position);
 		let completions: CompletionItem[] = [];
 
-		switch (context.type) {
-			case 'root_level': {
-				completions = this.getTopLevelBlockCompletions();
-				break;
-			}
-			case 'block_type': {
-				completions = this.getTopLevelBlockCompletions();
-				break;
-			}
-			case 'block_parameter': {
-				completions = this.getBlockParameterCompletions(context.blockType);
-				break;
-			}
-			case 'block_body': {
-				const blockDef = this.schema.getBlockDefinition(context.blockType);
-				if (blockDef) {
-					completions = [
-						...this.getAttributeCompletions(context.blockType, token),
-						...this.getNestedBlockCompletions(context.blockType)
-					];
+		// If we're after a local. reference
+		if (context.currentWord.startsWith('local.')) {
+			completions = await this.getLocalCompletions(parsedDoc, context.currentWord.slice(6));
+		}
+		// If we're in a dependency reference
+		else if (token?.type === 'reference' && token.parent && token.parent.value === 'dependency') {
+			completions = await this.getDependencyCompletions(parsedDoc, context.currentWord);
+		}
+		else {
+			switch (context.type) {
+				case 'root_level': {
+					completions = this.getTopLevelBlockCompletions();
+					break;
 				}
-				break;
-			}
-			case 'attribute_value': {
-				completions = this.getValueCompletions(
-					context.blockType,
-					context.attributeName,
-					context.currentWord,
-					token
-				);
-				break;
-			}
-			case 'nested_block_type': {
-				completions = this.getNestedBlockCompletions(context.parentBlockType);
-				break;
+				case 'block_type': {
+					completions = this.getTopLevelBlockCompletions();
+					break;
+				}
+				case 'block_parameter': {
+					completions = this.getBlockParameterCompletions(context.blockType);
+					break;
+				}
+				case 'block_body': {
+					const blockDef = this.schema.getBlockDefinition(context.blockType);
+					if (blockDef) {
+						completions = [
+							...this.getAttributeCompletions(context.blockType, token),
+							...this.getNestedBlockCompletions(context.blockType)
+						];
+					}
+					break;
+				}
+				case 'attribute_value': {
+					completions = this.getValueCompletions(
+						context.blockType,
+						context.attributeName,
+						context.currentWord,
+						token
+					);
+					break;
+				}
+				case 'nested_block_type': {
+					completions = this.getNestedBlockCompletions(context.parentBlockType);
+					break;
+				}
 			}
 		}
-
 		if (context.currentWord) {
 			const partial = 'partial' in context ? context.partial : false;
 			completions = this.filterCompletionsByWord(completions, context.currentWord, partial);

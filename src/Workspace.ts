@@ -1,17 +1,14 @@
+import * as fsSync from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
 import { DiagnosticSeverity } from 'vscode-languageserver-types';
 import { URI } from 'vscode-uri';
 
+import type { DependencyInfo, RuntimeValue, ValueType } from './model';
 import { Token } from './model';
 import { ParsedDocument } from './ParsedDocument';
 
-interface DependencyInfo {
-	sourcePath: string;
-	targetPath: string;
-	block: Token;
-}
 export class Workspace {
     private documents: Map<string, ParsedDocument>;
     private dependencies: Map<string, DependencyInfo[]>;
@@ -159,6 +156,37 @@ export class Workspace {
 		this.dependencies.delete(uri);
 	}
 
+	findInParentFolders(startUri: string, args: RuntimeValue<ValueType>[]): RuntimeValue<ValueType> {
+        const filename = args[0];
+        if (filename?.type !== 'string') {
+            return { type: 'null', value: null };
+        }
+
+        const startPath = URI.parse(startUri).fsPath;
+        let currentDir = path.dirname(startPath);
+        const stopAt = args[1];
+
+        while (currentDir !== path.parse(currentDir).root) {
+            // Ensure we have a string value for path.join
+            if (typeof filename.value !== 'string') {
+                return { type: 'null', value: null };
+            }
+            const filePath = path.join(currentDir, filename.value);
+            if (fsSync.existsSync(filePath)) {
+                return {
+                    type: 'string',
+                    value: filePath
+                } as RuntimeValue<'string'>;
+            }
+            if (stopAt?.type === 'string' && currentDir === stopAt.value) {
+                break;
+            }
+            currentDir = path.dirname(currentDir);
+        }
+
+        return { type: 'null', value: null };
+    }
+	
 	private async updateDependencies(document: ParsedDocument) {
 		const uri = document.getUri();
 		const deps: DependencyInfo[] = [];

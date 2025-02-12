@@ -42,7 +42,14 @@ export type TokenType =
 	| 'inline_comment'
 	| 'heredoc'
 	| 'whitespace'
-	| 'unknown';
+	| 'unknown'
+| 'local_reference'
+| 'namespace'
+| 'access_chain'
+|'dependency'
+|'block_identifier'
+| 'interpolated_string'
+|'legacy_interpolation';
 
 export type ValueType =
 	| PrimitiveValueType
@@ -259,4 +266,37 @@ export interface FunctionDefinition {
 	examples?: string[];
 	deprecated?: boolean;
 	deprecationMessage?: string;
+}
+
+
+export interface ResolvedReference {
+    value: RuntimeValue<ValueType>;
+    source: string;
+    found: boolean;
+}
+
+export interface RuntimeValue<T extends ValueType> {
+	type: T;
+	value: RuntimeValueType<T>;
+}
+
+export type RuntimeValueType<T extends ValueType> =
+	T extends 'string' ? string :
+	T extends 'number' ? number :
+	T extends 'boolean' ? boolean :
+	T extends 'null' ? null :
+	T extends 'array' ? RuntimeValue<ValueType>[] :
+	T extends 'object' | 'block' ? Map<string, RuntimeValue<ValueType>> :
+	T extends 'function' ? (args: RuntimeValue<ValueType>[]) => RuntimeValue<ValueType> :
+	T extends ExpressionValueType ? RuntimeValue<ValueType> :
+	never;
+
+
+export type EvaluatedValue = RuntimeValue<ValueType>;
+
+
+export interface DependencyInfo {
+	sourcePath: string;
+	targetPath: string;
+	block: Token;
 }

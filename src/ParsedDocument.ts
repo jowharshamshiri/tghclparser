@@ -1,10 +1,13 @@
+import path from 'node:path';
+
 import type { CompletionItem, Diagnostic, Position } from 'vscode-languageserver';
+import { URI } from 'vscode-uri';
 
 import { CompletionsProvider } from './CompletionsProvider';
 import { DiagnosticsProvider } from './DiagnosticsProvider';
 import type { HoverResult } from './HoverProvider';
 import { HoverProvider } from './HoverProvider';
-import type { TokenType } from './model';
+import type { ResolvedReference, RuntimeValue, TokenType, ValueType } from './model';
 import { Token } from './model';
 import { Schema } from './Schema';
 import { parse as tg_parse, SyntaxError } from './terragrunt-parser';
@@ -14,18 +17,601 @@ export class ParsedDocument {
 	private ast: any | null = null;
 	private diagnostics: Diagnostic[] = [];
 	private tokens: Token[] = [];
+	private locals = new Map<string, RuntimeValue<ValueType>>();
+	private dependencies = new Map<string, string>();
 	private schema: Schema;
 	private completionsProvider: CompletionsProvider;
 	private hoverProvider: HoverProvider;
 	private diagnosticsProvider: DiagnosticsProvider;
 
-	constructor(private workspace: Workspace, private uri: string, private content: string) {
+	constructor(
+		private workspace: Workspace,
+		private uri: string,
+		private content: string
+	) {
 		this.schema = Schema.getInstance();
 		this.completionsProvider = new CompletionsProvider(this.schema);
 		this.hoverProvider = new HoverProvider(this.schema);
 		this.diagnosticsProvider = new DiagnosticsProvider(this.schema);
-		this.content = content;
 		this.parseContent();
+		this.buildProfile();
+	}
+
+	private buildProfile() {
+		if (!this.ast) return;
+		this.processLocalsBlock(this.ast);
+		this.processDependencyBlocks(this.ast);
+	}
+
+	public async getAllLocals(): Promise<Map<string, RuntimeValue<ValueType>>> {
+		console.log('getAllLocals called');
+		const locals = new Map<string, RuntimeValue<ValueType>>();
+
+		const localsBlock = this.findBlock(this.ast, 'locals');
+		if (!localsBlock) return locals;
+
+		for (const attr of localsBlock.children) {
+			if (attr.type === 'attribute') {
+				const nameChild = attr.children.find(c => c.type === 'attribute_identifier');
+				// Get the function call or value token
+				const valueToken = attr.children.find(c => c.type !== 'attribute_identifier');
+
+				console.log('Processing local:', {
+					name: nameChild?.value,
+					valueToken: valueToken ? {
+						type: valueToken.type,
+						value: valueToken.value,
+						children: valueToken.children?.map(c => ({
+							type: c.type,
+							value: c.value
+						}))
+					} : null
+				});
+
+				if (nameChild?.value && valueToken instanceof Token) {
+					// Actually evaluate the value
+					const value = await this.evaluateValue(valueToken);
+					console.log(`Evaluated ${nameChild.value}:`, value);
+					if (value) {
+						locals.set(nameChild.value as string, value);
+					}
+				}
+			}
+		}
+
+		console.log('Final locals:', Array.from(locals.entries()));
+		return locals;
+	}
+	public async evaluateValue(node: Token): Promise<RuntimeValue<ValueType> | undefined> {
+		if (!node) return undefined;
+		
+		console.log('evaluateValue called for node:', {
+			type: node.type,
+			value: node.value,
+			children: node.children?.map(c => ({
+				type: c.type,
+				value: c.value,
+				children: c.children?.length
+			}))
+		});
+	
+		switch (node.type) {
+			case 'legacy_interpolation': {
+				// Legacy interpolation wraps expressions - evaluate its first child
+				if (node.children.length > 0) {
+					return await this.evaluateValue(node.children[0]);
+				}
+				return {
+					type: 'string',
+					value: ''
+				};
+			}
+	
+			case 'interpolated_string': {
+				const parts: string[] = [];
+				
+				for (const child of node.children) {
+					const evaluated = await this.evaluateValue(child);
+					if (evaluated) {
+						parts.push(String(evaluated.value));
+					}
+				}
+	
+				return {
+					type: 'string',
+					value: parts.join('')
+				};
+			}
+	
+			case 'function_call': {
+				const funcName = node.children.find(c => c.type === 'function_identifier')?.value;
+				
+				switch(funcName) {
+					case 'get_env': {
+						const envVarArg = node.children.find(c => c.type === 'string_lit');
+						const defaultValueArg = node.children[2];
+						
+						if (!envVarArg?.value) return undefined;
+			
+						const envVar = envVarArg.value as string;
+						let defaultValue: string | undefined;
+			
+						if (defaultValueArg) {
+							const evaluated = await this.evaluateValue(defaultValueArg);
+							defaultValue = evaluated ? String(evaluated.value) : undefined;
+						}
+			
+						return {
+							type: 'string',
+							value: process.env[envVar] ?? defaultValue ?? `mock_${envVar}`
+						};
+					}
+			
+					case 'get_terragrunt_dir':
+					case 'get_parent_terragrunt_dir': {
+						// For mocking purposes, return a mock path based on the file location
+						const mockPath = this.uri ? path.dirname(URI.parse(this.uri).fsPath) : '/mock/terragrunt/dir';
+						return {
+							type: 'string',
+							value: mockPath
+						};
+					}
+			
+					case 'yamldecode': {
+						// For now just return a mock object
+						return {
+							type: 'object',
+							value: new Map([['mock_yaml_key', {
+								type: 'string',
+								value: 'mock_yaml_value'
+							}]])
+						};
+					}
+			
+					case 'file': {
+						// Mock file reading - in real implementation you'd read the file
+						return {
+							type: 'string',
+							value: 'mock_file_content'
+						};
+					}
+			
+					case 'replace': {
+						const [, strArg, oldArg, newArg] = node.children;
+						
+						if (!strArg || !oldArg || !newArg) return undefined;
+			
+						const str = await this.evaluateValue(strArg);
+						const oldStr = await this.evaluateValue(oldArg);
+						const newStr = await this.evaluateValue(newArg);
+			
+						if (!str || !oldStr || !newStr) return undefined;
+			
+						return {
+							type: 'string',
+							value: String(str.value).replace(String(oldStr.value), String(newStr.value))
+						};
+					}
+			
+					default: {
+						console.log('Unknown function:', funcName);
+						return undefined;
+					}
+				}
+			}
+	
+			case 'string_lit': {
+				return {
+					type: 'string',
+					value: String(node.value ?? '')
+				};
+			}
+	
+			default: {
+				console.log('Unhandled node type:', node.type);
+				return undefined;
+			}
+		}
+	}
+	private coerceToString(value: RuntimeValue<ValueType>): string {
+		switch (value.type) {
+			case 'string':
+			case 'number':
+			case 'boolean': {
+				return String(value.value);
+			}
+			case 'array': {
+				return Array.isArray(value.value) ? value.value.map(v => this.coerceToString(v)).join('') : '';
+			}
+			case 'object':
+			case 'block': {
+				if (value.value instanceof Map) {
+					const entries: string[] = [];
+					value.value.forEach((v, k) => {
+						entries.push(`${k}=${this.coerceToString(v)}`);
+					});
+					return entries.join(',');
+				}
+				return '';
+			}
+			default: {
+				return '';
+			}
+		}
+	}
+	private isPrimitiveValue(value: unknown): value is string | number | boolean | null {
+		return typeof value === 'string' ||
+			typeof value === 'number' ||
+			typeof value === 'boolean' ||
+			value === null;
+	}
+
+	private getPrimitiveValue(value: RuntimeValue<ValueType>): string | number | boolean | null {
+		if (!value) return null;
+
+		switch (value.type) {
+			case 'string':
+			case 'number':
+			case 'boolean': {
+				if (typeof value.value === 'string' || typeof value.value === 'number' || typeof value.value === 'boolean' || value.value === null) {
+					return value.value;
+				}
+				return null;
+			}
+			case 'null': {
+				return null;
+			}
+			case 'array': {
+				if (!Array.isArray(value.value)) return null;
+				const primitives = value.value
+					.map(v => this.getPrimitiveValue(v))
+					.filter(this.isPrimitiveValue);
+				return primitives.join(',');
+			}
+			case 'object':
+			case 'block': {
+				if (!(value.value instanceof Map)) return null;
+				const obj: Record<string, string | number | boolean> = {};
+				value.value.forEach((v, k) => {
+					const primitive = this.getPrimitiveValue(v);
+					if (primitive !== null) {
+						obj[k] = primitive;
+					}
+				});
+				return JSON.stringify(obj);
+			}
+			case 'function': {
+				return null;
+			}
+			default: {
+				// Handle expression types
+				if (value.value && typeof value.value === 'object' && 'type' in value.value) {
+					return this.getPrimitiveValue(value.value as RuntimeValue<ValueType>);
+				}
+				return null;
+			}
+		}
+	}
+
+	private traverseValue(value: RuntimeValue<ValueType>, parts: string[]): RuntimeValue<ValueType> {
+		if (parts.length === 0) return value;
+
+		const nullValue: RuntimeValue<'null'> = { type: 'null', value: null };
+
+		switch (value.type) {
+			case 'object':
+			case 'block': {
+				if (!(value.value instanceof Map)) return nullValue;
+				const nextValue = value.value.get(parts[0]);
+				if (!nextValue) return nullValue;
+				return this.traverseValue(nextValue, parts.slice(1));
+			}
+			case 'array': {
+				if (!Array.isArray(value.value)) return nullValue;
+				const index = Number.parseInt(parts[0], 10);
+				if (Number.isNaN(index) || index < 0 || index >= value.value.length) {
+					return nullValue;
+				}
+				return this.traverseValue(value.value[index], parts.slice(1));
+			}
+			default: {
+				return nullValue;
+			}
+		}
+	}
+
+
+	private async unwrapPromise<T extends ValueType>(promise: Promise<RuntimeValue<T> | undefined>): Promise<RuntimeValue<T> | undefined> {
+		const result = await promise;
+		if (!result) return undefined;
+		return result;
+	}
+
+	// Update the evaluate functions to properly handle async/await
+	private async processLocalsBlock(ast: any) {
+		const localsBlock = this.findBlock(ast, 'locals');
+		if (!localsBlock) return;
+
+		for (const attr of localsBlock.children) {
+			if (attr.type === 'attribute') {
+				const name = attr.children.find((c: any) => c.type === 'identifier')?.value;
+				const valueToken = attr.children.find((c: any) => c.type !== 'identifier');
+				if (name && valueToken) {
+					const value = await this.evaluateValue(valueToken);
+					if (value) {
+						this.locals.set(name, value);
+					}
+				}
+			}
+		}
+	}
+
+	public async resolveOutputReference(parts: string[], _node: Token): Promise<ResolvedReference | undefined> {
+		const outputsBlock = this.findBlock(this.ast, 'outputs');
+		if (!outputsBlock) return undefined;
+
+		const outputName = parts[0];
+		const outputAttr = outputsBlock.children.find((c: any) =>
+			c.type === 'attribute' &&
+			c.children.some((cc: any) => cc.type === 'identifier' && cc.value === outputName)
+		);
+
+		if (!outputAttr) return undefined;
+
+		const valueToken = outputAttr.children.find((c: any) => c.type !== 'identifier');
+		if (!valueToken) return undefined;
+
+		const value = await this.evaluateValue(valueToken);
+		if (!value) return undefined;
+
+		const result = parts.length > 1 ? this.traverseValue(value, parts.slice(1)) : value;
+		return {
+			value: result,
+			source: this.uri,
+			found: true
+		};
+	}
+
+	private async evaluateExpression(node: Token): Promise<RuntimeValue<ValueType> | undefined> {
+		switch (node.type) {
+			case 'ternary_expression': {
+				const [condition, trueExpr, falseExpr] = node.children;
+				const condValue = await this.evaluateValue(condition);
+				if (!condValue) return undefined;
+
+				const condBool = this.getPrimitiveValue(condValue);
+				if (condBool === null) return undefined;
+
+				return condBool ?
+					await this.evaluateValue(trueExpr) :
+					await this.evaluateValue(falseExpr);
+			}
+			case 'comparison_expression': {
+				const [left, op, right] = node.children;
+				const leftValue = await this.evaluateValue(left);
+				const rightValue = await this.evaluateValue(right);
+				if (!op.value || typeof op.value !== 'string') return undefined;
+
+				return this.evaluateComparison(leftValue, rightValue, op.value);
+			}
+			default: {
+				return undefined;
+			}
+		}
+	}
+	private async evaluateInterpolation(node: Token): Promise<RuntimeValue<'string'>> {
+		const parts: string[] = [];
+
+		for (const child of node.children) {
+			const value = await this.evaluateValue(child);
+			if (value) {
+				parts.push(this.coerceToString(value));
+			}
+		}
+
+		return {
+			type: 'string',
+			value: parts.join('')
+		};
+	}
+	private evaluateComparison(
+		left: RuntimeValue<ValueType> | undefined,
+		right: RuntimeValue<ValueType> | undefined,
+		operator: string
+	): RuntimeValue<'boolean'> {
+		if (!left || !right) {
+			return { type: 'boolean', value: false };
+		}
+
+		const leftValue = this.getPrimitiveValue(left);
+		const rightValue = this.getPrimitiveValue(right);
+
+		if (leftValue === null || rightValue === null) {
+			return { type: 'boolean', value: false };
+		}
+
+		let result = false;
+		switch (operator) {
+			case '==': {
+				result = leftValue === rightValue; break;
+			}
+			case '!=': {
+				result = leftValue !== rightValue; break;
+			}
+			case '<': {
+				result = leftValue < rightValue; break;
+			}
+			case '<=': {
+				result = leftValue <= rightValue; break;
+			}
+			case '>': {
+				result = leftValue > rightValue; break;
+			}
+			case '>=': {
+				result = leftValue >= rightValue; break;
+			}
+		}
+
+		return { type: 'boolean', value: result };
+	}
+
+	private evaluateFunction(funcName: string, args: RuntimeValue<ValueType>[]): RuntimeValue<ValueType> | undefined {
+		switch (funcName) {
+			case 'find_in_parent_folders': {
+				const result = this.workspace.findInParentFolders(this.uri, args);
+				return result ?? { type: 'null', value: null } as RuntimeValue<'null'>;
+			}
+			case 'get_env': {
+				if (!args[0] || args[0].type !== 'string') {
+					return { type: 'string', value: '' } as RuntimeValue<'string'>;
+				}
+				return {
+					type: 'string',
+					value: process.env[args[0].value as string] ?? ''
+				} as RuntimeValue<'string'>;
+			}
+			case 'get_terraform_commands_that_need_vars': {
+				return {
+					type: 'array',
+					value: ['plan', 'apply', 'destroy', 'import', 'push', 'refresh'].map(cmd => ({
+						type: 'string',
+						value: cmd
+					} as RuntimeValue<'string'>))
+				} as RuntimeValue<'array'>;
+			}
+			default: {
+				return undefined;
+			}
+		}
+	}
+
+	public async resolveReference(node: Token): Promise<ResolvedReference | undefined> {
+		const parts = this.buildReferencePath(node);
+		if (parts.length === 0) return undefined;
+
+		switch (parts[0]) {
+			case 'local': {
+				return this.resolveLocalReference(parts.slice(1));
+			}
+			case 'dependency': {
+				return this.resolveDependencyReference(parts.slice(1), node);
+			}
+			case 'get_parent_terragrunt_dir': {
+				return {
+					value: {
+						type: 'string',
+						value: path.dirname(this.uri)
+					} as RuntimeValue<'string'>,
+					source: this.uri,
+					found: true
+				};
+			}
+		}
+		return undefined;
+	}
+
+	private resolveLocalReference(parts: string[]): ResolvedReference | undefined {
+		if (parts.length === 0) return undefined;
+
+		const value = this.locals.get(parts[0]);
+		if (!value) return undefined;
+
+		return {
+			value: this.traverseValue(value, parts.slice(1)),
+			source: this.uri,
+			found: true
+		};
+	}
+
+	private async resolveDependencyReference(parts: string[], node: Token): Promise<ResolvedReference | undefined> {
+		if (parts.length < 2) return undefined;
+
+		const depUri = this.dependencies.get(parts[0]);
+		if (!depUri) return undefined;
+
+		const depDoc = await this.workspace.getDocument(depUri);
+		if (!depDoc) return undefined;
+
+		if (parts[1] === 'outputs') {
+			const outputRef = parts.slice(2);
+			return depDoc.resolveOutputReference(outputRef, node);
+		}
+
+		return undefined;
+	}
+
+	private findAllBlocks(ast: any, types: string[]): any[] {
+		const blocks: any[] = [];
+		if (ast.type === 'block' && types.includes(ast.value)) {
+			blocks.push(ast);
+		}
+		if (ast.children) {
+			for (const child of ast.children) {
+				blocks.push(...this.findAllBlocks(child, types));
+			}
+		}
+		return blocks;
+	}
+
+	private findAttributeValue(block: any, name: string): any {
+		const attr = block.children.find((c: any) =>
+			c.type === 'attribute' &&
+			c.children.some((cc: any) => cc.type === 'identifier' && cc.value === name)
+		);
+		if (!attr) return undefined;
+		const valueNode = attr.children.find((c: any) => c.type !== 'identifier');
+		return valueNode?.value;
+	}
+
+	private resolveDependencyPath(configPath: string): string {
+		if (path.isAbsolute(configPath)) {
+			return configPath;
+		}
+		const sourceDir = path.dirname(URI.parse(this.uri).fsPath);
+		return path.resolve(sourceDir, configPath);
+	}
+
+	private buildReferencePath(node: Token): string[] {
+		const parts: string[] = [];
+		let current: Token | null = node;
+		while (current) {
+			if (current.type === 'identifier') {
+				parts.unshift(current.getDisplayText());
+			}
+			current = current.parent;
+		}
+		return parts;
+	}
+
+	private processDependencyBlocks(ast: any) {
+		const dependencyBlocks = this.findAllBlocks(ast, ['dependency', 'dependencies']);
+
+		for (const block of dependencyBlocks) {
+			if (block.value === 'dependency') {
+				const name = block.children.find((c: any) => c.type === 'parameter')?.value;
+				const configPath = this.findAttributeValue(block, 'config_path');
+				if (name && configPath) {
+					const uri = this.resolveDependencyPath(configPath as string);
+					this.dependencies.set(name, uri);
+				}
+			} else if (block.value === 'dependencies') {
+				const pathsAttr = block.children.find((c: any) =>
+					c.type === 'attribute' &&
+					c.children.some((cc: any) => cc.type === 'identifier' && cc.value === 'paths')
+				);
+				if (pathsAttr) {
+					const arrayLit = pathsAttr.children.find((c: any) => c.type === 'array_lit');
+					if (arrayLit) {
+						for (const pathElement of arrayLit.children) {
+							if (pathElement.type === 'string_lit') {
+								const uri = this.resolveDependencyPath(pathElement.value);
+								this.dependencies.set(pathElement.value, uri);
+							}
+						}
+					}
+				}
+			}
+		}
 	}
 
 	private createToken(node: any): Token | null {
@@ -219,16 +805,26 @@ export class ParsedDocument {
 		return this.diagnostics;
 	}
 
-	public getCompletionsAtPosition(position: Position): CompletionItem[] {
+	public getCompletionsAtPosition(position: Position): Promise<CompletionItem[]> {
 		const lineText = this.getLineAtPosition(position);
 		const token = this.findTokenAtPosition(position);
-		return this.completionsProvider.getCompletions(lineText, position, token);
+		return this.completionsProvider.getCompletions(lineText, position, token, this);
 	}
 
-	public getHoverInfo(position: Position): HoverResult | null {
+	public async getHoverInfo(position: Position): Promise<HoverResult | null> {
 		const token = this.findTokenAtPosition(position);
 		if (!token) return null;
-		return this.hoverProvider.getHoverInfo(token);
+		return this.hoverProvider.getHoverInfo(token, this);
+	}
+
+	public findBlock(ast: any, type: string): any {
+		if (ast.type === 'block' && ast.value === type) return ast;
+		if (!ast.children) return null;
+		for (const child of ast.children) {
+			const found = this.findBlock(child, type);
+			if (found) return found;
+		}
+		return null;
 	}
 
 	public findTokenAtPosition(position: Position): Token | null {
