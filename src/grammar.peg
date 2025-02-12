@@ -396,14 +396,64 @@ Object = "{" _ pairs:(Pair (_ ","? _ Pair)* (_ ",")?)? _ "}" {
 }
 
 StringLiteral = QuotedString / SingleQuotedString / Heredoc
-
 Heredoc = "<<" trim:"-"? marker:beginMarker newline content:heredocContent endMarkerLine {
   popHeredocMarker();
-  let finalContent = content;
-  if (trim === "-") {
-    finalContent = finalContent.split('\n').map(line => line.trim()).join('\n');
+  
+  // Handle trimming if specified
+  if (trim === "-" && Array.isArray(content)) {
+    content = content.map(part => {
+      if (typeof part === 'string') {
+        return part.split('\n').map(line => line.trim()).join('\n');
+      }
+      return part;
+    });
+  } else if (trim === "-" && typeof content === 'string') {
+    content = content.split('\n').map(line => line.trim()).join('\n');
   }
-  return makeNode('string_lit', finalContent, location());
+
+  const fullLocation = location();
+
+  // If content is a string, create a string literal node
+  if (typeof content === 'string') {
+    return makeNode('string_lit', content, fullLocation);
+  }
+
+  // For content with interpolations, create an interpolated string node
+  return makeNode('interpolated_string', null, fullLocation,
+    content.map(part => {
+      if (typeof part === 'string') {
+        return makeNode('string_lit', part, fullLocation);
+      }
+      // Preserve interpolation nodes as they are
+      return part;
+    })
+  );
+}
+
+heredocContent = parts:(
+  (!endMarkerLine (
+    InterpolatedExpr /
+    . { return text(); }
+  ))
+)* {
+  // Extract actual content from the parts array structure
+  let content = parts.map(([_, part]) => {
+    if (typeof part === 'string') {
+      return part;
+    }
+    // Handle interpolation nodes by preserving their structure
+    return part;
+  });
+  
+  // Consolidate consecutive string characters
+  content = consolidateStringChars(content);
+  
+  // If all parts are strings, join them
+  if (content.every(part => typeof part === 'string')) {
+    return content.join('');
+  }
+  
+  return content;
 }
 
 beginMarker = marker:$[A-Z][A-Z0-9]* {
@@ -424,9 +474,6 @@ endMarkerLine =
     return marker === peekHeredocMarker();
   }
 
-heredocContent = content:$((!endMarkerLine .)*) {
-  return content;
-}
 
 QuotedString = '"' chars:DoubleStringChar* '"' {
   // Group consecutive string characters together
