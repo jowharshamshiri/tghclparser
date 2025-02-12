@@ -8,93 +8,138 @@ export class AnError extends Error {
 		this.name = "TGLS Error";
 	}
 }
-
 export type TokenType =
-	| 'root'
-	| 'block'
-	| 'identifier'
-	| 'block_identifier'
-	| 'root_assignment_identifier'
-	| 'attribute_identifier'
-	| 'reference_identifier'
-	| 'function_identifier'
-	| 'parameter'
-	| 'attribute'
-	| 'string_lit'
-	| 'number_lit'
-	| 'boolean_lit'
-	| 'array_lit'
-	| 'object'
-	| 'reference'
-	| 'interpolation'
-	| 'ternary_expression'
-	| 'comparison_expression'
-	| 'logical_expression'
-	| 'arithmetic_expression'
-	| 'null_coalescing'
-	| 'unary_expression'
-	| 'postfix_expression'
-	| 'pipe_expression'
-	| 'list_comprehension'
-	| 'map_comprehension'
-	| 'function_call'
-	| 'block_comment'
-	| 'inline_comment'
-	| 'heredoc'
-	| 'whitespace'
-	| 'unknown'
-| 'local_reference'
-| 'namespace'
-| 'access_chain'
-|'dependency'
-|'block_identifier'
-| 'interpolated_string'
-|'legacy_interpolation';
-
-export type ValueType =
-	| PrimitiveValueType
-	| ComplexValueType
-	| ExpressionValueType;
+    // Root elements
+    | 'root'
+    | 'assignment'
+    
+    // Block types
+    | 'block'
+    | 'dynamic_block'
+    | 'locals_block'
+    | 'moved_block'
+    | 'import_block'
+    | 'check_block'
+    | 'validation'
+    | 'meta_arguments'
+    
+    // Identifiers
+    | 'identifier'
+    | 'block_identifier'
+    | 'root_assignment_identifier'
+    | 'attribute_identifier'
+    | 'reference_identifier'
+    | 'function_identifier'
+    
+    // Structural elements
+    | 'parameter'
+    | 'attribute'
+    | 'access_chain'
+    | 'namespace'
+    
+    // Literals
+    | 'string_lit'
+    | 'number_lit'
+    | 'boolean_lit'
+    | 'array_lit'
+    | 'object'
+    
+    // References and interpolation
+    | 'reference'
+    | 'interpolation'
+    | 'legacy_interpolation'
+    | 'interpolated_string'
+    | 'string_content'
+    
+    // Reference types
+    | 'dependency_reference'
+    | 'local_reference'
+    | 'module_reference'
+    | 'terraform_reference'
+    | 'var_reference'
+    | 'data_reference'
+    | 'path_reference'
+    
+    // Expressions
+    | 'ternary_expression'
+    | 'comparison_expression'
+    | 'logical_expression'
+    | 'arithmetic_expression'
+    | 'null_coalescing'
+    | 'unary_expression'
+    | 'postfix_expression'
+    | 'pipe_expression'
+    | 'list_comprehension'
+    | 'map_comprehension'
+    | 'function_call'
+    
+    // Constructors
+    | 'type_constructor'
+    | 'collection_constructor'
+    
+    // Directives
+    | 'if_directive'
+    | 'for_directive'
+    | 'else_directive'
+    | 'endif_directive'
+    
+    // Comments and whitespace
+    | 'block_comment'
+    | 'inline_comment'
+    | 'directive_comment'
+    | 'documentation_comment'
+    | 'whitespace'
+    
+    // Meta arguments
+    | 'meta_count'
+    | 'meta_for_each'
+    | 'meta_depends_on'
+    | 'meta_provider'
+    | 'meta_lifecycle'
+    
+    // Special tokens
+    | 'inheritance'
+    | 'splat_expression'
+    | 'index_expression'
+    | 'member_access'
+    
+    // Language server specific
+    | 'unknown';
+	export type ValueType =
+    | PrimitiveValueType
+    | ComplexValueType
+    | ExpressionValueType;
 
 export type PrimitiveValueType =
-	| 'string'
-	| 'number'
-	| 'boolean'
-	| 'null';
+    | 'string'
+    | 'number'
+    | 'boolean'
+    | 'null';
 
 export type ComplexValueType =
-	| 'array'
-	| 'object'
-	| 'function'
-	| 'block';
+    | 'array'
+    | 'object'
+    | 'function'
+    | 'block'
+    | 'type_constructor'
+    | 'collection_constructor'
+	| 'directive'
+	| 'meta_argument';
 
 export type ExpressionValueType =
-	| 'ternary'
-	| 'comparison'
-	| 'logical'
-	| 'arithmetic'
-	| 'null_coalescing'
-	| 'unary'
-	| 'postfix'
-	| 'pipe'
-	| 'list_comprehension'
-	| 'map_comprehension'
-	| 'interpolation'
-	| 'reference';
-
-export interface Location {
-	start: {
-		offset: number;
-		line: number;
-		column: number;
-	};
-	end: {
-		offset: number;
-		line: number;
-		column: number;
-	};
-	source?: string;
-}
+    | 'ternary'
+    | 'comparison'
+    | 'logical'
+    | 'arithmetic'
+    | 'null_coalescing'
+    | 'unary'
+    | 'postfix'
+    | 'pipe'
+    | 'list_comprehension'
+    | 'map_comprehension'
+    | 'interpolation'
+    | 'legacy_interpolation'
+    | 'reference';
 
 export class Token {
 	readonly id: number;
@@ -289,6 +334,8 @@ export type RuntimeValueType<T extends ValueType> =
 	T extends 'object' | 'block' ? Map<string, RuntimeValue<ValueType>> :
 	T extends 'function' ? (args: RuntimeValue<ValueType>[]) => RuntimeValue<ValueType> :
 	T extends ExpressionValueType ? RuntimeValue<ValueType> :
+	T extends 'directive' ? DirectiveInfo :
+	T extends 'meta_argument' ? MetaArgumentInfo :
 	never;
 
 
@@ -299,4 +346,16 @@ export interface DependencyInfo {
 	sourcePath: string;
 	targetPath: string;
 	block: Token;
+}
+
+export interface DirectiveInfo {
+    type: 'if' | 'for' | 'else' | 'endif';
+    location: Location;
+    content?: string;
+}
+
+export interface MetaArgumentInfo {
+    type: 'count' | 'for_each' | 'depends_on' | 'provider' | 'lifecycle';
+    value: RuntimeValue<ValueType>;
+    location: Location;
 }
