@@ -13,16 +13,42 @@ export class FunctionRegistry {
 		this.functionGroups = new Map();
 		this.registerBuiltinFunctions();
 	}
+	registerFunction(name: string, implementation: FunctionImplementation) {
+        console.log(`FunctionRegistry: Registering function ${name}`);
+        this.functions.set(name, implementation);
+        // Log the current size of the functions map
+        console.log(`FunctionRegistry: Total registered functions: ${this.functions.size}`);
+    }
 
+    async evaluateFunction(
+        name: string,
+        args: RuntimeValue<ValueType>[],
+        context: FunctionContext
+    ): Promise<RuntimeValue<ValueType> | undefined> {
+        console.log(`FunctionRegistry: Looking up function ${name}`);
+        console.log(`FunctionRegistry: Available functions: ${Array.from(this.functions.keys())}`);
+        
+        const implementation = this.functions.get(name);
+        if (!implementation) {
+            console.warn(`Function "${name}" not implemented`);
+            return undefined;
+        }
+
+        try {
+            console.log(`FunctionRegistry: Executing function ${name}`);
+            const result = await implementation(args, context);
+            console.log(`FunctionRegistry: Function ${name} result:`, result);
+            return result;
+        } catch (error) {
+            console.error(`Error evaluating function "${name}":`, error);
+            return undefined;
+        }
+    }
 	static getInstance(): FunctionRegistry {
 		if (!FunctionRegistry.instance) {
 			FunctionRegistry.instance = new FunctionRegistry();
 		}
 		return FunctionRegistry.instance;
-	}
-
-	registerFunction(name: string, implementation: FunctionImplementation) {
-		this.functions.set(name, implementation);
 	}
 
 	registerFunctionGroup(group: FunctionGroup) {
@@ -43,25 +69,6 @@ export class FunctionRegistry {
 				this.unregisterFunction(`${namespace}.${name}`);
 			});
 			this.functionGroups.delete(namespace);
-		}
-	}
-
-	async evaluateFunction(
-		name: string,
-		args: RuntimeValue<ValueType>[],
-		context: FunctionContext
-	): Promise<RuntimeValue<ValueType> | undefined> {
-		const implementation = this.functions.get(name);
-		if (!implementation) {
-			console.warn(`Function "${name}" not implemented`);
-			return undefined;
-		}
-
-		try {
-			return await implementation(args, context);
-		} catch (error) {
-			console.error(`Error evaluating function "${name}":`, error);
-			return undefined;
 		}
 	}
 
