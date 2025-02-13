@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-import type {MarkupContent} from 'vscode-languageserver-types';
+import type { MarkupContent } from 'vscode-languageserver-types';
 import { MarkupKind } from 'vscode-languageserver-types';
 import { URI } from 'vscode-uri';
 
@@ -13,64 +13,63 @@ import type { Schema } from './Schema';
 export class HoverProvider {
 	constructor(private schema: Schema) { }
 	private createTrustedMarkdownContent(content: string): MarkupContent {
-        // Create markdown content in the format VSCode expects
-        return {
-            kind: MarkupKind.Markdown,
-            value: content
-        };
-    }
+		// Create markdown content in the format VSCode expects
+		return {
+			kind: MarkupKind.Markdown,
+			value: content
+		};
+	}
 	private async getFunctionDocumentationWithEval(
-        funcDef: FunctionDefinition, 
-        token: Token, 
-        doc: ParsedDocument
-    ): Promise<string[]> {
-        const contents = this.getFunctionDocumentation(funcDef);
-        contents.push('', '---', '', '## 🔍 Live Evaluation');
+		funcDef: FunctionDefinition,
+		token: Token,
+		doc: ParsedDocument
+	): Promise<string[]> {
+		const contents = this.getFunctionDocumentation(funcDef);
+		contents.push('', '---', '', '## 🔍 Live Evaluation');
 
-        try {
-            const functionCall = token.parent;
-            if (functionCall && functionCall.type === 'function_call') {
-                const argTokens = functionCall.children.filter(child => 
-                    child.type !== 'function_identifier'
-                );
+		try {
+			const functionCall = token.parent;
+			if (functionCall && functionCall.type === 'function_call') {
+				const argTokens = functionCall.children.filter(child =>
+					child.type !== 'function_identifier'
+				);
 
-                const evaluatedArgs = await Promise.all(
-                    argTokens.map(arg => doc.evaluateValue(arg))
-                );
+				const evaluatedArgs = await Promise.all(
+					argTokens.map(arg => doc.evaluateValue(arg))
+				);
 
-                const argsDisplay = argTokens.map((arg, i) => {
-                    const evalResult = evaluatedArgs[i];
-                    return `* Arg ${i + 1}: \`${arg.getDisplayText()}\`\n  * Value: ${
-                        evalResult ? `\`${this.formatRuntimeValue(evalResult)}\`` : '_unable to evaluate_'
-                    }`;
-                }).join('\n');
+				const argsDisplay = argTokens.map((arg, i) => {
+					const evalResult = evaluatedArgs[i];
+					return `* Arg ${i + 1}: \`${arg.getDisplayText()}\`\n  * Value: ${evalResult ? `\`${this.formatRuntimeValue(evalResult)}\`` : '_unable to evaluate_'
+						}`;
+				}).join('\n');
 
-                // Create properly encoded command URI
-                const args = [{
-                    function: funcDef.name,
-                    uri: doc.getUri(),
-                    position: token.startPosition
-                }];
-                const commandUri = `command:terragrunt.evaluateFunction?${encodeURIComponent(JSON.stringify(args))}`;
+				// Create properly encoded command URI
+				const args = [{
+					function: funcDef.name,
+					uri: doc.getUri(),
+					position: token.startPosition
+				}];
+				const commandUri = `command:terragrunt.evaluateFunction?${encodeURIComponent(JSON.stringify(args))}`;
 
-                contents.push(
-                    'Arguments:',
-                    argsDisplay || '_(no arguments)_',
-                    '',
-                    `[📝 Evaluate ${funcDef.name}](${commandUri})`
-                );
-            }
-        } catch (error) {
-            contents.push(
-                '*Error preparing function evaluation:*',
-                '```',
-                error instanceof Error ? error.message : String(error),
-                '```'
-            );
-        }
+				contents.push(
+					'Arguments:',
+					argsDisplay || '_(no arguments)_',
+					'',
+					`[📝 Evaluate ${funcDef.name}](${commandUri})`
+				);
+			}
+		} catch (error) {
+			contents.push(
+				'*Error preparing function evaluation:*',
+				'```',
+				error instanceof Error ? error.message : String(error),
+				'```'
+			);
+		}
 
-        return contents;
-    }
+		return contents;
+	}
 
 
 	private getFunctionDocumentation(funcDef: FunctionDefinition): string[] {
@@ -493,37 +492,21 @@ export class HoverProvider {
 				break;
 			}
 			case 'string_lit': {
-				if (token.parent?.type === 'attribute') {
-					// Handle single dependency path
-					if (token.parent.value === 'config_path' &&
-						token.parent.parent?.type === 'block' &&
-						token.parent.parent.value === 'dependency') {
+				if (token.parent?.type === 'attribute' && // Handle single dependency path
+					token.parent.value === 'config_path' &&
+					token.parent.parent?.type === 'block' &&
+					token.parent.parent.value === 'dependency') {
 
-						contents = [
-							`## Terragrunt Dependency`,
-							'',
-							`Path: \`${value}\``,
-							'',
-							this.getPathLinkMarkdown(value as string, String(token.location.source) || '')
-						];
-						break;
-					}
-
-					// Handle paths array in dependencies block
-					if (token.parent.value === 'paths' &&
-						token.parent.parent?.type === 'block' &&
-						token.parent.parent.value === 'dependencies') {
-
-						contents = [
-							`## Terragrunt Dependencies Path`,
-							'',
-							`Path: \`${value}\``,
-							'',
-							this.getPathLinkMarkdown(value as string, String(token.location.source) || '')
-						];
-						break;
-					}
+					contents = [
+						`## Terragrunt Dependency`,
+						'',
+						`Path: \`${value}\``,
+						'',
+						this.getPathLinkMarkdown(value as string, String(token.location.source) || '')
+					];
+					break;
 				}
+				break;
 				// Fall through to other cases if not a dependency
 			}
 			case 'block_identifier':
@@ -571,6 +554,27 @@ export class HoverProvider {
 							`- **Required**: ${param.required}`,
 							param.validation?.pattern ? `- **Pattern**: \`${param.validation.pattern}\`` : ''
 						].filter(Boolean);
+					}
+				}
+				break;
+			}
+
+			case 'array_lit': {
+				// Handle paths array in dependencies block
+				if (token.parent?.type === 'attribute' &&
+					token.parent?.value === 'paths' &&
+					token.parent.parent?.type === 'block' &&
+					token.parent.parent.value === 'dependencies') {
+
+					for (const child of token.children) {
+						if (child.type !== 'string_lit') continue;
+						contents = [
+							`## Terragrunt Dependency`,
+							'',
+							`Path: \`${child.value}\``,
+							'',
+							this.getPathLinkMarkdown(child.value as string, String(child.location.source) || '')
+						];
 					}
 				}
 				break;

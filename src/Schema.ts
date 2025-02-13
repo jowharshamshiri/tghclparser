@@ -1,6 +1,3 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import blocks from './blocks.json';
 import functionsDefinitionsJson from './functions.json';
@@ -10,7 +7,7 @@ import { fileFunctionGroup } from './functions/file_functions';
 import { pathFunctionGroup } from './functions/path_functions';
 import { stringFunctionGroup } from './functions/string_functions';
 import { FunctionRegistry } from './FunctionsRegistry';
-import type { AttributeDefinition, BlockDefinition, FunctionContext, FunctionDefinition, FunctionGroup, FunctionImplementation, FunctionParameter, RuntimeValue, ValueType } from './model';
+import type { AttributeDefinition, BlockDefinition, FunctionContext, FunctionDefinition, FunctionParameter, RuntimeValue, ValueType } from './model';
 
 const functionDefinitions = functionsDefinitionsJson as { functions: FunctionDefinition[] };
 
@@ -19,14 +16,8 @@ export class Schema {
 	private functionRegistry: FunctionRegistry;
 
 	private constructor() {
-		console.log('\nInitializing Schema and discovering functions...\n');
 		this.functionRegistry = FunctionRegistry.getInstance();
 		this.initializeFunctionRegistry();
-		this.discoverCustomFunctions().then(() => {
-			// Get functions that have actual implementations
-			// const registry = this.getFunctionRegistry();
-			// const executableFunctions = new Set<string>();
-		});
 	}
 	static getInstance(): Schema {
 		if (!Schema.instance) {
@@ -52,38 +43,12 @@ export class Schema {
 	}
 
 	initializeFunctionRegistry(): void {
-		// First register function groups
 		this.functionRegistry.registerFunctionGroup(coreFunctionGroup);
 		this.functionRegistry.registerFunctionGroup(fileFunctionGroup);
 		this.functionRegistry.registerFunctionGroup(pathFunctionGroup);
 		this.functionRegistry.registerFunctionGroup(envFunctionGroup);
 		this.functionRegistry.registerFunctionGroup(stringFunctionGroup);
 
-		// Then register schema functions (that don't have implementations)
-		// functionDefinitions.functions.forEach(funcDef => {
-		// 	if (!this.functionRegistry.hasFunction(funcDef.name)) {
-		// 		this.registerSchemaFunction(funcDef);
-		// 	}
-		// });
-
-		console.log('Registered functions:', this.functionRegistry.getFunctionNames());
-	}
-
-	private registerBuiltinFunctions() {
-		this.functionRegistry.registerFunctionGroup(coreFunctionGroup);
-		// File operations group
-		this.functionRegistry.registerFunctionGroup(fileFunctionGroup);
-
-		// Path operations group
-		this.functionRegistry.registerFunctionGroup(pathFunctionGroup);
-
-		// Environment and configuration functions
-		this.functionRegistry.registerFunctionGroup(envFunctionGroup);
-
-		// String manipulation functions
-		this.functionRegistry.registerFunctionGroup(stringFunctionGroup);
-
-		// Log all registered functions
 		console.log('Registered functions:', this.functionRegistry.getFunctionNames());
 	}
 
@@ -333,104 +298,6 @@ export class Schema {
 			default: {
 				return { type: 'null', value: null };
 			}
-		}
-	}
-	private async discoverCustomFunctions(): Promise<void> {
-		try {
-			// Get the directory path in a way that works in both ESM and CommonJS
-			let functionsDir: string;
-
-			if (typeof __dirname !== 'undefined') {
-				// CommonJS environment
-				functionsDir = path.join(__dirname, 'functions');
-			} else if (import.meta.url !== undefined) {
-				// ESM environment
-				const __filename = fileURLToPath(import.meta.url);
-				const __dirname = path.dirname(__filename);
-				functionsDir = path.join(__dirname, 'functions');
-			} else {
-				// If neither is available, use a reasonable default
-				console.log('Unable to determine functions directory path, skipping custom functions');
-				return;
-			}
-
-			// Check if the functions directory exists
-			if (!fs.existsSync(functionsDir)) {
-				console.log('No custom functions directory found at:', functionsDir);
-				return;
-			}
-
-			// Read all files in the functions directory
-			const files = fs.readdirSync(functionsDir);
-
-			// Filter for TypeScript files
-			const tsFiles = files.filter(file =>
-				file.endsWith('.ts') && !file.startsWith('.')
-			);
-
-			// Import and register each TypeScript function file
-			for (const file of tsFiles) {
-				try {
-					const filePath = path.join(functionsDir, file);
-					console.log('Loading functions from:', filePath);
-
-					// Convert the file path to a URL for import
-					const fileUrl = `file://${filePath}`;
-
-					// Import the module using dynamic import
-					const importedModule = await import(fileUrl);
-
-					// Check for function definitions
-					const functionDefinitions = importedModule.functionDefinitions || [];
-
-					// Check for implementations
-					const functionImplementations = importedModule.functions || {};
-
-					if (functionDefinitions.length > 0 || Object.keys(functionImplementations).length > 0) {
-						const namespace = path.basename(file, '.ts');
-						console.log('Registering functions from namespace:', namespace);
-
-						const functionGroup: FunctionGroup = {
-							namespace,
-							functions: {}
-						};
-
-						// Register functions from definitions
-						functionDefinitions.forEach(funcDef => {
-							const implementation: FunctionImplementation = async (args, context) => {
-								// Validate args against function definition
-								this.validateFunctionArgs(funcDef, args);
-
-								// If a matching implementation exists, use it
-								const explicitImpl = functionImplementations[funcDef.name];
-								if (explicitImpl) {
-									return explicitImpl(args, context);
-								}
-
-								// Otherwise, return a default value based on return type
-								return this.createDefaultReturnValue(funcDef.returnType.types[0]);
-							};
-
-							functionGroup.functions[funcDef.name] = implementation;
-						});
-
-						// Register additional implementations
-						Object.entries(functionImplementations).forEach(([name, impl]) => {
-							if (!functionGroup.functions[name]) {
-								functionGroup.functions[name] = impl as FunctionImplementation;
-							}
-						});
-
-						console.log('Registering function group:', functionGroup);
-						this.functionRegistry.registerFunctionGroup(functionGroup);
-					}
-				} catch (importError) {
-					console.error(`Error importing custom functions from ${file}:`, importError);
-					console.error('Import error details:', importError);
-				}
-			}
-		} catch (error) {
-			console.error('Error discovering custom functions:', error);
 		}
 	}
 
