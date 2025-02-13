@@ -1,5 +1,7 @@
 import path from 'node:path';
 
+import type {MarkupContent} from 'vscode-languageserver-types';
+import { MarkupKind } from 'vscode-languageserver-types';
 import { URI } from 'vscode-uri';
 
 import type { AttributeDefinition, BlockDefinition, DependencyInfo, FunctionDefinition, RuntimeValue, TokenType, ValueType } from './model';
@@ -7,17 +9,158 @@ import { Token } from './model';
 import type { ParsedDocument } from './ParsedDocument';
 import type { Schema } from './Schema';
 
-export interface HoverResult {
-	content: {
-		kind: 'markdown';
-		value: string;
-	};
-}
-
 
 export class HoverProvider {
 	constructor(private schema: Schema) { }
+	private createTrustedMarkdownContent(content: string): MarkupContent {
+        // Create markdown content in the format VSCode expects
+        return {
+            kind: MarkupKind.Markdown,
+            value: content
+        };
+    }
+	private async getFunctionDocumentationWithEval(
+        funcDef: FunctionDefinition, 
+        token: Token, 
+        doc: ParsedDocument
+    ): Promise<string[]> {
+        const contents = this.getFunctionDocumentation(funcDef);
+        contents.push('', '---', '', '## 🔍 Live Evaluation');
 
+        try {
+            const functionCall = token.parent;
+            if (functionCall && functionCall.type === 'function_call') {
+                const argTokens = functionCall.children.filter(child => 
+                    child.type !== 'function_identifier'
+                );
+
+                const evaluatedArgs = await Promise.all(
+                    argTokens.map(arg => doc.evaluateValue(arg))
+                );
+
+                const argsDisplay = argTokens.map((arg, i) => {
+                    const evalResult = evaluatedArgs[i];
+                    return `* Arg ${i + 1}: \`${arg.getDisplayText()}\`\n  * Value: ${
+                        evalResult ? `\`${this.formatRuntimeValue(evalResult)}\`` : '_unable to evaluate_'
+                    }`;
+                }).join('\n');
+
+                // Create properly encoded command URI
+                const args = [{
+                    function: funcDef.name,
+                    uri: doc.getUri(),
+                    position: token.startPosition
+                }];
+                const commandUri = `command:terragrunt.evaluateFunction?${encodeURIComponent(JSON.stringify(args))}`;
+
+                contents.push(
+                    'Arguments:',
+                    argsDisplay || '_(no arguments)_',
+                    '',
+                    `[📝 Evaluate ${funcDef.name}](${commandUri})`
+                );
+            }
+        } catch (error) {
+            contents.push(
+                '*Error preparing function evaluation:*',
+                '```',
+                error instanceof Error ? error.message : String(error),
+                '```'
+            );
+        }
+
+        return contents;
+    }
+
+
+	private getFunctionDocumentation(funcDef: FunctionDefinition): string[] {
+		const contents: string[] = [
+			`## ${funcDef.name}()`,
+			''
+		];
+
+		if (funcDef.deprecated) {
+			contents.push('> ⚠️ *This function is deprecated*');
+			if (funcDef.deprecationMessage) {
+				contents.push(`> ${funcDef.deprecationMessage}`);
+			}
+			contents.push('');
+		}
+
+		if (funcDef.description) {
+			contents.push(funcDef.description, '', '---', '');
+		}
+
+		if (funcDef.parameters.length > 0) {
+			contents.push('### Parameters', '');
+			funcDef.parameters.forEach(param => {
+				const typeStr = param.types.map(t => `\`${this.formatValueType(t)}\``).join(' | ');
+				contents.push(
+					`**${param.name}** ${param.required ? '(required)' : '(optional)'}`,
+					`- *Type:* ${typeStr}${param.variadic ? ' (variadic)' : ''}`
+				);
+				if (param.description) {
+					contents.push(`- *Description:* ${param.description}`);
+				}
+				if (param.validation?.pattern) {
+					contents.push(`- *Pattern:* \`${param.validation.pattern}\``);
+				}
+				if (param.validation?.allowedValues?.length) {
+					contents.push(`- *Allowed values:* ${param.validation.allowedValues.map(v => `\`${v}\``).join(', ')}`);
+				}
+				contents.push('');
+			});
+			contents.push('---', '');
+		}
+
+		contents.push('### Return Type', '');
+		const returnTypeStr = funcDef.returnType.types.map(t => `\`${this.formatValueType(t)}\``).join(' | ');
+		contents.push(`*Type:* ${returnTypeStr}`);
+		if (funcDef.returnType.description) {
+			contents.push(`*Description:* ${funcDef.returnType.description}`);
+		}
+
+		if (funcDef.examples?.length) {
+			contents.push('', '### Examples', '');
+			funcDef.examples.forEach(example => {
+				contents.push('```hcl', example, '```', '');
+			});
+		}
+
+		return contents;
+	}
+
+	private formatRuntimeValue(value: RuntimeValue<ValueType>): string {
+		switch (value.type) {
+			case 'string': {
+				return `"${value.value}"`;
+			}
+			case 'number':
+			case 'boolean': {
+				return String(value.value);
+			}
+			case 'array': {
+				if (Array.isArray(value.value)) {
+					return `[${value.value.map(v => this.formatRuntimeValue(v)).join(', ')}]`;
+				}
+				return '[]';
+			}
+			case 'object':
+			case 'block': {
+				if (value.value instanceof Map) {
+					const entries: string[] = [];
+					value.value.forEach((v, k) => {
+						entries.push(`${k} = ${this.formatRuntimeValue(v)}`);
+					});
+					return `{${entries.join(', ')}}`;
+				}
+				return '{}';
+			}
+			default: {
+				return value.type;
+			}
+		}
+	}
 	private async getLocalReferenceHoverInfo(token: Token, doc: ParsedDocument): Promise<string[]> {
 		const accessChain = token.children.find(c => c.type === 'access_chain');
 		const refId = accessChain?.children.find(c => c.type === 'reference_identifier');
@@ -67,6 +210,177 @@ export class HoverProvider {
 		];
 	}
 
+	private getExpressionHoverInfo(token: Token): string[] {
+		const contents: string[] = [];
+
+		switch (token.type) {
+			case 'ternary_expression': {
+				contents.push(
+					'## Ternary Expression',
+					'',
+					'Conditionally selects one of two values based on a condition.',
+					'',
+					'```hcl',
+					`${token.getDisplayText()}`,
+					'```',
+					'',
+					'Format: `condition ? true_value : false_value`'
+				);
+				break;
+			}
+			case 'comparison_expression': {
+				const operator = token.children[1]?.value;
+				contents.push(
+					'## Comparison Expression',
+					'',
+					'Compares two values.',
+					'',
+					'```hcl',
+					`${token.getDisplayText()}`,
+					'```',
+					'',
+					`Operator: \`${operator}\``,
+					'',
+					'Returns: `boolean`'
+				);
+				break;
+			}
+			case 'logical_expression': {
+				const operator = token.children[1]?.value;
+				contents.push(
+					'## Logical Expression',
+					'',
+					'Performs a logical operation.',
+					'',
+					'```hcl',
+					`${token.getDisplayText()}`,
+					'```',
+					'',
+					`Operator: \`${operator}\``,
+					'',
+					'Returns: `boolean`'
+				);
+				break;
+			}
+			case 'arithmetic_expression': {
+				const operator = token.children[1]?.value;
+				contents.push(
+					'## Arithmetic Expression',
+					'',
+					'Performs an arithmetic operation.',
+					'',
+					'```hcl',
+					`${token.getDisplayText()}`,
+					'```',
+					'',
+					`Operator: \`${operator}\``,
+					'',
+					'Returns: `number`'
+				);
+				break;
+			}
+			// Add more expression types...
+		}
+
+		return contents;
+	}
+
+	private getTypeConstructorHoverInfo(token: Token): string[] {
+		const typeName = token.children[0]?.value;
+		return [
+			`## Type Constructor: ${typeName}`,
+			'',
+			'Constructs a value of a specific type.',
+			'',
+			'```hcl',
+			`${token.getDisplayText()}`,
+			'```',
+			'',
+			`Creates a value of type: \`${typeName}\``
+		];
+	}
+
+	private getCollectionConstructorHoverInfo(token: Token): string[] {
+		const isMap = token.children.some(c => c.type === 'object');
+		return [
+			`## Collection Constructor: ${isMap ? 'Map' : 'List'}`,
+			'',
+			`Constructs a ${isMap ? 'map' : 'list'} from the given expressions.`,
+			'',
+			'```hcl',
+			`${token.getDisplayText()}`,
+			'```'
+		];
+	}
+
+	private getDirectiveHoverInfo(token: Token): string[] {
+		const contents: string[] = [];
+
+		switch (token.type) {
+			case 'if_directive': {
+				contents.push(
+					'## If Directive',
+					'',
+					'Conditionally includes or excludes configuration blocks.',
+					'',
+					'```hcl',
+					`${token.getDisplayText()}`,
+					'```'
+				);
+				break;
+			}
+			case 'for_directive': {
+				contents.push(
+					'## For Directive',
+					'',
+					'Generates multiple blocks or values from an iteration.',
+					'',
+					'```hcl',
+					`${token.getDisplayText()}`,
+					'```'
+				);
+				break;
+			}
+			// Add other directives...
+		}
+
+		return contents;
+	}
+
+	private getMetaArgumentHoverInfo(token: Token): string[] {
+		const contents: string[] = [];
+
+		switch (token.type) {
+			case 'meta_count': {
+				contents.push(
+					'## Count Meta-Argument',
+					'',
+					'Specifies the number of instances to create.',
+					'',
+					'```hcl',
+					`${token.getDisplayText()}`,
+					'```'
+				);
+				break;
+			}
+			case 'meta_for_each': {
+				contents.push(
+					'## For Each Meta-Argument',
+					'',
+					'Creates an instance for each item in a map or set.',
+					'',
+					'```hcl',
+					`${token.getDisplayText()}`,
+					'```'
+				);
+				break;
+			}
+			// Add other meta-arguments...
+		}
+
+		return contents;
+	}
+
 	private async getAllLocalsInfo(doc: ParsedDocument): Promise<string[]> {
 		// Use ParsedDocument's getAllLocals
 		const locals = await doc.getAllLocals();
@@ -103,7 +417,7 @@ export class HoverProvider {
 		return contents;
 	}
 
-	async getHoverInfo(token: Token, doc: ParsedDocument): Promise<HoverResult | null> {
+	async getHoverInfo(token: Token, doc: ParsedDocument): Promise<MarkupContent | null> {
 		console.log('getHoverInfo called with token:', {
 			type: token.type,
 			value: token.value,
@@ -116,6 +430,11 @@ export class HoverProvider {
 
 		let contents: string[] = [];
 		const value = token.getDisplayText();
+
+		// Check for expressions first
+		if (token.type.endsWith('_expression')) {
+			contents = this.getExpressionHoverInfo(token);
+		}
 
 		// Special handling for namespace tokens that are part of local references
 		if (token.type === 'namespace' && token.value === 'local') {
@@ -131,39 +450,45 @@ export class HoverProvider {
 				});
 				contents = await this.getLocalReferenceHoverInfo(parentRef, doc);
 				if (contents.length > 0) {
-					return {
-						content: {
-							kind: 'markdown',
-							value: contents.join('\n')
-						}
-					};
+					return this.createTrustedMarkdownContent(contents.join('\n'));
 				}
 			} else {
 				// If we're just on the 'local' keyword, show all locals
 				console.log('Getting all locals info');
 				contents = await this.getAllLocalsInfo(doc);
 				if (contents.length > 0) {
-					return {
-						content: {
-							kind: 'markdown',
-							value: contents.join('\n')
-						}
-					};
+					return this.createTrustedMarkdownContent(contents.join('\n'));
 				}
 			}
 		}
 
 		switch (token.type as TokenType) {
+			case 'type_constructor': {
+				contents = this.getTypeConstructorHoverInfo(token);
+				break;
+			}
+			case 'collection_constructor': {
+				contents = this.getCollectionConstructorHoverInfo(token);
+				break;
+			}
+			case 'if_directive':
+			case 'for_directive': {
+				contents = this.getDirectiveHoverInfo(token);
+				break;
+			}
+			case 'meta_count':
+			case 'meta_for_each':
+			case 'meta_depends_on':
+			case 'meta_provider':
+			case 'meta_lifecycle': {
+				contents = this.getMetaArgumentHoverInfo(token);
+				break;
+			}
 			case 'local_reference': {
 				console.log('Processing direct local reference');
 				contents = await this.getLocalReferenceHoverInfo(token, doc);
 				if (contents.length > 0) {
-					return {
-						content: {
-							kind: 'markdown',
-							value: contents.join('\n')
-						}
-					};
+					return this.createTrustedMarkdownContent(contents.join('\n'));
 				}
 				break;
 			}
@@ -213,7 +538,8 @@ export class HoverProvider {
 			case 'function_identifier': {
 				const funcDef = this.schema.getFunctionDefinition(value);
 				if (funcDef) {
-					contents = this.getFunctionDocumentation(funcDef);
+					contents = await this.getFunctionDocumentationWithEval(funcDef, token, doc);
+					return this.createTrustedMarkdownContent(contents.join('\n'));
 				}
 				break;
 			}
@@ -251,58 +577,9 @@ export class HoverProvider {
 			}
 		}
 
-		return contents.length > 0 ? {
-			content: {
-				kind: 'markdown',
-				value: contents.join('\n')
-			}
-		} : null;
+		return contents.length > 0 ? this.createTrustedMarkdownContent(contents.join('\n')) : null;
 	}
 
-
-	private formatRuntimeValue(value: RuntimeValue<ValueType>): string {
-		console.log('formatRuntimeValue called with:', value);
-		let result: string;
-
-		switch (value.type) {
-			case 'string': {
-				result = `"${value.value}"`;
-				break;
-			}
-			case 'number':
-			case 'boolean': {
-				result = String(value.value);
-				break;
-			}
-			case 'array': {
-				if (Array.isArray(value.value)) {
-					result = `[${value.value.map(v => this.formatRuntimeValue(v)).join(', ')}]`;
-				} else {
-					result = '[]';
-				}
-				break;
-			}
-			case 'object':
-			case 'block': {
-				if (value.value instanceof Map) {
-					const entries: string[] = [];
-					value.value.forEach((v, k) => {
-						entries.push(`${k} = ${this.formatRuntimeValue(v)}`);
-					});
-					result = `{${entries.join(', ')}}`;
-				} else {
-					result = '{}';
-				}
-				break;
-			}
-			default: {
-				result = value.type;
-			}
-		}
-
-		console.log('formatRuntimeValue result:', result);
-		return result;
-	}
 
 	private buildReferencePath(token: Token): string[] {
 		const parts: string[] = [];
@@ -538,60 +815,6 @@ export class HoverProvider {
 					contents.push(`- *Occurrences:* ${min} to ${max}`);
 				}
 				contents.push('');  // Add space between blocks
-			});
-		}
-
-		return contents;
-	}
-
-	private getFunctionDocumentation(funcDef: FunctionDefinition): string[] {
-		const contents: string[] = [
-			`## ${funcDef.name}()`,
-			''  // Empty line for better readability
-		];
-
-		if (funcDef.deprecated) {
-			contents.push('> ⚠️ *This function is deprecated*');
-			if (funcDef.deprecationMessage) {
-				contents.push(`> ${funcDef.deprecationMessage}`);
-			}
-			contents.push('');
-		}
-
-		if (funcDef.description) {
-			contents.push(funcDef.description, '', '---', '');
-		}
-
-		if (funcDef.parameters.length > 0) {
-			contents.push('### Parameters', '');
-			funcDef.parameters.forEach(param => {
-				const typeStr = param.types.map(t => `\`${this.formatValueType(t)}\``).join(' | ');
-				contents.push(`**${param.name}** ${param.required ? '(required)' : '(optional)'}`, `- *Type:* ${typeStr}${param.variadic ? ' (variadic)' : ''}`);
-				if (param.description) {
-					contents.push(`- *Description:* ${param.description}`);
-				}
-				if (param.validation?.pattern) {
-					contents.push(`- *Pattern:* \`${param.validation.pattern}\``);
-				}
-				if (param.validation?.allowedValues?.length) {
-					contents.push(`- *Allowed values:* ${param.validation.allowedValues.map(v => `\`${v}\``).join(', ')}`);
-				}
-				contents.push('');  // Add space between parameters
-			});
-			contents.push('---', '');
-		}
-
-		contents.push('### Return Type', '');
-		const returnTypeStr = funcDef.returnType.types.map(t => `\`${this.formatValueType(t)}\``).join(' | ');
-		contents.push(`*Type:* ${returnTypeStr}`);
-		if (funcDef.returnType.description) {
-			contents.push(`*Description:* ${funcDef.returnType.description}`);
-		}
-
-		if (funcDef.examples?.length) {
-			contents.push('', '### Examples', '');
-			funcDef.examples.forEach(example => {
-				contents.push('```hcl', example, '```', '');
 			});
 		}
 
