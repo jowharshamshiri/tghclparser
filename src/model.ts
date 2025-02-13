@@ -359,3 +359,20 @@ export interface MetaArgumentInfo {
     value: RuntimeValue<ValueType>;
     location: Location;
 }
+
+export type FunctionImplementation = (args: RuntimeValue<ValueType>[], context: FunctionContext) => Promise<RuntimeValue<ValueType> | undefined>;
+
+export interface FunctionContext {
+  workingDirectory: string;
+  environmentVariables: Record<string, string>;
+  document: {
+    uri: string;
+    content: string;
+  };
+}
+
+export interface FunctionGroup {
+	namespace: string;
+	functions: Record<string, FunctionImplementation>;
+  }
+  

@@ -1,11 +1,10 @@
 import path from 'node:path';
 
-import type { CompletionItem, Diagnostic, Position } from 'vscode-languageserver';
+import type { CompletionItem, Diagnostic, MarkupContent, Position } from 'vscode-languageserver';
 import { URI } from 'vscode-uri';
 
 import { CompletionsProvider } from './CompletionsProvider';
 import { DiagnosticsProvider } from './DiagnosticsProvider';
-import type { HoverResult } from './HoverProvider';
 import { HoverProvider } from './HoverProvider';
 import type { ResolvedReference, RuntimeValue, TokenType, ValueType } from './model';
 import { Token } from './model';
@@ -96,6 +95,55 @@ export class ParsedDocument {
 		});
 	
 		switch (node.type) {
+			case 'function_call': {
+				const funcName = node.children.find(c => c.type === 'function_identifier')?.value;
+				if (!funcName || typeof funcName !== 'string') return undefined;
+	
+				// Evaluate all arguments first
+				const evaluatedArgs = await Promise.all(
+					node.children
+						.filter(c => c.type !== 'function_identifier')
+						.map(arg => this.evaluateValue(arg))
+				);
+	
+				// Filter out undefined arguments
+				const args = evaluatedArgs.filter((arg): arg is RuntimeValue<ValueType> => arg !== undefined);
+	
+				// Create context for function evaluation
+				
+				const context = {
+					workingDirectory: path.dirname(URI.parse(this.uri).fsPath),
+					environmentVariables: Object.fromEntries(Object.entries(process.env).map(([key, value]) => [key, String(value)])),
+					document: {
+						uri: this.uri,
+						content: this.content
+					}
+				};
+	
+				return await this.schema.getFunctionRegistry().evaluateFunction(funcName, args, context);
+			}
+	
+			case 'ternary_expression': {
+				const [condition, trueExpr, falseExpr] = node.children;
+				const condValue = await this.evaluateValue(condition);
+				if (!condValue) return undefined;
+	
+				const condBool = this.coerceToBool(condValue);
+				return condBool ?
+					await this.evaluateValue(trueExpr) :
+					await this.evaluateValue(falseExpr);
+			}
+	
+			case 'comparison_expression': {
+				const [left, op, right] = node.children;
+				const leftValue = await this.evaluateValue(left);
+				const rightValue = await this.evaluateValue(right);
+				if (!leftValue || !rightValue || !op.value || typeof op.value !== 'string') {
+					return undefined;
+				}
+	
+				return this.evaluateComparison(leftValue, rightValue, op.value);
+			}
 			case 'legacy_interpolation': {
 				// Legacy interpolation wraps expressions - evaluate its first child
 				if (node.children.length > 0) {
@@ -122,84 +170,6 @@ export class ParsedDocument {
 					value: parts.join('')
 				};
 			}
-	
-			case 'function_call': {
-				const funcName = node.children.find(c => c.type === 'function_identifier')?.value;
-				
-				switch(funcName) {
-					case 'get_env': {
-						const envVarArg = node.children.find(c => c.type === 'string_lit');
-						const defaultValueArg = node.children[2];
-						
-						if (!envVarArg?.value) return undefined;
-			
-						const envVar = envVarArg.value as string;
-						let defaultValue: string | undefined;
-			
-						if (defaultValueArg) {
-							const evaluated = await this.evaluateValue(defaultValueArg);
-							defaultValue = evaluated ? String(evaluated.value) : undefined;
-						}
-			
-						return {
-							type: 'string',
-							value: process.env[envVar] ?? defaultValue ?? `mock_${envVar}`
-						};
-					}
-			
-					case 'get_terragrunt_dir':
-					case 'get_parent_terragrunt_dir': {
-						// For mocking purposes, return a mock path based on the file location
-						const mockPath = this.uri ? path.dirname(URI.parse(this.uri).fsPath) : '/mock/terragrunt/dir';
-						return {
-							type: 'string',
-							value: mockPath
-						};
-					}
-			
-					case 'yamldecode': {
-						// For now just return a mock object
-						return {
-							type: 'object',
-							value: new Map([['mock_yaml_key', {
-								type: 'string',
-								value: 'mock_yaml_value'
-							}]])
-						};
-					}
-			
-					case 'file': {
-						// Mock file reading - in real implementation you'd read the file
-						return {
-							type: 'string',
-							value: 'mock_file_content'
-						};
-					}
-			
-					case 'replace': {
-						const [, strArg, oldArg, newArg] = node.children;
-						
-						if (!strArg || !oldArg || !newArg) return undefined;
-			
-						const str = await this.evaluateValue(strArg);
-						const oldStr = await this.evaluateValue(oldArg);
-						const newStr = await this.evaluateValue(newArg);
-			
-						if (!str || !oldStr || !newStr) return undefined;
-			
-						return {
-							type: 'string',
-							value: String(str.value).replace(String(oldStr.value), String(newStr.value))
-						};
-					}
-			
-					default: {
-						console.log('Unknown function:', funcName);
-						return undefined;
-					}
-				}
-			}
-	
 			case 'string_lit': {
 				return {
 					type: 'string',
@@ -208,8 +178,62 @@ export class ParsedDocument {
 			}
 	
 			default: {
-				console.log('Unhandled node type:', node.type);
-				return undefined;
+				return this.evaluateLiteral(node);
+			}
+		}
+	}
+
+	private evaluateLiteral(node: Token): RuntimeValue<ValueType> | undefined {
+		switch (node.type) {
+			case 'string_lit': {
+				return {
+					type: 'string',
+					value: String(node.value ?? '')
+				};
+			}
+			case 'number_lit': {
+				return {
+					type: 'number',
+					value: Number(node.value)
+				};
+			}
+			case 'boolean_lit': {
+				return {
+					type: 'boolean',
+					value: Boolean(node.value)
+				};
+			}
+			case 'array_lit': {
+				return {
+					type: 'array',
+					value: node.children.map(child => this.evaluateLiteral(child)).filter((v): v is RuntimeValue<ValueType> => v !== undefined)
+				};
+			}
+			// Add more literal types here...
+		}
+		return undefined;
+	}
+	
+	private coerceToBool(value: RuntimeValue<ValueType>): boolean {
+		switch (value.type) {
+			case 'boolean': {
+				return Boolean(value.value);
+			}
+			case 'string': {
+				return typeof value.value === 'string' && value.value.length > 0;
+			}
+			case 'number': {
+				return value.value !== 0;
+			}
+			case 'array': {
+				return Array.isArray(value.value) && value.value.length > 0;
+			}
+			case 'object':
+			case 'block': {
+				return value.value instanceof Map && value.value.size > 0;
+			}
+			default: {
+				return false;
 			}
 		}
 	}
@@ -811,7 +835,7 @@ export class ParsedDocument {
 		return this.completionsProvider.getCompletions(lineText, position, token, this);
 	}
 
-	public async getHoverInfo(position: Position): Promise<HoverResult | null> {
+	public async getHoverInfo(position: Position): Promise<MarkupContent | null> {
 		const token = this.findTokenAtPosition(position);
 		if (!token) return null;
 		return this.hoverProvider.getHoverInfo(token, this);
