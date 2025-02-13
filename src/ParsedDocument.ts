@@ -81,69 +81,125 @@ export class ParsedDocument {
 		console.log('Final locals:', Array.from(locals.entries()));
 		return locals;
 	}
-	public async evaluateValue(node: Token): Promise<RuntimeValue<ValueType> | undefined> {
+	// Helper to find the specific function we want to evaluate
+	private findTargetFunctionNode(startNode: Token, targetName: string): Token | null {
+		if (startNode.type === 'function_call' && startNode.value === targetName) {
+			return startNode;
+		}
+		if (startNode.type === 'function_identifier' && startNode.value === targetName) {
+			return startNode.parent;
+		}
+
+		for (const child of startNode.children) {
+			const found = this.findTargetFunctionNode(child, targetName);
+			if (found) return found;
+		}
+
+		return null;
+	}
+
+	// Main evaluation entry point for a specific function
+	public async evaluateTargetFunction(token: Token, targetName: string): Promise<RuntimeValue<ValueType> | undefined> {
+		// Find the function node we want to evaluate
+		const functionNode = this.findTargetFunctionNode(token, targetName);
+		if (!functionNode) return undefined;
+
+		// Evaluate JUST this function node, without traversing to parent functions
+		return this.evaluateValue(functionNode, targetName);
+	}
+
+	public async evaluateValue(node: Token, targetName?: string): Promise<RuntimeValue<ValueType> | undefined> {
 		if (!node) return undefined;
-		
+
+
 		console.log('evaluateValue called for node:', {
-			type: node.type,
-			value: node.value,
-			children: node.children?.map(c => ({
-				type: c.type,
-				value: c.value,
-				children: c.children?.length
-			}))
-		});
-	
+            type: node.type,
+            value: node.value,
+            children: node.children?.map(c => ({
+                type: c.type,
+                value: c.value,
+                children: c.children?.length
+            }))
+        });
+        
+
+		// If we have a target name and this is a function_call that's NOT our target,
+		// skip evaluation (this prevents evaluating parent functions)
+		if (targetName &&
+			node.type === 'function_call' &&
+			node.value !== targetName) {
+			return undefined;
+		}
+
 		switch (node.type) {
 			case 'function_call': {
 				const funcName = node.children.find(c => c.type === 'function_identifier')?.value;
 				if (!funcName || typeof funcName !== 'string') return undefined;
-	
-				// Evaluate all arguments first
+
+				// Always fully evaluate arguments
 				const evaluatedArgs = await Promise.all(
 					node.children
 						.filter(c => c.type !== 'function_identifier')
-						.map(arg => this.evaluateValue(arg))
+						.map(arg => this.evaluateValue(arg, targetName))
 				);
-	
-				// Filter out undefined arguments
+
 				const args = evaluatedArgs.filter((arg): arg is RuntimeValue<ValueType> => arg !== undefined);
-	
-				// Create context for function evaluation
+
 				const context: FunctionContext = {
 					workingDirectory: path.dirname(URI.parse(this.uri).fsPath),
-					environmentVariables: Object.fromEntries(Object.entries(process.env).filter(([_, v]) => v !== undefined)) as Record<string, string>,
+					environmentVariables: Object.fromEntries(
+						Object.entries(process.env).filter(([_, v]) => v !== undefined)
+					) as Record<string, string>,
 					document: {
 						uri: this.uri,
 						content: this.content
 					}
 				};
-	
-				console.log('Evaluating function with context:', {
-					funcName,
-					args,
-					context: {
-						workingDirectory: context.workingDirectory,
-						uri: context.document.uri
-					}
-				});
-	
-				const result = await this.schema.getFunctionRegistry().evaluateFunction(funcName, args, context);
-				console.log('Function evaluation result:', result);
-				return result;
+
+				return await this.schema.getFunctionRegistry().evaluateFunction(funcName, args, context);
 			}
-	
+			case 'interpolated_string': {
+				// Handle interpolated strings by evaluating each child and concatenating
+				const parts: string[] = [];
+				for (const child of node.children) {
+					const evaluated = await this.evaluateValue(child);
+					if (evaluated) {
+						parts.push(this.coerceToString(evaluated));
+					}
+				}
+				return {
+					type: 'string',
+					value: parts.join('')
+				};
+			}
+
+			case 'legacy_interpolation': {
+				// Legacy interpolation usually wraps a single expression
+				if (node.children.length > 0) {
+					const evaluated = await this.evaluateValue(node.children[0]);
+					if (evaluated) {
+						return {
+							type: 'string',
+							value: this.coerceToString(evaluated)
+						};
+					}
+				}
+				return {
+					type: 'string',
+					value: ''
+				};
+			}
 			case 'ternary_expression': {
 				const [condition, trueExpr, falseExpr] = node.children;
 				const condValue = await this.evaluateValue(condition);
 				if (!condValue) return undefined;
-	
+
 				const condBool = this.coerceToBool(condValue);
 				return condBool ?
 					await this.evaluateValue(trueExpr) :
 					await this.evaluateValue(falseExpr);
 			}
-	
+
 			case 'comparison_expression': {
 				const [left, op, right] = node.children;
 				const leftValue = await this.evaluateValue(left);
@@ -151,34 +207,8 @@ export class ParsedDocument {
 				if (!leftValue || !rightValue || !op.value || typeof op.value !== 'string') {
 					return undefined;
 				}
-	
+
 				return this.evaluateComparison(leftValue, rightValue, op.value);
-			}
-			case 'legacy_interpolation': {
-				// Legacy interpolation wraps expressions - evaluate its first child
-				if (node.children.length > 0) {
-					return await this.evaluateValue(node.children[0]);
-				}
-				return {
-					type: 'string',
-					value: ''
-				};
-			}
-	
-			case 'interpolated_string': {
-				const parts: string[] = [];
-				
-				for (const child of node.children) {
-					const evaluated = await this.evaluateValue(child);
-					if (evaluated) {
-						parts.push(String(evaluated.value));
-					}
-				}
-	
-				return {
-					type: 'string',
-					value: parts.join('')
-				};
 			}
 			case 'string_lit': {
 				return {
@@ -186,7 +216,7 @@ export class ParsedDocument {
 					value: String(node.value ?? '')
 				};
 			}
-	
+
 			default: {
 				return this.evaluateLiteral(node);
 			}
@@ -223,7 +253,7 @@ export class ParsedDocument {
 		}
 		return undefined;
 	}
-	
+
 	private coerceToBool(value: RuntimeValue<ValueType>): boolean {
 		switch (value.type) {
 			case 'boolean': {
@@ -714,7 +744,7 @@ export class ParsedDocument {
 		try {
 			// console.log('Parsing:', this.uri);
 			this.ast = tg_parse(this.content, { grammarSource: this.uri });
-			// console.log('AST:', this.removeCircularReferences(this.ast));
+			console.log('AST:', this.removeCircularReferences(this.ast));
 			this.tokens = [this.parseNode(this.ast)];
 
 			this.diagnostics = this.diagnosticsProvider.getDiagnostics(this);
