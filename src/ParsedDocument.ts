@@ -6,7 +6,7 @@ import { URI } from 'vscode-uri';
 import { CompletionsProvider } from './CompletionsProvider';
 import { DiagnosticsProvider } from './DiagnosticsProvider';
 import { HoverProvider } from './HoverProvider';
-import type { ResolvedReference, RuntimeValue, TokenType, ValueType } from './model';
+import type { FunctionContext, ResolvedReference, RuntimeValue, TokenType, ValueType } from './model';
 import { Token } from './model';
 import { Schema } from './Schema';
 import { parse as tg_parse, SyntaxError } from './terragrunt-parser';
@@ -110,17 +110,27 @@ export class ParsedDocument {
 				const args = evaluatedArgs.filter((arg): arg is RuntimeValue<ValueType> => arg !== undefined);
 	
 				// Create context for function evaluation
-				
-				const context = {
+				const context: FunctionContext = {
 					workingDirectory: path.dirname(URI.parse(this.uri).fsPath),
-					environmentVariables: Object.fromEntries(Object.entries(process.env).map(([key, value]) => [key, String(value)])),
+					environmentVariables: Object.fromEntries(Object.entries(process.env).filter(([_, v]) => v !== undefined)) as Record<string, string>,
 					document: {
 						uri: this.uri,
 						content: this.content
 					}
 				};
 	
-				return await this.schema.getFunctionRegistry().evaluateFunction(funcName, args, context);
+				console.log('Evaluating function with context:', {
+					funcName,
+					args,
+					context: {
+						workingDirectory: context.workingDirectory,
+						uri: context.document.uri
+					}
+				});
+	
+				const result = await this.schema.getFunctionRegistry().evaluateFunction(funcName, args, context);
+				console.log('Function evaluation result:', result);
+				return result;
 			}
 	
 			case 'ternary_expression': {

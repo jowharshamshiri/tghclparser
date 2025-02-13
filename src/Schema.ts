@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import blocks from './blocks.json';
 import { FunctionRegistry } from './Functions';
 import functionsJson from './functions.json';
+import { functions as coreFunctions } from './functions/core_functions';
 import type { AttributeDefinition, BlockDefinition, FunctionDefinition, FunctionGroup, FunctionImplementation, FunctionParameter, RuntimeValue, ValueType } from './model';
 
 const functions = functionsJson as { functions: FunctionDefinition[] };
@@ -327,14 +328,24 @@ export class Schema {
 	 * Should be called after Schema instance is created.
 	 */
 	initializeFunctionRegistry(): void {
-		// First register any core functions from the schema
-		functions.functions.forEach(funcDef => {
-			this.registerSchemaFunction(funcDef);
-		});
+        // First register core functions directly
+        Object.entries(coreFunctions).forEach(([name, implementation]) => {
+            console.log(`Registering core function: ${name}`);
+            this.functionRegistry.registerFunction(name, implementation);
+        });
 
-		// Could add discovery of external function implementations here
-		this.discoverCustomFunctions();
-	}
+        // Register any additional functions from the schema
+        functions.functions.forEach(funcDef => {
+            console.log(`Registering schema function: ${funcDef.name}`);
+            // Only register if not already registered as a core function
+            if (!this.functionRegistry.hasFunction(funcDef.name)) {
+                this.registerSchemaFunction(funcDef);
+            }
+        });
+
+        // Log registered functions
+        console.log('Registered functions:', this.functionRegistry.getFunctionNames());
+    }
 
 	private registerSchemaFunction(funcDef: FunctionDefinition): void {
 		// Create an implementation that validates args against the schema
