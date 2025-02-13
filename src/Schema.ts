@@ -3,12 +3,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import blocks from './blocks.json';
-import { FunctionRegistry } from './Functions';
-import functionsJson from './functions.json';
-import { functions as coreFunctions } from './functions/core_functions';
-import type { AttributeDefinition, BlockDefinition, FunctionDefinition, FunctionGroup, FunctionImplementation, FunctionParameter, RuntimeValue, ValueType } from './model';
+import functionsDefinitionsJson from './functions.json';
+import { coreFunctionGroup } from './functions/core_functions';
+import { envFunctionGroup } from './functions/env_functions';
+import { fileFunctionGroup } from './functions/file_functions';
+import { pathFunctionGroup } from './functions/path_functions';
+import { stringFunctionGroup } from './functions/string_functions';
+import { FunctionRegistry } from './FunctionsRegistry';
+import type { AttributeDefinition, BlockDefinition, FunctionContext, FunctionDefinition, FunctionGroup, FunctionImplementation, FunctionParameter, RuntimeValue, ValueType } from './model';
 
-const functions = functionsJson as { functions: FunctionDefinition[] };
+const functionDefinitions = functionsDefinitionsJson as { functions: FunctionDefinition[] };
 
 export class Schema {
 	private static instance: Schema;
@@ -20,93 +24,8 @@ export class Schema {
 		this.initializeFunctionRegistry();
 		this.discoverCustomFunctions().then(() => {
 			// Get functions that have actual implementations
-			const registry = this.getFunctionRegistry();
-			const executableFunctions = new Set<string>();
-
-			// Add built-in functions from FunctionRegistry
-			const builtInGroups = new Map<string, string[]>();
-			builtInGroups.set('file', ['read', 'exists']);
-			builtInGroups.set('path', ['join', 'dirname']);
-			builtInGroups.set('env', ['get', 'has']);
-			builtInGroups.set('string', ['replace', 'format']);
-
-			// Add core terragrunt functions that have implementations
-			const coreFunctions = [
-				'find_in_parent_folders',
-				'path_relative_to_include',
-				'path_relative_from_include',
-				'get_env',
-				'run_cmd',
-				'get_platform',
-				'get_repo_root',
-				'get_path_from_repo_root',
-				'get_path_to_repo_root',
-				'get_terragrunt_dir',
-				'get_parent_terragrunt_dir',
-				'get_original_terragrunt_dir'
-			];
-
-			// Add implementated functions to the set
-			coreFunctions.forEach(f => executableFunctions.add(f));
-			builtInGroups.forEach((funcs, namespace) => {
-				funcs.forEach(f => executableFunctions.add(`${namespace}.${f}`));
-			});
-
-			console.log('Actually Implemented Functions');
-			console.log('============================\n');
-
-			// First list root-level functions
-			const rootFunctions = Array.from(executableFunctions)
-				.filter(name => !name.includes('.'))
-				.sort();
-
-			if (rootFunctions.length > 0) {
-				console.log('Root Functions:');
-				console.log('--------------\n');
-				rootFunctions.forEach(name => {
-					const funcDef = this.getFunctionDefinition(name);
-					if (funcDef) {
-						console.log(`  ${name}`);
-						console.log(`    ${funcDef.description}\n`);
-					} else {
-						console.log(`  ${name}`);
-						console.log(`    [Has implementation but needs documentation]\n`);
-					}
-				});
-			}
-
-			// Then list namespaced functions
-			const groups = Array.from(builtInGroups.keys()).sort();
-
-			if (groups.length > 0) {
-				console.log('\nNamespaced Functions:');
-				console.log('-------------------\n');
-				groups.forEach(namespace => {
-					console.log(`${namespace}:`);
-					const namespacedFuncs = Array.from(executableFunctions)
-						.filter(name => name.startsWith(`${namespace}.`))
-						.map(name => name.split('.')[1])
-						.sort();
-
-					namespacedFuncs.forEach(shortName => {
-						const fullName = `${namespace}.${shortName}`;
-						const funcDef = this.getFunctionDefinition(fullName);
-						if (funcDef) {
-							console.log(`  ${shortName}`);
-							console.log(`    ${funcDef.description}\n`);
-						} else {
-							console.log(`  ${shortName}`);
-							console.log(`    [Has implementation but needs documentation]\n`);
-						}
-					});
-					console.log('');
-				});
-			}
-
-			const totalFuncs = executableFunctions.size;
-			console.log('============================');
-			console.log(`Total implemented functions: ${totalFuncs}`);
-			console.log('============================\n');
+			// const registry = this.getFunctionRegistry();
+			// const executableFunctions = new Set<string>();
 		});
 	}
 	static getInstance(): Schema {
@@ -114,6 +33,58 @@ export class Schema {
 			Schema.instance = new Schema();
 		}
 		return Schema.instance;
+	}
+
+
+	private registerSchemaFunction(funcDef: FunctionDefinition) {
+		// Only register if the function isn't already implemented
+		if (!this.functionRegistry.hasFunction(funcDef.name)) {
+			const implementation = async (args: RuntimeValue<ValueType>[], context: FunctionContext) => {
+				// Validate args against the schema
+				this.validateFunctionArgs(funcDef, args);
+
+				// Create a default value if none exists
+				return this.createDefaultValue(funcDef.returnType.types[0]);
+			};
+
+			this.functionRegistry.registerFunction(funcDef.name, implementation);
+		}
+	}
+
+	initializeFunctionRegistry(): void {
+		// First register function groups
+		this.functionRegistry.registerFunctionGroup(coreFunctionGroup);
+		this.functionRegistry.registerFunctionGroup(fileFunctionGroup);
+		this.functionRegistry.registerFunctionGroup(pathFunctionGroup);
+		this.functionRegistry.registerFunctionGroup(envFunctionGroup);
+		this.functionRegistry.registerFunctionGroup(stringFunctionGroup);
+
+		// Then register schema functions (that don't have implementations)
+		// functionDefinitions.functions.forEach(funcDef => {
+		// 	if (!this.functionRegistry.hasFunction(funcDef.name)) {
+		// 		this.registerSchemaFunction(funcDef);
+		// 	}
+		// });
+
+		console.log('Registered functions:', this.functionRegistry.getFunctionNames());
+	}
+
+	private registerBuiltinFunctions() {
+		this.functionRegistry.registerFunctionGroup(coreFunctionGroup);
+		// File operations group
+		this.functionRegistry.registerFunctionGroup(fileFunctionGroup);
+
+		// Path operations group
+		this.functionRegistry.registerFunctionGroup(pathFunctionGroup);
+
+		// Environment and configuration functions
+		this.functionRegistry.registerFunctionGroup(envFunctionGroup);
+
+		// String manipulation functions
+		this.functionRegistry.registerFunctionGroup(stringFunctionGroup);
+
+		// Log all registered functions
+		console.log('Registered functions:', this.functionRegistry.getFunctionNames());
 	}
 
 	findNestedBlockTemplate(parentType: string, nestedType: string): BlockDefinition | undefined {
@@ -154,11 +125,11 @@ export class Schema {
 	}
 
 	getAllFunctions(): FunctionDefinition[] {
-		return functions.functions;
+		return functionDefinitions.functions;
 	}
 
 	getFunctionDefinition(name: string): FunctionDefinition | undefined {
-		return functions.functions.find(f => f.name === name);
+		return functionDefinitions.functions.find(f => f.name === name);
 	}
 
 	getFunctionSignature(func: FunctionDefinition): string {
@@ -323,67 +294,6 @@ export class Schema {
 		return this.functionRegistry;
 	}
 
-	/**
-	 * Initializes function registry with schema functions.
-	 * Should be called after Schema instance is created.
-	 */
-	initializeFunctionRegistry(): void {
-        // First register core functions directly
-        Object.entries(coreFunctions).forEach(([name, implementation]) => {
-            console.log(`Registering core function: ${name}`);
-            this.functionRegistry.registerFunction(name, implementation);
-        });
-
-        // Register any additional functions from the schema
-        functions.functions.forEach(funcDef => {
-            console.log(`Registering schema function: ${funcDef.name}`);
-            // Only register if not already registered as a core function
-            if (!this.functionRegistry.hasFunction(funcDef.name)) {
-                this.registerSchemaFunction(funcDef);
-            }
-        });
-
-        // Log registered functions
-        console.log('Registered functions:', this.functionRegistry.getFunctionNames());
-    }
-
-	private registerSchemaFunction(funcDef: FunctionDefinition): void {
-		// Create an implementation that validates args against the schema
-		const implementation: FunctionImplementation = async (args, context) => {
-			// Validate required parameters
-			const requiredParams = funcDef.parameters.filter(p => p.required);
-			if (args.length < requiredParams.length) {
-				console.error(`Function ${funcDef.name} requires at least ${requiredParams.length} parameters`);
-				return;
-			}
-
-			// Validate parameter types
-			for (let i = 0; i < funcDef.parameters.length; i++) {
-				const param = funcDef.parameters[i];
-				const arg = args[i];
-
-				if (arg && !param.types.includes(arg.type)) {
-					console.error(`Parameter ${param.name} of function ${funcDef.name} expects types ${param.types.join('|')}, got ${arg.type}`);
-					return;
-				}
-
-				if (param.validation) {
-					const valid = this.validateFunctionParameter(arg, param.validation);
-					if (!valid) {
-						console.error(`Parameter ${param.name} of function ${funcDef.name} failed validation`);
-						return;
-					}
-				}
-			}
-
-			// If no custom implementation exists, return a default value based on return type
-			const defaultValue = this.createDefaultValue(funcDef.returnType.types[0]);
-			return defaultValue;
-		};
-
-		this.functionRegistry.registerFunction(funcDef.name, implementation);
-	}
-
 	private validateFunctionParameter(value: RuntimeValue<ValueType>, validation: any): boolean {
 		if (!value) return false;
 
@@ -429,7 +339,7 @@ export class Schema {
 		try {
 			// Get the directory path in a way that works in both ESM and CommonJS
 			let functionsDir: string;
-			
+
 			if (typeof __dirname !== 'undefined') {
 				// CommonJS environment
 				functionsDir = path.join(__dirname, 'functions');
@@ -443,74 +353,74 @@ export class Schema {
 				console.log('Unable to determine functions directory path, skipping custom functions');
 				return;
 			}
-	
+
 			// Check if the functions directory exists
 			if (!fs.existsSync(functionsDir)) {
 				console.log('No custom functions directory found at:', functionsDir);
 				return;
 			}
-	
+
 			// Read all files in the functions directory
 			const files = fs.readdirSync(functionsDir);
-	
+
 			// Filter for TypeScript files
 			const tsFiles = files.filter(file =>
 				file.endsWith('.ts') && !file.startsWith('.')
 			);
-	
+
 			// Import and register each TypeScript function file
 			for (const file of tsFiles) {
 				try {
 					const filePath = path.join(functionsDir, file);
 					console.log('Loading functions from:', filePath);
-	
+
 					// Convert the file path to a URL for import
 					const fileUrl = `file://${filePath}`;
-	
+
 					// Import the module using dynamic import
 					const importedModule = await import(fileUrl);
-	
+
 					// Check for function definitions
 					const functionDefinitions = importedModule.functionDefinitions || [];
-	
+
 					// Check for implementations
 					const functionImplementations = importedModule.functions || {};
-	
+
 					if (functionDefinitions.length > 0 || Object.keys(functionImplementations).length > 0) {
 						const namespace = path.basename(file, '.ts');
 						console.log('Registering functions from namespace:', namespace);
-	
+
 						const functionGroup: FunctionGroup = {
 							namespace,
 							functions: {}
 						};
-	
+
 						// Register functions from definitions
 						functionDefinitions.forEach(funcDef => {
 							const implementation: FunctionImplementation = async (args, context) => {
 								// Validate args against function definition
 								this.validateFunctionArgs(funcDef, args);
-	
+
 								// If a matching implementation exists, use it
 								const explicitImpl = functionImplementations[funcDef.name];
 								if (explicitImpl) {
 									return explicitImpl(args, context);
 								}
-	
+
 								// Otherwise, return a default value based on return type
 								return this.createDefaultReturnValue(funcDef.returnType.types[0]);
 							};
-	
+
 							functionGroup.functions[funcDef.name] = implementation;
 						});
-	
+
 						// Register additional implementations
 						Object.entries(functionImplementations).forEach(([name, impl]) => {
 							if (!functionGroup.functions[name]) {
 								functionGroup.functions[name] = impl as FunctionImplementation;
 							}
 						});
-	
+
 						console.log('Registering function group:', functionGroup);
 						this.functionRegistry.registerFunctionGroup(functionGroup);
 					}
@@ -607,4 +517,6 @@ export class Schema {
 			}
 		}
 	}
+
+
 }

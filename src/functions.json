@@ -4135,6 +4135,186 @@
 				"locals { rendered = templatestring(\"Hello, ${name}!\", { name = \"World\" }) }"
 			],
 			"deprecated": false
+		},
+		{
+			"name": "env.get",
+			"description": "Get environment variable value",
+			"parameters": [
+				{
+					"name": "name",
+					"types": [
+						"string"
+					],
+					"required": true,
+					"description": "Environment variable name"
+				},
+				{
+					"name": "default",
+					"types": [
+						"string"
+					],
+					"required": false,
+					"description": "Default value if variable is not set"
+				}
+			],
+			"returnType": {
+				"types": [
+					"string"
+				],
+				"description": "Environment variable value or default"
+			},
+			"examples": [
+				"locals { value = env.get(\"HOME\") }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "env.has",
+			"description": "Check if environment variable exists",
+			"parameters": [
+				{
+					"name": "name",
+					"types": [
+						"string"
+					],
+					"required": true,
+					"description": "Environment variable name"
+				}
+			],
+			"returnType": {
+				"types": [
+					"boolean"
+				],
+				"description": "Whether the environment variable exists"
+			},
+			"examples": [
+				"locals { exists = env.has(\"HOME\") }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "file.read",
+			"description": "Read content from a file",
+			"parameters": [
+				{
+					"name": "path",
+					"types": ["string"],
+					"required": true,
+					"description": "Path to the file to read"
+				}
+			],
+			"returnType": {
+				"types": ["string"],
+				"description": "Content of the file"
+			},
+			"examples": [
+				"locals { content = file.read(\"/path/to/file.txt\") }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "file.exists",
+			"description": "Check if a file exists",
+			"parameters": [
+				{
+					"name": "path",
+					"types": ["string"],
+					"required": true,
+					"description": "Path to check"
+				}
+			],
+			"returnType": {
+				"types": ["boolean"],
+				"description": "Whether the file exists"
+			},
+			"examples": [
+				"locals { exists = file.exists(\"/path/to/file.txt\") }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "path.join",
+			"description": "Join path segments",
+			"parameters": [
+				{
+					"name": "paths",
+					"types": ["string"],
+					"required": true,
+					"variadic": true,
+					"description": "Path segments to join"
+				}
+			],
+			"returnType": {
+				"types": ["string"],
+				"description": "Joined path"
+			}
+		},
+		{
+			"name": "path.dirname",
+			"description": "Get directory name of a path",
+			"parameters": [
+				{
+					"name": "path",
+					"types": ["string"],
+					"required": true,
+					"description": "Path to process"
+				}
+			],
+			"returnType": {
+				"types": ["string"],
+				"description": "Directory name"
+			}
+		},
+		{
+			"name": "string.replace",
+			"description": "Replace occurrences in a string",
+			"parameters": [
+				{
+					"name": "str",
+					"types": ["string"],
+					"required": true,
+					"description": "The input string"
+				},
+				{
+					"name": "search",
+					"types": ["string"],
+					"required": true,
+					"description": "String or regex pattern to search for"
+				},
+				{
+					"name": "replace",
+					"types": ["string"],
+					"required": true,
+					"description": "Replacement string"
+				}
+			],
+			"returnType": {
+				"types": ["string"],
+				"description": "The resulting string"
+			}
+		},
+		{
+			"name": "string.format",
+			"description": "Format a string with placeholders",
+			"parameters": [
+				{
+					"name": "format",
+					"types": ["string"],
+					"required": true,
+					"description": "Format string with {0} or {name} style placeholders"
+				},
+				{
+					"name": "args",
+					"types": ["string", "number", "boolean", "object"],
+					"required": false,
+					"variadic": true,
+					"description": "Values to insert into placeholders"
+				}
+			],
+			"returnType": {
+				"types": ["string"],
+				"description": "The formatted string"
+			}
 		}
 	]
 }
