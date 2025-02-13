@@ -20,11 +20,9 @@ export class FunctionRegistry {
 
     registerFunction(name: string, implementation: FunctionImplementation) {
         if (this.functions.has(name)) {
-            console.log(`Function ${name} already registered`);
             return;
         }
         
-        console.log(`FunctionRegistry: Registering function ${name}`);
         this.functions.set(name, implementation);
     }
 
@@ -47,7 +45,7 @@ export class FunctionRegistry {
         args: RuntimeValue<ValueType>[],
         context: FunctionContext
     ): Promise<RuntimeValue<ValueType> | undefined> {
-		console.log(`FunctionRegistry: Evaluating function ${name}`);
+		console.log(`Evaluating function "${name}" with args:`, args,context);
         const implementation = this.functions.get(name);
         if (!implementation) {
             console.warn(`Function "${name}" not implemented`);
@@ -55,7 +53,6 @@ export class FunctionRegistry {
         }
 
         try {
-			console.log(`found implementation for ${name}`,implementation);
             return await implementation(args, context);
         } catch (error) {
             console.error(`Error evaluating function "${name}":`, error);

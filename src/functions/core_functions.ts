@@ -30,7 +30,6 @@ export const coreFunctionGroup = {
             _args: RuntimeValue<ValueType>[],
             context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
-			console.log('get_terragrunt_dir=====',context,_args);
             const {fsPath} = URI.parse(context.document.uri);
             const dirPath = path.dirname(fsPath);
             return makeStringValue(dirPath);
