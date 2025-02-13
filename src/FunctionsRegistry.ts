@@ -45,7 +45,7 @@ export class FunctionRegistry {
         args: RuntimeValue<ValueType>[],
         context: FunctionContext
     ): Promise<RuntimeValue<ValueType> | undefined> {
-		console.log(`Evaluating function "${name}" with args:`, args,context);
+		// console.log(`Evaluating function "${name}" with args:`, args,context);
         const implementation = this.functions.get(name);
         if (!implementation) {
             console.warn(`Function "${name}" not implemented`);

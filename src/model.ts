@@ -370,7 +370,11 @@ export interface FunctionContext {
         content: string;
     };
     terraformCommand?: string;  
-    terraformCliArgs?: string[];  
+    terraformCliArgs?: string[];
+    fs?: {
+        access: (path: string) => Promise<void>;
+    };
+    includedFrom?: string;  // URI of the config file that included this one
 }
 
 export interface FunctionGroup {
