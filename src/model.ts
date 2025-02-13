@@ -1,4 +1,4 @@
-import type { Position } from 'vscode-languageserver';
+import type { Location,Position  } from 'vscode-languageserver';
 
 import type { LocationRange } from './terragrunt-parser';
 
@@ -363,12 +363,14 @@ export interface MetaArgumentInfo {
 export type FunctionImplementation = (args: RuntimeValue<ValueType>[], context: FunctionContext) => Promise<RuntimeValue<ValueType> | undefined>;
 
 export interface FunctionContext {
-  workingDirectory: string;
-  environmentVariables: Record<string, string>;
-  document: {
-    uri: string;
-    content: string;
-  };
+    workingDirectory: string;
+    environmentVariables: Record<string, string>;
+    document: {
+        uri: string;
+        content: string;
+    };
+    terraformCommand?: string;  
+    terraformCliArgs?: string[];  
 }
 
 export interface FunctionGroup {

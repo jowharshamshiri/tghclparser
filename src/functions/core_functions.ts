@@ -1,198 +1,178 @@
-import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
 import { URI } from 'vscode-uri';
 
-import type { FunctionContext, FunctionDefinition, RuntimeValue, ValueType } from '../model';
+import type { FunctionContext, RuntimeValue, ValueType } from '../model';
+import { makeArrayValue, makeStringValue } from './utils';
 
-// Helper to create a string runtime value
-const makeStringValue = (value: string): RuntimeValue<'string'> => ({
-	type: 'string',
-	value
-});
-
-// Function definitions that match the Go implementations
-export const functionDefinitions: FunctionDefinition[] = [
-	{
-		name: 'find_in_parent_folders',
-		description: 'Find a file in parent folders working up from the current Terragrunt configuration file',
-		parameters: [
-			{
-				name: 'fileToFind',
-				types: ['string'],
-				required: false,
-				description: 'The name of the file to find. If empty, will look for terragrunt.hcl'
-			},
-			{
-				name: 'fallback',
-				types: ['string'],
-				required: false,
-				description: 'The fallback value to return if the file is not found'
-			}
-		],
-		returnType: {
-			types: ['string'],
-			description: 'The path to the found file or the fallback value'
-		}
-	},
-	{
-		name: 'path_relative_to_include',
-		description: 'Returns the relative path between the included config file and current config file',
-		parameters: [
-			{
-				name: 'includeName',
-				types: ['string'],
-				required: false,
-				description: 'The name of the include block to use when multiple includes exist'
-			}
-		],
-		returnType: {
-			types: ['string'],
-			description: 'The relative path'
-		}
-	},
-	{
-		name: 'get_env',
-		description: 'Get an environment variable value',
-		parameters: [
-			{
-				name: 'envName',
-				types: ['string'],
-				required: true,
-				description: 'The name of the environment variable'
-			},
-			{
-				name: 'defaultValue',
-				types: ['string'],
-				required: false,
-				description: 'The default value if env var is not set'
-			}
-		],
-		returnType: {
-			types: ['string'],
-			description: 'The environment variable value or default'
-		}
-	},
-	{
-		name: 'get_platform',
-		description: 'Get the current operating system platform',
-		parameters: [],
-		returnType: {
-			types: ['string'],
-			description: 'The OS platform (e.g., linux, darwin, windows)'
-		}
-	},
-	{
-		name: 'get_terragrunt_dir',
-		description: 'Get the directory where the Terragrunt configuration file lives',
-		parameters: [],
-		returnType: {
-			types: ['string'],
-			description: 'The absolute path to the Terragrunt config directory'
-		}
-	}
+// Constants from original terragrunt
+const TerraformCommandsNeedVars = [
+    'apply', 'console', 'destroy', 'import', 'plan', 'push', 'refresh',
 ];
 
-// Function implementations
-export const functions = {
+const TerraformCommandsNeedLocking = [
+    'apply', 'destroy', 'import', 'plan', 'refresh', 'taint', 'untaint',
+];
 
-	// find_in_parent_folders implementation
-	async find_in_parent_folders(
-		args: RuntimeValue<ValueType>[],
-		context: FunctionContext
-	): Promise<RuntimeValue<ValueType>> {
-		const configPath = context.document.uri;
-		const fileToFind = args[0]?.type === 'string' ? String(args[0].value) : 'terragrunt.hcl';
-		const fallback = args[1]?.type === 'string' ? String(args[1].value) : undefined;
+const TerraformCommandsNeedInput = [
+    'apply', 'import', 'init', 'plan', 'refresh',
+];
 
-		let currentDir = path.dirname(configPath);
-		const maxDepth = 100; // Prevent infinite loops
-		let depth = 0;
+const TerraformCommandsNeedParallelism = [
+    'apply', 'plan', 'destroy',
+];
 
-		while (depth < maxDepth) {
-			const filePath = path.join(currentDir, fileToFind);
-			try {
-				await fs.access(filePath);
-				return makeStringValue(filePath);
-			} catch {
-				const parentDir = path.dirname(currentDir);
-				if (parentDir === currentDir) {
-					// Reached root directory
-					if (fallback !== undefined) {
-						return makeStringValue(fallback);
-					}
-					throw new Error(`Could not find ${fileToFind} in parent folders`);
-				}
-				currentDir = parentDir;
-			}
-			depth++;
-		}
+export const coreFunctionGroup = {
+    namespace: 'core',
+    functions: {
+        get_terragrunt_dir: async (
+            _args: RuntimeValue<ValueType>[],
+            context: FunctionContext
+        ): Promise<RuntimeValue<ValueType>> => {
+			console.log('get_terragrunt_dir=====',context,_args);
+            const {fsPath} = URI.parse(context.document.uri);
+            const dirPath = path.dirname(fsPath);
+            return makeStringValue(dirPath);
+        },
 
-		throw new Error(`Exceeded maximum depth searching for ${fileToFind}`);
-	},
+        get_parent_terragrunt_dir: async (
+            _args: RuntimeValue<ValueType>[],
+            context: FunctionContext
+        ): Promise<RuntimeValue<ValueType>> => {
+            const configPath = context.document.uri;
+            const currentDir = path.dirname(URI.parse(configPath).fsPath);
+            const parentDir = path.dirname(currentDir);
+            return makeStringValue(parentDir);
+        },
 
-	// get_env implementation
-	async get_env(
-		args: RuntimeValue<ValueType>[],
-		context: FunctionContext
-	): Promise<RuntimeValue<ValueType>> {
-		if (args.length === 0 || args[0].type !== 'string') {
-			throw new Error('get_env requires at least one string argument');
-		}
+        get_terraform_commands_that_need_vars: async (
+            _args: RuntimeValue<ValueType>[],
+            _context: FunctionContext
+        ): Promise<RuntimeValue<ValueType>> => {
+            return makeArrayValue(TerraformCommandsNeedVars.map(cmd => makeStringValue(cmd)));
+        },
 
-		const envName = String(args[0].value);
-		const defaultValue = args[1]?.type === 'string' ? String(args[1].value) : '';
+        get_terraform_commands_that_need_locking: async (
+            _args: RuntimeValue<ValueType>[],
+            _context: FunctionContext
+        ): Promise<RuntimeValue<ValueType>> => {
+            return makeArrayValue(TerraformCommandsNeedLocking.map(cmd => makeStringValue(cmd)));
+        },
 
-		const envValue = context.environmentVariables[envName];
-		return makeStringValue(envValue ?? defaultValue);
-	},
+        get_terraform_commands_that_need_input: async (
+            _args: RuntimeValue<ValueType>[],
+            _context: FunctionContext
+        ): Promise<RuntimeValue<ValueType>> => {
+            return makeArrayValue(TerraformCommandsNeedInput.map(cmd => makeStringValue(cmd)));
+        },
 
-	// get_platform implementation 
-	async get_platform(
-		_args: RuntimeValue<ValueType>[],
-		_context: FunctionContext
-	): Promise<RuntimeValue<ValueType>> {
-		return makeStringValue(os.platform());
-	},
+        get_terraform_commands_that_need_parallelism: async (
+            _args: RuntimeValue<ValueType>[],
+            _context: FunctionContext
+        ): Promise<RuntimeValue<ValueType>> => {
+            return makeArrayValue(TerraformCommandsNeedParallelism.map(cmd => makeStringValue(cmd)));
+        },
 
-	// get_terragrunt_dir implementation
-	get_terragrunt_dir: async (
-        _args: RuntimeValue<ValueType>[],
-        context: FunctionContext
-    ): Promise<RuntimeValue<ValueType>> => {
-        console.log('get_terragrunt_dir: Executing with context:', context);
-        const {fsPath} = URI.parse(context.document.uri);
-        const dirPath = path.dirname(fsPath);
-        console.log('get_terragrunt_dir: Calculated path:', dirPath);
-        return {
-            type: 'string',
-            value: dirPath
-        };
-    },
+        get_terraform_command: async (
+            _args: RuntimeValue<ValueType>[],
+            context: FunctionContext
+        ): Promise<RuntimeValue<ValueType>> => {
+            return makeStringValue(context.terraformCommand || '');
+        },
 
-	// path_relative_to_include implementation
-	async path_relative_to_include(
-		_args: RuntimeValue<ValueType>[],
-		_context: FunctionContext
-	): Promise<RuntimeValue<ValueType>> {
-		// This requires access to the include context, which should be passed in context
-		// For now returning current directory as placeholder
-		return makeStringValue('.');
-	}
-};
+        get_terraform_cli_args: async (
+            _args: RuntimeValue<ValueType>[],
+            context: FunctionContext
+        ): Promise<RuntimeValue<ValueType>> => {
+            const cliArgs = context.terraformCliArgs || [];
+            return makeArrayValue(cliArgs.map(arg => makeStringValue(arg)));
+        },
 
-// Check if path exists
-async function pathExists(filePath: string): Promise<boolean> {
-	try {
-		await fs.access(filePath);
-		return true;
-	} catch {
-		return false;
-	}
-}
+        get_platform: async (
+            _args: RuntimeValue<ValueType>[],
+            _context: FunctionContext
+        ): Promise<RuntimeValue<ValueType>> => {
+            return makeStringValue(os.platform());
+        },
 
+        get_working_dir: async (
+            _args: RuntimeValue<ValueType>[],
+            context: FunctionContext
+        ): Promise<RuntimeValue<ValueType>> => {
+            return makeStringValue(context.workingDirectory);
+        },
 
-export const functionRegistry = {
-    functions
+        path_relative_to_include: async (
+            _args: RuntimeValue<ValueType>[],
+            _context: FunctionContext
+        ): Promise<RuntimeValue<ValueType>> => {
+            // Logic to get relative path between included terragrunt config and current config
+            return makeStringValue('.');
+        },
+
+        path_relative_from_include: async (
+            _args: RuntimeValue<ValueType>[],
+            _context: FunctionContext
+        ): Promise<RuntimeValue<ValueType>> => {
+            // Logic to get relative path from current config to included config
+            return makeStringValue('.');
+        },
+
+        find_in_parent_folders: async (
+            args: RuntimeValue<ValueType>[],
+            context: FunctionContext
+        ): Promise<RuntimeValue<ValueType>> => {
+            const fileToFind = args[0]?.type === 'string' ? String(args[0].value) : 'terragrunt.hcl';
+            const fallback = args[1]?.type === 'string' ? String(args[1].value) : undefined;
+            
+            try {
+                let currentDir = path.dirname(URI.parse(context.document.uri).fsPath);
+                const maxDepth = 100; // Prevent infinite loops
+                let depth = 0;
+
+                while (depth < maxDepth) {
+                    const filePath = path.join(currentDir, fileToFind);
+                    try {
+                        // Using the context to check file existence
+                        await context.fs?.access(filePath);
+                        return makeStringValue(filePath);
+                    } catch {
+                        const parentDir = path.dirname(currentDir);
+                        if (parentDir === currentDir) {
+                            // Reached root directory
+                            if (fallback !== undefined) {
+                                return makeStringValue(fallback);
+                            }
+                            throw new Error(`Could not find ${fileToFind} in parent folders`);
+                        }
+                        currentDir = parentDir;
+                    }
+                    depth++;
+                }
+
+                throw new Error(`Exceeded maximum depth searching for ${fileToFind}`);
+            } catch (error) {
+                if (fallback !== undefined) {
+                    return makeStringValue(fallback);
+                }
+                throw error;
+            }
+        },
+
+        get_env: async (
+            args: RuntimeValue<ValueType>[],
+            context: FunctionContext
+        ): Promise<RuntimeValue<ValueType>> => {
+            if (args.length === 0 || args[0].type !== 'string') {
+                throw new Error('get_env requires at least one string argument');
+            }
+
+            const envName = String(args[0].value);
+            const defaultValue = args[1]?.type === 'string' ? String(args[1].value) : '';
+
+            const envValue = context.environmentVariables[envName];
+            return makeStringValue(envValue ?? defaultValue);
+        }
+    }
 };
