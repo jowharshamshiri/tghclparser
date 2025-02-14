@@ -1,4 +1,3 @@
-
 import path from 'node:path';
 
 import type { Diagnostic } from 'vscode-languageserver';

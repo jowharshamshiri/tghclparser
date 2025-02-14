@@ -90,35 +90,91 @@ export class CompletionsProvider {
 
 		return completions;
 	}
+
 	private async getDependencyCompletions(parsedDoc: ParsedDocument, currentWord: string): Promise<CompletionItem[]> {
 		const completions: CompletionItem[] = [];
 		const dependencies = await parsedDoc.getWorkspace().getDependencies(parsedDoc.getUri());
 
-		for (const dep of dependencies) {
-			if (dep.dependencyType !== 'dependency') continue;
+		console.log('Available dependencies:', dependencies.map(d => ({
+			type: d.dependencyType,
+			paramValue: d.parameterValue,
+			uri: d.uri
+		})));
 
-			const depName = dep.parameterValue;
-			if (!depName) continue;
+		// Split the current word to determine completion level
+		const parts = currentWord.split('.');
 
-			// Get the target document
-			const depDoc = await parsedDoc.getWorkspace().getDocument(dep.uri);
-			if (!depDoc) continue;
+		// After "dependency" (no dot yet)
+		if (parts.length === 1 && !currentWord.endsWith('.')) {
+			return completions;
+		}
 
-			// Get state outputs
-			const outputs = await depDoc.getAllOutputs();
-
-			// Add completions for each output
-			outputs.forEach((value, outputName) => {
-				completions.push({
-					label: `${depName}.outputs.${outputName}`,
-					kind: CompletionItemKind.Property,
-					detail: `Output from ${depName}`,
-					documentation: {
-						kind: 'markdown',
-						value: `Output variable from dependency "${depName}"\n\nSource: ${dep.targetPath}\nType: dependency\n\nCurrent value: ${this.formatRuntimeValue(value)}`
-					}
-				});
+		// After "dependency." (has dot)
+		if (parts.length === 2 && parts[1] === '') {
+			// Show ALL dependency names
+			dependencies.forEach(dep => {
+				if (dep.dependencyType === 'dependency' && dep.parameterValue) {
+					completions.push({
+						label: dep.parameterValue,
+						kind: CompletionItemKind.Property,
+						detail: `Dependency reference`,
+						documentation: {
+							kind: 'markdown',
+							value: `Dependency defined at: ${dep.targetPath}`
+						},
+						insertText: dep.parameterValue
+					});
+				}
 			});
+			return completions;
+		}
+
+		// After "dependency.{name}" (no dot yet)
+		if (parts.length === 2 && !currentWord.endsWith('.')) {
+			return completions;
+		}
+
+		// After "dependency.{name}." (has dot)
+		if (parts.length === 3 && parts[2] === '') {
+			completions.push({
+				label: 'outputs',
+				kind: CompletionItemKind.Property,
+				detail: 'Dependency outputs',
+				insertText: 'outputs'
+			});
+			return completions;
+		}
+
+		// After "dependency.{name}.outputs" (no dot yet)
+		if (parts.length === 3 && !currentWord.endsWith('.')) {
+			return completions;
+		}
+
+		// After "dependency.{name}.outputs." (has dot)
+		if (parts.length === 4 && parts[3] === '') {
+			const depName = parts[1];
+			const dep = dependencies.find(d =>
+				d.dependencyType === 'dependency' &&
+				d.parameterValue === depName
+			);
+
+			if (dep) {
+				const depDoc = await parsedDoc.getWorkspace().getDocument(dep.uri);
+				if (depDoc) {
+					const outputs = await depDoc.getAllOutputs();
+					outputs.forEach((value, outputName) => {
+						completions.push({
+							label: outputName,
+							kind: CompletionItemKind.Property,
+							detail: `Output from ${depName}`,
+							documentation: {
+								kind: 'markdown',
+								value: `Output variable from dependency "${depName}"\n\nSource: ${dep.targetPath}\nType: dependency\n\nCurrent value: ${this.formatRuntimeValue(value)}`
+							}
+						});
+					});
+				}
+			}
 		}
 
 		return completions;
@@ -418,13 +474,11 @@ export class CompletionsProvider {
 			completions = await this.getLocalCompletions(parsedDoc, context.currentWord.slice(6));
 		}
 		// If we're in a dependency reference context
-		else if (this.isDependencyReferenceContext(token)) {
+		else if (this.isDependencyReferenceContext(token) || context.currentWord.startsWith('dependency.')) {
 			console.log("isDependencyReferenceContext context", context);
-			// If we have a partial dependency name (e.g., "dependency.gl")
-			const parts = context.currentWord.split('.');
-			const depPrefix = parts.length > 1 ? parts[1] : '';
-			completions = await this.getDependencyCompletions(parsedDoc, depPrefix);
+			completions = await this.getDependencyCompletions(parsedDoc, context.currentWord);
 			console.log("isDependencyReferenceContext completions", completions);
+			return completions; // Return immediately to prevent filtering
 		}
 		else {
 			switch (context.type) {
@@ -473,6 +527,8 @@ export class CompletionsProvider {
 		return completions;
 	}
 
+	// In CompletionsProvider.ts
+
 	private getAttributeCompletions(blockType: string, token: Token | null): CompletionItem[] {
 		const template = this.schema.getBlockDefinition(blockType);
 		if (!template?.attributes) return [];
@@ -492,6 +548,22 @@ export class CompletionsProvider {
 					existingAttributes.add(identifier.getDisplayText());
 				}
 			});
+
+		// For dependency block, only show config_path attribute
+		if (blockType === 'dependency') {
+			const configPathAttr = template.attributes.find(attr => attr.name === 'config_path');
+			if (configPathAttr && !existingAttributes.has('config_path')) {
+				return [{
+					label: 'config_path',
+					kind: CompletionItemKind.Field,
+					detail: configPathAttr.description,
+					documentation: this.getAttributeDocumentation(configPathAttr),
+					insertText: this.schema.generateAttributeSnippet(configPathAttr),
+					insertTextFormat: InsertTextFormat.Snippet
+				}];
+			}
+			return [];
+		}
 
 		// Filter out attributes that already exist in the block
 		return template.attributes
