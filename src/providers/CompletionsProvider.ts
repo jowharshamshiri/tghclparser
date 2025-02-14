@@ -1,10 +1,10 @@
 import type { CompletionItem, Position } from 'vscode-languageserver';
 import { CompletionItemKind, InsertTextFormat } from 'vscode-languageserver';
 
-import type { AttributeDefinition, BlockDefinition, FunctionDefinition, RuntimeValue, ValueType } from './model';
-import { Token } from './model';
-import type { ParsedDocument } from './ParsedDocument';
-import type { Schema } from './Schema';
+import type { AttributeDefinition, BlockDefinition, FunctionDefinition, RuntimeValue, ValueType } from '../model';
+import { Token } from '../model';
+import type { ParsedDocument } from '../ParsedDocument';
+import type { Schema } from '../Schema';
 
 type CompletionContext =
 	| { type: 'root_level'; currentWord: string }
@@ -93,27 +93,27 @@ export class CompletionsProvider {
 
 	private async getDependencyCompletions(parsedDoc: ParsedDocument, currentWord: string): Promise<CompletionItem[]> {
 		const completions: CompletionItem[] = [];
+		
+		// Get fresh dependencies for this document
 		const dependencies = await parsedDoc.getWorkspace().getDependencies(parsedDoc.getUri());
-
-		console.log('Available dependencies:', dependencies.map(d => ({
-			type: d.dependencyType,
-			paramValue: d.parameterValue,
-			uri: d.uri
-		})));
-
+		
+		console.log('Getting completions for document:', {
+			uri: parsedDoc.getUri(),
+			currentWord,
+			dependencies: dependencies.map(d => ({
+				type: d.dependencyType,
+				name: d.parameterValue,
+				path: d.targetPath
+			}))
+		});
+	
 		// Split the current word to determine completion level
 		const parts = currentWord.split('.');
-
-		// After "dependency" (no dot yet)
-		if (parts.length === 1 && !currentWord.endsWith('.')) {
-			return completions;
-		}
-
+		
 		// After "dependency." (has dot)
 		if (parts.length === 2 && parts[1] === '') {
-			// Show ALL dependency names
 			dependencies.forEach(dep => {
-				if (dep.dependencyType === 'dependency' && dep.parameterValue) {
+				if (dep.parameterValue) {
 					completions.push({
 						label: dep.parameterValue,
 						kind: CompletionItemKind.Property,
@@ -126,7 +126,6 @@ export class CompletionsProvider {
 					});
 				}
 			});
-			return completions;
 		}
 
 		// After "dependency.{name}" (no dot yet)
@@ -526,8 +525,6 @@ export class CompletionsProvider {
 
 		return completions;
 	}
-
-	// In CompletionsProvider.ts
 
 	private getAttributeCompletions(blockType: string, token: Token | null): CompletionItem[] {
 		const template = this.schema.getBlockDefinition(blockType);
