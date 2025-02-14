@@ -41,7 +41,61 @@ export class ParsedDocument {
 		this.parseContent();
 		this.buildProfile();
 	}
-
+	public async getAllLocals(): Promise<Map<string, RuntimeValue<ValueType>>> {
+		console.log('getAllLocals called');
+		const locals = new Map<string, RuntimeValue<ValueType>>();
+		const ast = this.getAST();
+		if (!ast) return locals;
+	
+		const localsBlock = this.findBlock(ast, 'locals');
+		if (!localsBlock) {
+			console.log('No locals block found');
+			return locals;
+		}
+	
+		console.log('Processing locals block children:', localsBlock.children.map(c => ({
+			type: c.type,
+			value: c.value
+		})));
+	
+		// Process each attribute in the locals block
+		for (const child of localsBlock.children) {
+			if (child.type === 'attribute') {
+				// Get the attribute name directly from the value
+				const name = child.value;
+				if (typeof name === 'string') {
+					console.log(`Processing local variable: ${name}`);
+					
+					// Find the value token (first non-identifier child)
+					const valueToken = child.children.find(c => 
+						c.type !== 'identifier' && 
+						c.type !== 'attribute_identifier'
+					);
+	
+					if (valueToken) {
+						try {
+							// Attempt to evaluate the value
+							const value = await this.evaluateValue(valueToken);
+							if (value) {
+								console.log(`Successfully evaluated ${name}:`, value);
+								locals.set(name, value);
+							}
+						} catch {
+							// If evaluation fails, create a simple string value
+							console.log(`Failed to evaluate ${name}, using string value:`, valueToken.value);
+							locals.set(name, {
+								type: 'string',
+								value: String(valueToken.value || '')
+							});
+						}
+					}
+				}
+			}
+		}
+	
+		console.log('Final locals:', Array.from(locals.entries()));
+		return locals;
+	}
 	/**
 	 * Gets all outputs from terraform.tfstate
 	 */
@@ -261,45 +315,6 @@ export class ParsedDocument {
 		this.processDependencyBlocks(this.ast);
 	}
 
-	public async getAllLocals(): Promise<Map<string, RuntimeValue<ValueType>>> {
-		console.log('getAllLocals called');
-		const locals = new Map<string, RuntimeValue<ValueType>>();
-
-		const localsBlock = this.findBlock(this.ast, 'locals');
-		if (!localsBlock) return locals;
-
-		for (const attr of localsBlock.children) {
-			if (attr.type === 'attribute') {
-				const nameChild = attr.children.find(c => c.type === 'attribute_identifier');
-				// Get the function call or value token
-				const valueToken = attr.children.find(c => c.type !== 'attribute_identifier');
-
-				console.log('Processing local:', {
-					name: nameChild?.value,
-					valueToken: valueToken ? {
-						type: valueToken.type,
-						value: valueToken.value,
-						children: valueToken.children?.map(c => ({
-							type: c.type,
-							value: c.value
-						}))
-					} : null
-				});
-
-				if (nameChild?.value && valueToken instanceof Token) {
-					// Actually evaluate the value
-					const value = await this.evaluateValue(valueToken);
-					console.log(`Evaluated ${nameChild.value}:`, value);
-					if (value) {
-						locals.set(nameChild.value as string, value);
-					}
-				}
-			}
-		}
-
-		console.log('Final locals:', Array.from(locals.entries()));
-		return locals;
-	}
 	// Helper to find the specific function we want to evaluate
 	private findTargetFunctionNode(startNode: Token, targetName: string): Token | null {
 		if (startNode.type === 'function_call' && startNode.value === targetName) {
@@ -331,15 +346,15 @@ export class ParsedDocument {
 		if (!node) return undefined;
 
 
-		console.log('evaluateValue called for node:', {
-			type: node.type,
-			value: node.value,
-			children: node.children?.map(c => ({
-				type: c.type,
-				value: c.value,
-				children: c.children?.length
-			}))
-		});
+		// console.log('evaluateValue called for node:', {
+		// 	type: node.type,
+		// 	value: node.value,
+		// 	children: node.children?.map(c => ({
+		// 		type: c.type,
+		// 		value: c.value,
+		// 		children: c.children?.length
+		// 	}))
+		// });
 
 
 		// If we have a target name and this is a function_call that's NOT our target,
