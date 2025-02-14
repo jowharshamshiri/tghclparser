@@ -417,15 +417,15 @@ export class HoverProvider {
 	}
 
 	async getHoverInfo(token: Token, doc: ParsedDocument): Promise<MarkupContent | null> {
-		console.log('getHoverInfo called with token:', {
-			type: token.type,
-			value: token.value,
-			displayText: token.getDisplayText(),
-			parent: token.parent ? {
-				type: token.parent.type,
-				value: token.parent.value
-			} : null
-		});
+		// console.log('getHoverInfo called with token:', {
+		// 	type: token.type,
+		// 	value: token.value,
+		// 	displayText: token.getDisplayText(),
+		// 	parent: token.parent ? {
+		// 		type: token.parent.type,
+		// 		value: token.parent.value
+		// 	} : null
+		// });
 
 		let contents: string[] = [];
 		const value = token.getDisplayText();
@@ -440,13 +440,13 @@ export class HoverProvider {
 			// Find the parent local_reference if it exists
 			const parentRef = token.parent;
 			if (parentRef && parentRef.type === 'local_reference') {
-				console.log('Found parent local reference:', {
-					type: parentRef.type,
-					children: parentRef.children.map(c => ({
-						type: c.type,
-						value: c.value
-					}))
-				});
+				// console.log('Found parent local reference:', {
+				// 	type: parentRef.type,
+				// 	children: parentRef.children.map(c => ({
+				// 		type: c.type,
+				// 		value: c.value
+				// 	}))
+				// });
 				contents = await this.getLocalReferenceHoverInfo(parentRef, doc);
 				if (contents.length > 0) {
 					return this.createTrustedMarkdownContent(contents.join('\n'));
@@ -624,9 +624,9 @@ export class HoverProvider {
 		return outputs;
 	}
 	private findBlock(ast: any, type: string): any {
-		console.log('findBlock called for type:', type);
+		// console.log('findBlock called for type:', type);
 		if (ast.type === 'block' && ast.value === type) {
-			console.log('Found matching block:', type);
+			// console.log('Found matching block:', type);
 			return ast;
 		}
 		if (!ast.children) {

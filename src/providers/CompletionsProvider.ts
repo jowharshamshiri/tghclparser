@@ -1,8 +1,7 @@
 import type { CompletionItem, Position } from 'vscode-languageserver';
 import { CompletionItemKind, InsertTextFormat } from 'vscode-languageserver';
 
-import type { AttributeDefinition, BlockDefinition, FunctionDefinition, RuntimeValue, ValueType } from '../model';
-import { Token } from '../model';
+import type { AttributeDefinition, BlockDefinition, FunctionDefinition, RuntimeValue, Token, ValueType } from '../model';
 import type { ParsedDocument } from '../ParsedDocument';
 import type { Schema } from '../Schema';
 
@@ -60,43 +59,54 @@ export class CompletionsProvider {
 	}
 
 	private async getLocalCompletions(parsedDoc: ParsedDocument, currentWord: string): Promise<CompletionItem[]> {
+		console.log('Getting local completions for word:', currentWord);
 		const completions: CompletionItem[] = [];
-		const ast = parsedDoc.getAST();
-		if (!ast) return completions;
-
-		// Find locals block
-		const localsBlock = this.findBlock(ast, 'locals');
-		if (!localsBlock) return completions;
-
-		// Process each attribute in locals block
-		for (const attr of localsBlock.children) {
-			if (attr.type === 'attribute') {
-				const name = attr.children.find(c => c.type === 'identifier')?.value;
-				const valueToken = attr.children.find(c => c.type !== 'identifier');
-				if (typeof name === 'string' && valueToken && valueToken instanceof Token) {
-					// Create a more basic completion without evaluated value for now
-					completions.push({
-						label: name,
-						kind: CompletionItemKind.Variable,
-						detail: `local.${name}`,
-						documentation: {
-							kind: 'markdown',
-							value: `Local variable defined in ${parsedDoc.getUri()}`
-						}
-					});
+		
+		// Get all locals from the document
+		const locals = await parsedDoc.getAllLocals();
+		console.log('Found locals:', Array.from(locals.entries()));
+	
+		// Clean up the currentWord to handle function calls
+		const localPart = currentWord.includes('local.') ? 
+			`local.${  currentWord.split('local.')[1]}` : 
+			currentWord;
+	
+		console.log('Cleaned current word:', localPart);
+	
+		// If we're just after "local." show all local variables
+		if (localPart === 'local.' || localPart.startsWith('local.')) {
+			const prefix = localPart.slice('local.'.length);
+			console.log('Looking for locals with prefix:', prefix);
+			
+			for (const [name, value] of locals) {
+				// Skip if we have a prefix and the name doesn't match
+				if (prefix && !name.toLowerCase().includes(prefix.toLowerCase())) {
+					continue;
 				}
+				
+				completions.push({
+					label: name,
+					kind: CompletionItemKind.Variable,
+					detail: `local.${name}`,
+					insertText: name,
+					documentation: {
+						kind: 'markdown',
+						value: `Local variable:\n\`\`\`hcl\n${this.formatRuntimeValue(value)}\n\`\`\``
+					}
+				});
 			}
 		}
-
+	
+		console.log('Returning local completions:', completions);
 		return completions;
 	}
 
 	private async getDependencyCompletions(parsedDoc: ParsedDocument, currentWord: string): Promise<CompletionItem[]> {
 		const completions: CompletionItem[] = [];
-		
+
 		// Get fresh dependencies for this document
 		const dependencies = await parsedDoc.getWorkspace().getDependencies(parsedDoc.getUri());
-		
+
 		console.log('Getting completions for document:', {
 			uri: parsedDoc.getUri(),
 			currentWord,
@@ -106,10 +116,10 @@ export class CompletionsProvider {
 				path: d.targetPath
 			}))
 		});
-	
+
 		// Split the current word to determine completion level
 		const parts = currentWord.split('.');
-		
+
 		// After "dependency." (has dot)
 		if (parts.length === 2 && parts[1] === '') {
 			dependencies.forEach(dep => {
@@ -463,14 +473,35 @@ export class CompletionsProvider {
 			/[a-z_]\w*\($/i.test(trimmed) ||
 			/[a-z_]\w*$/i.test(trimmed);
 	}
+	private isInLocalContext(token: Token | null): boolean {
+		if (!token) return false;
 
+		// Check if we're directly on a local namespace
+		if (token.type === 'namespace' && token.value === 'local') {
+			return true;
+		}
+
+		// Check if we're in a local reference chain
+		let current: Token | null = token;
+		while (current) {
+			if (current.type === 'local_reference') {
+				return true;
+			}
+			current = current.parent;
+		}
+
+		return false;
+	}
 	async getCompletions(line: string, position: Position, token: Token | null, parsedDoc: ParsedDocument): Promise<CompletionItem[]> {
 		const context = this.determineCompletionContext(token, line, position);
 		let completions: CompletionItem[] = [];
+		const lineUptoCursor = line.slice(0, position.character);
+		console.log('Line up to cursor:', lineUptoCursor);
 
-		// If we're after a local. reference
-		if (context.currentWord.startsWith('local.')) {
-			completions = await this.getLocalCompletions(parsedDoc, context.currentWord.slice(6));
+		// If we're in a local reference context
+		if (this.isInLocalContext(token) || lineUptoCursor.includes('local.')) {
+			console.log('Local completion context detected');
+			return this.getLocalCompletions(parsedDoc, lineUptoCursor);
 		}
 		// If we're in a dependency reference context
 		else if (this.isDependencyReferenceContext(token) || context.currentWord.startsWith('dependency.')) {

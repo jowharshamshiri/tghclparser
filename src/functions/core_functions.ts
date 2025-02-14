@@ -33,7 +33,7 @@ async function findParentWithFile(
     let depth = 0;
 
     if (!context.fs?.access) {
-        console.warn('No fs.access provided in context');
+        // console.warn('No fs.access provided in context');
         return null;
     }
 

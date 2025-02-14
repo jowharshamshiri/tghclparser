@@ -49,7 +49,7 @@ export class Schema {
 		this.functionRegistry.registerFunctionGroup(envFunctionGroup);
 		this.functionRegistry.registerFunctionGroup(stringFunctionGroup);
 
-		console.log('Registered functions:', this.functionRegistry.getFunctionNames());
+		// console.log('Registered functions:', this.functionRegistry.getFunctionNames());
 	}
 
 	findNestedBlockTemplate(parentType: string, nestedType: string): BlockDefinition | undefined {
