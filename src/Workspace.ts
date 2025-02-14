@@ -5,14 +5,16 @@ import * as path from 'node:path';
 import { DiagnosticSeverity } from 'vscode-languageserver-types';
 import { URI } from 'vscode-uri';
 
-import type { RuntimeValue, TerragruntConfig, ValueType } from './model';
-import { Token } from './model';
+import type { FunctionContext, RuntimeValue, TerragruntConfig, Token, ValueType } from './model';
+import { createDependencyConfig, createIncludeConfig } from './model';
 import { ParsedDocument } from './ParsedDocument';
+import { Schema } from './Schema';
 
 export class Workspace {
 	private documents: Map<string, ParsedDocument>;
 	private configMap: Map<string, TerragruntConfig>;
 	private workspaceRoot: string | null;
+	private schema: Schema = Schema.getInstance();
 
 	public constructor() {
 		this.documents = new Map();
@@ -21,102 +23,91 @@ export class Workspace {
 	}
 	private async updateConfigMap(doc: ParsedDocument, processedPaths = new Set<string>()): Promise<void> {
 		const uri = doc.getUri();
-		console.log('\nUpdating config map for:', uri);
-		
-		// Prevent infinite recursion
-		if (processedPaths.has(uri)) {
-			console.log('Already processed:', uri);
-			return;
-		}
+		if (processedPaths.has(uri)) return;
 		processedPaths.add(uri);
-		
+
 		const ast = doc.getAST();
-		if (!ast) {
-			console.log('No AST found for:', uri);
-			return;
-		}
-	
+		if (!ast) return;
+
 		// Process includes
 		const includes = doc.findIncludeBlocks(ast);
-		console.log('Found includes:', includes.length);
-		includes.forEach(inc => {
-			console.log('Include:', {
-				type: inc.path.type,
-				value: inc.path.value,
-				blockType: inc.block.type
-			});
-		});
-	
 		const includePaths = await Promise.all(includes.map(async inc => {
-			const targetUri = await this.resolveIncludePath(inc.path, uri);
-			console.log('Resolved include path:', targetUri);
-			if (!this.configMap.has(targetUri)) {
-				const targetDoc = await this.getDocument(targetUri);
-				if (targetDoc) {
-					await this.updateConfigMap(targetDoc, processedPaths);
-				}
+			const resolvedPath = await this.resolveIncludePath(inc.path, uri);
+			let includedConfig = this.configMap.get(resolvedPath);
+			if (!includedConfig) {
+				includedConfig = createIncludeConfig(
+					resolvedPath,
+					'', // Content loaded later
+					uri,
+					resolvedPath,
+					inc.block
+				);
+				this.configMap.set(resolvedPath, includedConfig);
 			}
-			return targetUri;
-		}));
-	
-		// Process dependencies
-		const dependencies = doc.findDependencyBlocks(ast);
-		console.log('Found dependencies:', dependencies.length);
-		dependencies.forEach(dep => {
-			console.log('Dependency:', {
-				type: dep.path.type,
-				value: dep.path.value,
-				blockType: dep.block.type
-			});
-		});
-	
-		const dependencyPaths = await Promise.all(dependencies.map(async dep => {
-			const targetUri = await this.resolveDependencyPath(dep.path, uri);
-			if (!this.configMap.has(targetUri)) {
-				const targetDoc = await this.getDocument(targetUri);
-				if (targetDoc) {
-					await this.updateConfigMap(targetDoc, processedPaths);
-				}
-			}
-			return {
-				uri: targetUri,
-				parameterValue: this.getDependencyName(dep.block)
-			};
-		}));
-	
-		// Create or update the config entry
-		const sourcePath = URI.parse(uri).fsPath;
-		const existingConfig = this.configMap.get(uri);
-		const depUris = dependencyPaths.map(d => d.uri);
-	
-		const newConfig: TerragruntConfig = {
-			uri,
-			content: doc.getContent(),
-			includes: includePaths,
-			dependencies: depUris,
-			referencedBy: existingConfig?.referencedBy || [],
-			sourcePath,
-			targetPath: sourcePath,
-			dependencyType: 'include',
-			block: undefined,
-			parameterValue: dependencyPaths[0]?.parameterValue
-		};
-	
-		this.configMap.set(uri, newConfig);
-	
-		// Update reverse references
-		for (const includedUri of includePaths) {
-			const includedConfig = this.configMap.get(includedUri);
-			if (includedConfig && !includedConfig.referencedBy.includes(uri)) {
+			if (!includedConfig.referencedBy.includes(uri)) {
 				includedConfig.referencedBy.push(uri);
 			}
-		}
-	
-		for (const depPath of dependencyPaths) {
-			const depConfig = this.configMap.get(depPath.uri);
-			if (depConfig && !depConfig.referencedBy.includes(uri)) {
+			return resolvedPath;
+		}));
+
+		// Process dependencies
+		const dependencyEntries = doc.findDependencyBlocks(ast);
+		const dependencyPaths = await Promise.all(dependencyEntries.map(async dep => {
+			const resolvedPath = await this.resolveDependencyPath(dep.path, uri);
+			let depConfig = this.configMap.get(resolvedPath);
+			if (!depConfig) {
+				depConfig = createDependencyConfig(
+					resolvedPath,
+					'', // Content loaded later
+					uri,
+					resolvedPath,
+					dep.block,
+					dep.parameter
+				);
+				this.configMap.set(resolvedPath, depConfig);
+			}
+			if (!depConfig.referencedBy.includes(uri)) {
 				depConfig.referencedBy.push(uri);
 			}
+			return resolvedPath;
+		}));
+
+		// Update current config
+		const existingConfig = this.configMap.get(uri);
+		const config: TerragruntConfig = existingConfig || {
+			uri,
+			content: doc.getContent(),
+			includes: [],
+			dependencies: [],
+			referencedBy: [],
+			sourcePath: URI.parse(uri).fsPath,
+			targetPath: URI.parse(uri).fsPath,
+			block: undefined,
+			dependencyType: 'include', // Default, adjusted if necessary
+			parameterValue: undefined
+		};
+
+		config.includes = includePaths.filter(Boolean);
+		config.dependencies = dependencyPaths.filter(Boolean);
+		this.configMap.set(uri, config);
+
+		// Recursively process includes and dependencies
+		for (const refUri of [...includePaths, ...dependencyPaths]) {
+			if (!processedPaths.has(refUri)) {
+				const refDoc = await this.getDocument(refUri);
+				if (refDoc) {
+					await this.updateConfigMap(refDoc, processedPaths);
+				}
+			}
+		}
+	}
+
+	private async fileExists(filePath: string): Promise<boolean> {
+		try {
+			await fs.access(filePath);
+			return true;
+		} catch {
+			return false;
 		}
 	}
 
@@ -155,54 +146,97 @@ export class Workspace {
 		}
 
 		// Resolve the final path
-		const finalPath = path.isAbsolute(configPath) ?
+		const resolvedPath = path.isAbsolute(configPath) ?
 			configPath :
 			path.resolve(sourceDir, configPath);
 
-		return URI.file(path.join(finalPath, 'terragrunt.hcl')).toString();
+		// Don't append terragrunt.hcl if already an .hcl file
+		if (path.extname(resolvedPath) === '.hcl') {
+			return URI.file(resolvedPath).toString();
+		}
+
+		return URI.file(path.join(resolvedPath, 'terragrunt.hcl')).toString();
+	}
+	private async resolveFindInParentFolders(sourceDir: string): Promise<string> {
+		const rootDir = this.workspaceRoot ?
+			URI.parse(this.workspaceRoot).fsPath :
+			path.parse(sourceDir).root;
+
+		let currentDir = path.dirname(sourceDir);
+
+		// Walk up the directory tree until we find a terragrunt.hcl file
+		while (currentDir !== rootDir && currentDir !== path.parse(currentDir).root) {
+			const configPath = path.join(currentDir, 'terragrunt.hcl');
+			try {
+				const stats = await fs.stat(configPath);
+				if (stats.isFile()) {
+					return URI.file(configPath).toString();
+				}
+			} catch {
+				// Continue searching up
+			}
+			currentDir = path.dirname(currentDir);
+		}
+
+		// If we reach the root without finding a file, return root terragrunt.hcl
+		return URI.file(path.join(rootDir, 'terragrunt.hcl')).toString();
 	}
 
-	public async resolveIncludePath(pathToken: Token, sourceUri: string): Promise<string> {
+	private async resolveIncludePath(pathToken: Token, sourceUri: string): Promise<string> {
 		const sourcePath = URI.parse(sourceUri).fsPath;
 		const sourceDir = path.dirname(sourcePath);
 
-		let configPath: string;
+		if (pathToken.type === 'function_call' && pathToken.value === 'find_in_parent_folders') {
+			const registry = this.schema.getFunctionRegistry();
+			const context: FunctionContext = {
+				workingDirectory: sourceDir,
+				environmentVariables: process.env as Record<string, string>,
+				document: {
+					uri: sourceUri,
+					content: ''
+				},
+				fs: {
+					access: async (path: string) => fs.access(path)
+				}
+			};
 
-		switch (pathToken.type) {
-			case 'function_call': {
-				configPath = await this.evaluatePathFunction(pathToken, sourceDir);
-				break;
+			try {
+				const result = await registry.evaluateFunction('find_in_parent_folders', [], context);
+				if (result?.type === 'string' && typeof result.value === 'string') {
+					// The result should already be a full path, just convert to URI
+					return URI.file(result.value).toString();
+				}
+			} catch (error) {
+				console.warn(`Error evaluating function find_in_parent_folders:`, error);
 			}
-			case 'interpolated_string': {
-				const parts = await Promise.all(
-					pathToken.children.map(async child => {
-						if (child.type === 'legacy_interpolation') {
-							const innerToken = child.children[0];
-							return await this.evaluatePathExpression(innerToken, sourceDir);
-						}
-						return child.value || '';
-					})
-				);
-				configPath = parts.join('');
-				break;
-			}
-			case 'string_lit': {
-				configPath = pathToken.value as string;
-				break;
-			}
-			default: {
-				configPath = pathToken.value as string || '';
-			}
+
+			// Still fall through to default behavior if function fails
 		}
 
-		// Resolve the final path
-		const finalPath = path.isAbsolute(configPath) ?
-			configPath :
-			path.resolve(sourceDir, configPath);
+		// For string literals and interpolated strings
+		if (pathToken.type === 'string_lit' || pathToken.type === 'interpolated_string') {
+			const configPath = pathToken.value as string;
+			// For absolute paths use as-is, otherwise resolve relative to source
+			const resolvedPath = path.isAbsolute(configPath) ?
+				configPath :
+				path.resolve(sourceDir, configPath);
 
-		return URI.file(path.join(finalPath, 'terragrunt.hcl')).toString();
+			// Don't append terragrunt.hcl if already an .hcl file
+			if (path.extname(resolvedPath) === '.hcl') {
+				return URI.file(resolvedPath).toString();
+			}
+
+			// Check if terragrunt.hcl is already part of the path
+			if (resolvedPath.endsWith('terragrunt.hcl')) {
+				return URI.file(resolvedPath).toString();
+			}
+
+			return URI.file(path.join(resolvedPath, 'terragrunt.hcl')).toString();
+		}
+
+		// Default case
+		return URI.file(path.join(sourceDir, 'terragrunt.hcl')).toString();
 	}
-
 	private async evaluatePathExpression(token: Token, sourceDir: string): Promise<string> {
 		switch (token.type) {
 			case 'function_call': {
@@ -213,55 +247,54 @@ export class Workspace {
 			}
 		}
 	}
-
 	private async evaluatePathFunction(token: Token, sourceDir: string): Promise<string> {
-		const funcName = token.children.find(c => c.type === 'function_identifier')?.value;
-	
-		switch (funcName) {
-			case 'find_in_parent_folders': {
-				let currentDir = sourceDir;
-				const rootDir = this.workspaceRoot ? URI.parse(this.workspaceRoot).fsPath : path.parse(currentDir).root;
-				
-				while (currentDir !== rootDir && currentDir !== path.parse(currentDir).root) {
-					const configPath = path.join(currentDir, 'terragrunt.hcl');
-					try {
-						const stats = await fs.stat(configPath);
-						if (stats.isFile() && // Don't resolve to the same file we're currently processing
-							configPath !== sourceDir) {
-								return configPath;
-							}
-					} catch {
-						// Continue searching
-					}
-					currentDir = path.dirname(currentDir);
-				}
-				
-				// If we've reached the root without finding a file, return the root terragrunt.hcl
-				return path.join(rootDir, 'terragrunt.hcl');
-			}
-			case 'get_parent_terragrunt_dir': {
-				return path.dirname(sourceDir);
-			}
-			case 'get_terragrunt_dir': {
-				return sourceDir;
-			}
-			case 'path_relative_to_include': {
-				const relativePath = path.relative(sourceDir, path.dirname(URI.parse(this.workspaceRoot || '').fsPath));
-				return relativePath;
-			}
-			default: {
-				console.log(`Unknown function: ${funcName}`);
-				return sourceDir;
-			}
-		}
-	}
+		const functionIdentifier = token.children.find(c => c.type === 'function_identifier');
+		const funcName = functionIdentifier?.value as string;
 
+		if (!funcName) {
+			console.log('Function identifier not found in token:', token);
+			return sourceDir;
+		}
+
+		// Create function context
+		const context: FunctionContext = {
+			workingDirectory: sourceDir,
+			environmentVariables: Object.fromEntries(
+				Object.entries(process.env).filter(([_, v]) => v !== undefined)
+			) as Record<string, string>,
+			document: {
+				uri: URI.file(sourceDir).toString(),
+				content: '' // Not needed for path functions
+			}
+		};
+
+		// Get function arguments
+		const args = token.children
+			.filter(c => c.type !== 'function_identifier')
+			.map(arg => ({
+				type: 'string' as const,
+				value: arg.value?.toString() || ''
+			}));
+
+		// Use function registry to evaluate
+		try {
+			const result = await this.schema.getFunctionRegistry().evaluateFunction(funcName, args, context);
+			if (result && typeof result.value === 'string') {
+				return result.value;
+			}
+		} catch (error) {
+			console.warn(`Error evaluating function ${funcName}:`, error);
+		}
+
+		// Fallback to default directory
+		return sourceDir;
+	}
 	private async buildDependencyTree(): Promise<void> {
 		if (!this.workspaceRoot) return;
 
 		// Find all terragrunt.hcl files
 		const configs = await this.findTerragruntConfigs(this.workspaceRoot);
-		console.log('Found terragrunt configs:', configs);
+		// console.log('Found terragrunt configs:', configs);
 
 		// First pass: Load and parse all configs
 		for (const uri of configs) {
@@ -283,109 +316,53 @@ export class Workspace {
 		// Print dependency tree for verification
 		this.printDependencyTree();
 	}
-	printDependencyTree(): void {
+	private printDependencyTree(): void {
 		console.log('\nTerragrunt Dependency Tree:');
 		console.log('=========================');
-		
-		// Debug info about the configMap
+	
 		console.log('Total configurations:', this.configMap.size);
 		console.log('Configuration keys:', Array.from(this.configMap.keys()));
 	
 		const printed = new Set<string>();
 	
-		const printNode = (uri: string, depth = 0) => {
-			const config = this.configMap.get(uri);
-			if (!config) {
-				console.log(`${' '.repeat(depth * 2)}[Missing config for ${uri}]`);
-				return;
+		const rootConfig = Array.from(this.configMap.entries()).find(([uri]) => {
+			const parsedUri = URI.parse(uri);
+			const isRoot =
+				parsedUri.fsPath.endsWith('/terragrunt.hcl') &&
+				parsedUri.fsPath.split('/').filter(p => p !== '').length ===
+				(this.workspaceRoot ? URI.parse(this.workspaceRoot).fsPath.split('/').filter(p => p !== '').length + 1 : 1);
+	
+			if (isRoot) {
+				console.log('Found root config:', parsedUri.fsPath);
 			}
-			if (printed.has(uri)) {
-				console.log(`${' '.repeat(depth * 2)}[Circular reference to ${this.formatPath(uri)}]`);
-				return;
-			}
-	
-			const indent = ' '.repeat(depth * 2);
-			console.log(`${indent}├── ${this.formatPath(uri)}`);
-			
-			// Print detailed config info
-			console.log(`${indent}│   Type: ${config.dependencyType}`);
-			if (config.parameterValue) {
-				console.log(`${indent}│   Parameter: ${config.parameterValue}`);
-			}
-	
-			printed.add(uri);
-	
-			// Print includes
-			if (config.includes && config.includes.length > 0) {
-				console.log(`${indent}├── Includes (${config.includes.length}):`);
-				config.includes.forEach(inc => {
-					console.log(`${indent}│   └── ${this.formatPath(inc)}`);
-				});
-			}
-	
-			// Print dependencies
-			if (config.dependencies && config.dependencies.length > 0) {
-				console.log(`${indent}├── Dependencies (${config.dependencies.length}):`);
-				config.dependencies.forEach(dep => {
-					const depConfig = this.configMap.get(dep);
-					const depName = depConfig?.parameterValue ? ` (${depConfig.parameterValue})` : '';
-					console.log(`${indent}│   └── ${this.formatPath(dep)}${depName}`);
-				});
-			}
-	
-			// Print referenced by
-			if (config.referencedBy && config.referencedBy.length > 0) {
-				console.log(`${indent}└── Referenced By (${config.referencedBy.length}):`);
-				config.referencedBy.forEach(ref => {
-					console.log(`${indent}    └── ${this.formatPath(ref)}`);
-				});
-			}
-	
-			// Print full content for debugging
-			console.log(`${indent}│   Content preview (first 100 chars):`);
-			console.log(`${indent}│   ${config.content.substring(0, 100).replaceAll('\n', ' ')}...`);
-	
-			// Recursively print included configs
-			config.includes.forEach(inc => {
-				if (!printed.has(inc)) {
-					console.log(`${indent}│`);
-					printNode(inc, depth + 1);
-				}
-			});
-	
-			// Recursively print dependencies
-			config.dependencies.forEach(dep => {
-				if (!printed.has(dep)) {
-					console.log(`${indent}│`);
-					printNode(dep, depth + 1);
-				}
-			});
-		};
-	
-		// Find and sort root configs
-		const rootConfigs = Array.from(this.configMap.entries())
-			.filter(([_, config]) => !config.referencedBy || config.referencedBy.length === 0)
-			.map(([uri]) => uri)
-			.sort();
-	
-		console.log('Root configurations:', rootConfigs.length);
-		rootConfigs.forEach(rootUri => {
-			console.log('\nRoot:', this.formatPath(rootUri));
-			printNode(rootUri, 0);
+			return isRoot;
 		});
 	
-		// Print orphaned configs (those not reachable from roots)
-		const allConfigs = new Set(this.configMap.keys());
-		printed.forEach(uri => allConfigs.delete(uri));
-		
-		if (allConfigs.size > 0) {
-			console.log('\nOrphaned configurations:', allConfigs.size);
-			allConfigs.forEach(uri => {
-				console.log(`Orphaned: ${this.formatPath(uri)}`);
-				printNode(uri, 0);
-			});
+		if (!rootConfig) {
+			console.log('No root configuration found');
+			return;
 		}
+
+		const printConfigTree = (uri: string, depth: number) => {
+			const config = this.configMap.get(uri);
+			if (!config) return;
+
+			const indent = ' '.repeat(depth * 2);
+			console.log(`${indent}├─${config.dependencyType.charAt(0).toUpperCase()}─> ${this.formatPath(uri)}`);
+
+			config.referencedBy.forEach(refUri => {
+				printConfigTree(refUri, depth + 1);
+			});
+		};
+
+		if (rootConfig) {
+			const [uri, config] = rootConfig;
+			printConfigTree(uri, 0);
+		}
+	
+		
 	}
+	
 	private formatPath(uri: string): string {
 		if (!this.workspaceRoot) return uri;
 		const fullPath = URI.parse(uri).fsPath;
@@ -466,56 +443,6 @@ export class Workspace {
 	private decodeUri(uri: string): string {
 		const decoded = URI.parse(uri);
 		return decoded.fsPath;
-	}
-	private findIncludeBlocks(ast: any): { path: Token, block: Token }[] {
-		const includes: { path: Token, block: Token }[] = [];
-
-		const processBlock = (node: any) => {
-			if (node.type === 'block' && node.value === 'include') {
-				const pathAttr = node.children?.find((child: any) =>
-					child.type === 'attribute' &&
-					child.children?.some((c: any) => c.type === 'identifier' && c.value === 'path')
-				);
-
-				if (pathAttr) {
-					const pathToken = pathAttr.children?.find((c: any) =>
-						c.type === 'interpolated_string' ||
-						c.type === 'string_lit' ||
-						c.type === 'function_call'
-					);
-					if (pathToken) {
-						includes.push({ path: pathToken, block: node });
-					}
-				}
-			}
-
-			if (node.children) {
-				node.children.forEach(processBlock);
-			}
-		};
-
-		processBlock(ast);
-		return includes;
-	}
-
-	private findConfigPathInBlock(node: any): Token | null {
-		if (!node.children) return null;
-
-		for (const child of node.children) {
-			if (child.type === 'attribute' && child.value === 'config_path') {
-				const stringLit = child.children?.find((c: any) => c.type === 'string_lit');
-				if (stringLit) {
-					return new Token(
-						stringLit.id,
-						stringLit.type,
-						stringLit.value,
-						stringLit.location
-					);
-				}
-			}
-		}
-
-		return null;
 	}
 
 	private async loadDocument(uri: string): Promise<ParsedDocument | undefined> {
