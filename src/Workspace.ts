@@ -6,7 +6,7 @@ import { DiagnosticSeverity } from 'vscode-languageserver-types';
 import { URI } from 'vscode-uri';
 
 import type { FunctionContext, RuntimeValue, TerragruntConfig, Token, ValueType } from './model';
-import { createDependencyConfig, createIncludeConfig } from './model';
+import { createDependencyConfig, createIncludeConfig, TreeNode } from './model';
 import { ParsedDocument } from './ParsedDocument';
 import { Schema } from './Schema';
 
@@ -15,6 +15,7 @@ export class Workspace {
 	private configMap: Map<string, TerragruntConfig>;
 	private workspaceRoot: string | null;
 	private schema: Schema = Schema.getInstance();
+	private configTreeRoot: TreeNode<TerragruntConfig> | undefined;
 
 	public constructor() {
 		this.documents = new Map();
@@ -313,56 +314,43 @@ export class Workspace {
 			}
 		}
 
-		// Print dependency tree for verification
-		this.printDependencyTree();
-	}
-	private printDependencyTree(): void {
-		console.log('\nTerragrunt Dependency Tree:');
-		console.log('=========================');
-	
-		console.log('Total configurations:', this.configMap.size);
-		console.log('Configuration keys:', Array.from(this.configMap.keys()));
-	
-		const printed = new Set<string>();
-	
 		const rootConfig = Array.from(this.configMap.entries()).find(([uri]) => {
 			const parsedUri = URI.parse(uri);
 			const isRoot =
 				parsedUri.fsPath.endsWith('/terragrunt.hcl') &&
 				parsedUri.fsPath.split('/').filter(p => p !== '').length ===
 				(this.workspaceRoot ? URI.parse(this.workspaceRoot).fsPath.split('/').filter(p => p !== '').length + 1 : 1);
-	
+
 			if (isRoot) {
 				console.log('Found root config:', parsedUri.fsPath);
 			}
 			return isRoot;
 		});
-	
+
 		if (!rootConfig) {
 			console.log('No root configuration found');
 			return;
 		}
 
-		const printConfigTree = (uri: string, depth: number) => {
-			const config = this.configMap.get(uri);
-			if (!config) return;
+		const traverseConfigTree = (treeNode: TreeNode<TerragruntConfig>) => {
+			if (!this.configMap.get(treeNode.data.uri))
+				return new Error(`Config not found for uri ${treeNode.data.uri}`);
 
-			const indent = ' '.repeat(depth * 2);
-			console.log(`${indent}├─${config.dependencyType.charAt(0).toUpperCase()}─> ${this.formatPath(uri)}`);
-
-			config.referencedBy.forEach(refUri => {
-				printConfigTree(refUri, depth + 1);
+			treeNode.data.referencedBy.forEach(refUri => {
+				const childConfig = this.configMap.get(refUri);
+				if (!childConfig) return new Error(`Config not found for uri ${refUri}`);
+				const childNode=treeNode.addChild(childConfig, this.formatPath(childConfig.uri), childConfig.dependencyType);
+				traverseConfigTree(childNode);
 			});
 		};
 
 		if (rootConfig) {
 			const [uri, config] = rootConfig;
-			printConfigTree(uri, 0);
+			this.configTreeRoot = new TreeNode<TerragruntConfig>(config, this.formatPath(config.uri), 'root');
+			traverseConfigTree(this.configTreeRoot);
 		}
-	
-		
 	}
-	
+
 	private formatPath(uri: string): string {
 		if (!this.workspaceRoot) return uri;
 		const fullPath = URI.parse(uri).fsPath;
@@ -597,5 +585,9 @@ export class Workspace {
 		return config.referencedBy
 			.map(refUri => this.configMap.get(refUri))
 			.filter((c): c is TerragruntConfig => c !== undefined);
+	}
+
+	getConfigTreeRoot(): TreeNode<TerragruntConfig> | undefined {
+		return this.configTreeRoot;
 	}
 }
