@@ -4,7 +4,7 @@ import type { MarkupContent } from 'vscode-languageserver-types';
 import { MarkupKind } from 'vscode-languageserver-types';
 import { URI } from 'vscode-uri';
 
-import type { AttributeDefinition, BlockDefinition, DependencyInfo, FunctionDefinition, RuntimeValue, TokenType, ValueType } from './model';
+import type { AttributeDefinition, BlockDefinition, FunctionDefinition, RuntimeValue, TokenType, ValueType } from './model';
 import { Token } from './model';
 import type { ParsedDocument } from './ParsedDocument';
 import type { Schema } from './Schema';
@@ -641,17 +641,6 @@ export class HoverProvider {
 		return null;
 	}
 
-	private getDependencyName(dep: DependencyInfo): string {
-		// For dependency blocks, name is in the parameter
-		if (dep.block.value === 'dependency') {
-			const param = dep.block.children.find(c => c.type === 'parameter');
-			return param?.value?.toString() || '';
-		}
-		// For dependencies block, use the path as name
-		return path.basename(dep.targetPath);
-	}
-
-
 	private async getLocalHoverInfo(token: Token, doc: ParsedDocument): Promise<string[]> {
 		const parts = this.buildReferencePath(token);
 		if (parts.length < 2 || parts[0] !== 'local') return [];
@@ -663,29 +652,6 @@ export class HoverProvider {
 
 		const contents: string[] = [];
 		contents.push(`## Local Variable: ${localName}`, '', '```hcl', this.formatRuntimeValue(value), '```');
-
-		return contents;
-	}
-
-	private async getDependencyHoverInfo(token: Token, doc: ParsedDocument): Promise<string[]> {
-		const parts = this.buildReferencePath(token);
-		if (parts.length < 3 || parts[1] !== 'outputs') return [];
-
-		const depName = parts[0];
-		const dependencies = await doc.getWorkspace().getDependencies(doc.getUri());
-		const dep = dependencies.find(d => d.block.value === depName);
-		if (!dep) return [];
-
-		const depDoc = await doc.getWorkspace().getDocument(dep.targetPath);
-		if (!depDoc) return [];
-
-		const outputs = await this.getOutputs(depDoc);
-		const outputName = parts[2];
-		const value = outputs.get(outputName);
-		if (!value) return [];
-
-		const contents: string[] = [];
-		contents.push(`## Dependency Output: ${depName}.outputs.${outputName}`, '', `From: \`${dep.targetPath}\``, '', '```hcl', this.formatRuntimeValue(value), '```');
 
 		return contents;
 	}

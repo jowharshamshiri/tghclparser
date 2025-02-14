@@ -35,7 +35,134 @@ export class ParsedDocument {
 		this.parseContent();
 		this.buildProfile();
 	}
-
+	public findIncludeBlocks(ast: any): { path: Token, block: Token }[] {
+		const includes: { path: Token, block: Token }[] = [];
+	
+		const processNode = (node: any) => {
+			// Check for include block with "root" parameter
+			if (node.type === 'block' && node.value === 'include') {
+				const paramNode = node.children?.find((c: any) => 
+					c.type === 'parameter' && c.children?.some((ch: any) => 
+						ch.type === 'string_lit' && ch.value === 'root'
+					)
+				);
+	
+				if (paramNode) {
+					const pathAttr = node.children?.find((child: any) =>
+						child.type === 'attribute' &&
+						child.children?.some((c: any) => 
+							c.type === 'attribute_identifier' && c.value === 'path'
+						)
+					);
+	
+					if (pathAttr) {
+						const pathValueNode = pathAttr.children?.find((c: any) =>
+							c.type === 'function_call' || 
+							c.type === 'string_lit' ||
+							c.type === 'interpolated_string'
+						);
+	
+						if (pathValueNode) {
+							const pathToken = new Token(
+								pathValueNode.id,
+								pathValueNode.type as TokenType,
+								pathValueNode.value,
+								pathValueNode.location
+							);
+	
+							const blockToken = new Token(
+								node.id,
+								node.type as TokenType,
+								node.value,
+								node.location
+							);
+	
+							// Add parameter to the block token
+							blockToken.children.push(new Token(
+								paramNode.id,
+								paramNode.type as TokenType,
+								paramNode.value,
+								paramNode.location
+							));
+	
+							includes.push({ path: pathToken, block: blockToken });
+						}
+					}
+				}
+			}
+	
+			// Recursively process children
+			if (node.children) {
+				node.children.forEach(processNode);
+			}
+		};
+	
+		processNode(ast);
+		return includes;
+	}
+	
+	public findDependencyBlocks(ast: any): { path: Token, block: Token }[] {
+		const dependencies: { path: Token, block: Token }[] = [];
+	
+		const processNode = (node: any) => {
+			if (node.type === 'block' && node.value === 'dependency') {
+				// Get the dependency name (parameter)
+				const depNameParam = node.children?.find((c: any) => c.type === 'parameter');
+				
+				// Get config_path attribute
+				const configPathAttr = node.children?.find((c: any) =>
+					c.type === 'attribute' &&
+					c.children?.some((ch: any) => 
+						ch.type === 'attribute_identifier' && ch.value === 'config_path'
+					)
+				);
+	
+				if (configPathAttr) {
+					const pathValueNode = configPathAttr.children?.find((c: any) =>
+						c.type === 'string_lit' ||
+						c.type === 'interpolated_string' ||
+						c.type === 'function_call'
+					);
+	
+					if (pathValueNode) {
+						const pathToken = new Token(
+							pathValueNode.id,
+							pathValueNode.type as TokenType,
+							pathValueNode.value,
+							pathValueNode.location
+						);
+	
+						const blockToken = new Token(
+							node.id,
+							node.type as TokenType,
+							node.value,
+							node.location
+						);
+	
+						if (depNameParam) {
+							blockToken.children.push(new Token(
+								depNameParam.id,
+								depNameParam.type as TokenType,
+								depNameParam.value,
+								depNameParam.location
+							));
+						}
+	
+						dependencies.push({ path: pathToken, block: blockToken });
+					}
+				}
+			}
+	
+			// Recursively process children
+			if (node.children) {
+				node.children.forEach(processNode);
+			}
+		};
+	
+		processNode(ast);
+		return dependencies;
+	}
+	
 	private buildProfile() {
 		if (!this.ast) return;
 		this.processLocalsBlock(this.ast);
@@ -744,7 +871,7 @@ export class ParsedDocument {
 		try {
 			// console.log('Parsing:', this.uri);
 			this.ast = tg_parse(this.content, { grammarSource: this.uri });
-			console.log('AST:', this.removeCircularReferences(this.ast));
+			// console.log('AST:', this.removeCircularReferences(this.ast));
 			this.tokens = [this.parseNode(this.ast)];
 
 			this.diagnostics = this.diagnosticsProvider.getDiagnostics(this);
