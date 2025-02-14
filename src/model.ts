@@ -1,4 +1,4 @@
-import type { Location,Position  } from 'vscode-languageserver';
+import type { Location, Position } from 'vscode-languageserver';
 
 import type { LocationRange } from './terragrunt-parser';
 
@@ -9,137 +9,137 @@ export class AnError extends Error {
 	}
 }
 export type TokenType =
-    // Root elements
-    | 'root'
-    | 'assignment'
-    
-    // Block types
-    | 'block'
-    | 'dynamic_block'
-    | 'locals_block'
-    | 'moved_block'
-    | 'import_block'
-    | 'check_block'
-    | 'validation'
-    | 'meta_arguments'
-    
-    // Identifiers
-    | 'identifier'
-    | 'block_identifier'
-    | 'root_assignment_identifier'
-    | 'attribute_identifier'
-    | 'reference_identifier'
-    | 'function_identifier'
-    
-    // Structural elements
-    | 'parameter'
-    | 'attribute'
-    | 'access_chain'
-    | 'namespace'
-    
-    // Literals
-    | 'string_lit'
-    | 'number_lit'
-    | 'boolean_lit'
-    | 'array_lit'
-    | 'object'
-    
-    // References and interpolation
-    | 'reference'
-    | 'interpolation'
-    | 'legacy_interpolation'
-    | 'interpolated_string'
-    | 'string_content'
-    
-    // Reference types
-    | 'dependency_reference'
-    | 'local_reference'
-    | 'module_reference'
-    | 'terraform_reference'
-    | 'var_reference'
-    | 'data_reference'
-    | 'path_reference'
-    
-    // Expressions
-    | 'ternary_expression'
-    | 'comparison_expression'
-    | 'logical_expression'
-    | 'arithmetic_expression'
-    | 'null_coalescing'
-    | 'unary_expression'
-    | 'postfix_expression'
-    | 'pipe_expression'
-    | 'list_comprehension'
-    | 'map_comprehension'
-    | 'function_call'
-    
-    // Constructors
-    | 'type_constructor'
-    | 'collection_constructor'
-    
-    // Directives
-    | 'if_directive'
-    | 'for_directive'
-    | 'else_directive'
-    | 'endif_directive'
-    
-    // Comments and whitespace
-    | 'block_comment'
-    | 'inline_comment'
-    | 'directive_comment'
-    | 'documentation_comment'
-    | 'whitespace'
-    
-    // Meta arguments
-    | 'meta_count'
-    | 'meta_for_each'
-    | 'meta_depends_on'
-    | 'meta_provider'
-    | 'meta_lifecycle'
-    
-    // Special tokens
-    | 'inheritance'
-    | 'splat_expression'
-    | 'index_expression'
-    | 'member_access'
-    
-    // Language server specific
-    | 'unknown';
-	export type ValueType =
-    | PrimitiveValueType
-    | ComplexValueType
-    | ExpressionValueType;
+	// Root elements
+	| 'root'
+	| 'assignment'
+
+	// Block types
+	| 'block'
+	| 'dynamic_block'
+	| 'locals_block'
+	| 'moved_block'
+	| 'import_block'
+	| 'check_block'
+	| 'validation'
+	| 'meta_arguments'
+
+	// Identifiers
+	| 'identifier'
+	| 'block_identifier'
+	| 'root_assignment_identifier'
+	| 'attribute_identifier'
+	| 'reference_identifier'
+	| 'function_identifier'
+
+	// Structural elements
+	| 'parameter'
+	| 'attribute'
+	| 'access_chain'
+	| 'namespace'
+
+	// Literals
+	| 'string_lit'
+	| 'number_lit'
+	| 'boolean_lit'
+	| 'array_lit'
+	| 'object'
+
+	// References and interpolation
+	| 'reference'
+	| 'interpolation'
+	| 'legacy_interpolation'
+	| 'interpolated_string'
+	| 'string_content'
+
+	// Reference types
+	| 'dependency_reference'
+	| 'local_reference'
+	| 'module_reference'
+	| 'terraform_reference'
+	| 'var_reference'
+	| 'data_reference'
+	| 'path_reference'
+
+	// Expressions
+	| 'ternary_expression'
+	| 'comparison_expression'
+	| 'logical_expression'
+	| 'arithmetic_expression'
+	| 'null_coalescing'
+	| 'unary_expression'
+	| 'postfix_expression'
+	| 'pipe_expression'
+	| 'list_comprehension'
+	| 'map_comprehension'
+	| 'function_call'
+
+	// Constructors
+	| 'type_constructor'
+	| 'collection_constructor'
+
+	// Directives
+	| 'if_directive'
+	| 'for_directive'
+	| 'else_directive'
+	| 'endif_directive'
+
+	// Comments and whitespace
+	| 'block_comment'
+	| 'inline_comment'
+	| 'directive_comment'
+	| 'documentation_comment'
+	| 'whitespace'
+
+	// Meta arguments
+	| 'meta_count'
+	| 'meta_for_each'
+	| 'meta_depends_on'
+	| 'meta_provider'
+	| 'meta_lifecycle'
+
+	// Special tokens
+	| 'inheritance'
+	| 'splat_expression'
+	| 'index_expression'
+	| 'member_access'
+
+	// Language server specific
+	| 'unknown';
+export type ValueType =
+	| PrimitiveValueType
+	| ComplexValueType
+	| ExpressionValueType;
 
 export type PrimitiveValueType =
-    | 'string'
-    | 'number'
-    | 'boolean'
-    | 'null';
+	| 'string'
+	| 'number'
+	| 'boolean'
+	| 'null';
 
 export type ComplexValueType =
-    | 'array'
-    | 'object'
-    | 'function'
-    | 'block'
-    | 'type_constructor'
-    | 'collection_constructor'
+	| 'array'
+	| 'object'
+	| 'function'
+	| 'block'
+	| 'type_constructor'
+	| 'collection_constructor'
 	| 'directive'
 	| 'meta_argument';
 
 export type ExpressionValueType =
-    | 'ternary'
-    | 'comparison'
-    | 'logical'
-    | 'arithmetic'
-    | 'null_coalescing'
-    | 'unary'
-    | 'postfix'
-    | 'pipe'
-    | 'list_comprehension'
-    | 'map_comprehension'
-    | 'interpolation'
-    | 'legacy_interpolation'
-    | 'reference';
+	| 'ternary'
+	| 'comparison'
+	| 'logical'
+	| 'arithmetic'
+	| 'null_coalescing'
+	| 'unary'
+	| 'postfix'
+	| 'pipe'
+	| 'list_comprehension'
+	| 'map_comprehension'
+	| 'interpolation'
+	| 'legacy_interpolation'
+	| 'reference';
 
 export class Token {
 	readonly id: number;
@@ -315,9 +315,9 @@ export interface FunctionDefinition {
 
 
 export interface ResolvedReference {
-    value: RuntimeValue<ValueType>;
-    source: string;
-    found: boolean;
+	value: RuntimeValue<ValueType>;
+	source: string;
+	found: boolean;
 }
 
 export interface RuntimeValue<T extends ValueType> {
@@ -342,43 +342,108 @@ export type RuntimeValueType<T extends ValueType> =
 export type EvaluatedValue = RuntimeValue<ValueType>;
 
 
-export interface DependencyInfo {
-	sourcePath: string;
-	targetPath: string;
-	block: Token;
-}
+// export interface DependencyInfo {
+// 	sourcePath: string;
+// 	targetPath: string;
+// 	block: Token;
+// }
 
 export interface DirectiveInfo {
-    type: 'if' | 'for' | 'else' | 'endif';
-    location: Location;
-    content?: string;
+	type: 'if' | 'for' | 'else' | 'endif';
+	location: Location;
+	content?: string;
 }
 
 export interface MetaArgumentInfo {
-    type: 'count' | 'for_each' | 'depends_on' | 'provider' | 'lifecycle';
-    value: RuntimeValue<ValueType>;
-    location: Location;
+	type: 'count' | 'for_each' | 'depends_on' | 'provider' | 'lifecycle';
+	value: RuntimeValue<ValueType>;
+	location: Location;
 }
 
 export type FunctionImplementation = (args: RuntimeValue<ValueType>[], context: FunctionContext) => Promise<RuntimeValue<ValueType> | undefined>;
 
 export interface FunctionContext {
-    workingDirectory: string;
-    environmentVariables: Record<string, string>;
-    document: {
-        uri: string;
-        content: string;
-    };
-    terraformCommand?: string;  
-    terraformCliArgs?: string[];
-    fs?: {
-        access: (path: string) => Promise<void>;
-    };
-    includedFrom?: string;  // URI of the config file that included this one
+	workingDirectory: string;
+	environmentVariables: Record<string, string>;
+	document: {
+		uri: string;
+		content: string;
+	};
+	terraformCommand?: string;
+	terraformCliArgs?: string[];
+	fs?: {
+		access: (path: string) => Promise<void>;
+	};
+	includedFrom?: string;  // URI of the config file that included this one
 }
 
 export interface FunctionGroup {
 	namespace: string;
 	functions: Record<string, FunctionImplementation>;
-  }
-  
+}
+
+export interface TerragruntConfig {
+	uri: string;
+	content: string;
+	includes: string[];  // URIs of included configs
+	dependencies: string[];  // URIs of explicit dependencies
+	referencedBy: string[];  // URIs of configs that include/depend on this one
+}
+export interface TerragruntConfig {
+	// Basic config info
+	uri: string;                   // URI of this config file
+	content: string;              // Raw content of the file
+
+	// Relationship tracking
+	includes: string[];           // URIs of included configs
+	dependencies: string[];       // URIs of explicit dependencies
+	referencedBy: string[];      // URIs of configs that include/depend on this one
+
+	// Dependency-specific info (from old DependencyInfo)
+	sourcePath: string;          // Path of the config file containing the dependency reference
+	targetPath: string;          // Resolved path of the dependency target
+	block?: Token;              // Token containing the dependency or include block
+
+	// Additional metadata
+	dependencyType: 'include' | 'dependency';  // Whether this is an include or dependency relationship
+	parameterValue?: string;    // For dependencies, the name parameter value
+}
+
+// Helper functions for creating TerragruntConfig objects
+export const createDependencyConfig = (
+	uri: string,
+	content: string,
+	sourcePath: string,
+	targetPath: string,
+	block: Token,
+	parameterValue?: string
+): TerragruntConfig => ({
+	uri,
+	content,
+	includes: [],
+	dependencies: [],
+	referencedBy: [],
+	sourcePath,
+	targetPath,
+	block,
+	dependencyType: 'dependency',
+	parameterValue
+});
+
+export const createIncludeConfig = (
+	uri: string,
+	content: string,
+	sourcePath: string,
+	targetPath: string,
+	block: Token
+): TerragruntConfig => ({
+	uri,
+	content,
+	includes: [],
+	dependencies: [],
+	referencedBy: [],
+	sourcePath,
+	targetPath,
+	block,
+	dependencyType: 'include'
+});

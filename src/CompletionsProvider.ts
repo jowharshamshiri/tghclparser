@@ -90,18 +90,21 @@ export class CompletionsProvider {
 
 		return completions;
 	}
-
 	private async getDependencyCompletions(parsedDoc: ParsedDocument, currentWord: string): Promise<CompletionItem[]> {
 		const completions: CompletionItem[] = [];
 		const dependencies = await parsedDoc.getWorkspace().getDependencies(parsedDoc.getUri());
 
 		for (const dep of dependencies) {
-			const depDoc = await parsedDoc.getWorkspace().getDocument(dep.sourcePath);
-			if (!depDoc) continue;
+			// Skip includes, we only want explicit dependencies
+			if (dep.dependencyType !== 'dependency') continue;
 
-			// Extract dependency name from the block
-			const depName = this.getDependencyName(dep.block);
+			// Extract dependency name from parameterValue
+			const depName = dep.parameterValue;
 			if (!depName) continue;
+
+			// Get the target document
+			const depDoc = await parsedDoc.getWorkspace().getDocument(dep.uri);
+			if (!depDoc) continue;
 
 			// Find outputs block
 			const ast = depDoc.getAST();
@@ -121,7 +124,10 @@ export class CompletionsProvider {
 							detail: `Output from ${depName}`,
 							documentation: {
 								kind: 'markdown',
-								value: `Output variable from dependency "${depName}"`
+								value: `Output variable from dependency "${depName}"
+	
+	Source: ${dep.targetPath}
+	Type: dependency`
 							}
 						});
 					}
@@ -131,7 +137,6 @@ export class CompletionsProvider {
 
 		return completions;
 	}
-
 	private getDependencyName(block: Token): string | undefined {
 		// For dependency blocks, name is in the parameter
 		if (block.value === 'dependency') {
