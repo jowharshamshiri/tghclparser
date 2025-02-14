@@ -35,6 +35,7 @@ export class ParsedDocument {
 		this.parseContent();
 		this.buildProfile();
 	}
+	
 	private createToken(node: any): Token {
 		const token = new Token(
 			node.id,

@@ -447,3 +447,100 @@ export const createIncludeConfig = (
 	block,
 	dependencyType: 'include'
 });
+
+export class TreeNode<T> {
+	data: T;
+	name: string;
+	type: string;
+	children: TreeNode<T>[];
+
+	constructor(data: T, name: string, type: string) {
+		this.data = data;
+		this.children = [];
+		this.name = name;
+		this.type = type;
+	}
+
+	addChild(data: T, name: string, type: string): TreeNode<T> {
+		const child = new TreeNode(data, name, type);
+		this.children.push(child);
+		return child;
+	}
+
+	preOrderTraversal(callback: (node: TreeNode<T>, depth: number, parent: TreeNode<T> | null) => boolean): number {
+		const result = this._preOrderTraversalHelper(callback, 0, null);
+		return result.maxDepth;
+	}
+
+	private _preOrderTraversalHelper(
+		callback: (node: TreeNode<T>, depth: number, parent: TreeNode<T> | null) => boolean,
+		currentDepth: number,
+		parent: TreeNode<T> | null
+	): { maxDepth: number, shouldContinue: boolean } {
+		const continueTraversal = callback(this, currentDepth, parent);
+		if (!continueTraversal) {
+			return { maxDepth: currentDepth, shouldContinue: false };
+		}
+
+		let maxDepth = currentDepth;
+		let shouldContinue = true;
+
+		for (const child of this.children) {
+			const childResult = child._preOrderTraversalHelper(callback, currentDepth + 1, this);
+			maxDepth = Math.max(maxDepth, childResult.maxDepth);
+
+			if (!childResult.shouldContinue) {
+				shouldContinue = false;
+				break;
+			}
+		}
+
+		return { maxDepth, shouldContinue };
+	}
+
+	breadthFirstTraversal(callback: (node: TreeNode<T>, depth: number, parent: TreeNode<T> | null) => boolean): void {
+		const queue: Array<{ node: TreeNode<T>, depth: number, parent: TreeNode<T> | null }> = [];
+		queue.push({ node: this, depth: 0, parent: null });
+
+		while (queue.length > 0) {
+			const current = queue.shift()!;
+			const { node, depth, parent } = current;
+
+			const continueTraversal = callback(node, depth, parent);
+			if (!continueTraversal) {
+				return;
+			}
+
+			node.children.forEach(child => {
+				queue.push({ node: child, depth: depth + 1, parent: node });
+			});
+		}
+	}
+
+	toString(): string {
+		let result = '';
+		this._printTreeHelper(this, "", true, (line) => {
+			result += `${line  }\n`;
+		});
+		return result;
+	}
+	
+	private _printTreeHelper(
+		node: TreeNode<T>, 
+		prefix: string, 
+		isLastChild: boolean,
+		output: (line: string) => void
+	): void {
+		// Print the current node
+		output(`${prefix}${isLastChild ? "└── " : "├── "}[${node.type}] ${node.name}`);
+	
+		// Update the prefix for children
+		const newPrefix = prefix + (isLastChild ? "    " : "│   ");
+	
+		// Recursively print each child
+		for (let i = 0; i < node.children.length; i++) {
+			const isLast = i === node.children.length - 1;
+			this._printTreeHelper(node.children[i], newPrefix, isLast, output);
+		}
+	}
+}
