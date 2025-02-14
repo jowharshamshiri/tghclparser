@@ -95,10 +95,8 @@ export class CompletionsProvider {
 		const dependencies = await parsedDoc.getWorkspace().getDependencies(parsedDoc.getUri());
 
 		for (const dep of dependencies) {
-			// Skip includes, we only want explicit dependencies
 			if (dep.dependencyType !== 'dependency') continue;
 
-			// Extract dependency name from parameterValue
 			const depName = dep.parameterValue;
 			if (!depName) continue;
 
@@ -106,33 +104,21 @@ export class CompletionsProvider {
 			const depDoc = await parsedDoc.getWorkspace().getDocument(dep.uri);
 			if (!depDoc) continue;
 
-			// Find outputs block
-			const ast = depDoc.getAST();
-			if (!ast) continue;
-
-			const outputsBlock = this.findBlock(ast, 'outputs');
-			if (!outputsBlock) continue;
+			// Get state outputs
+			const outputs = await depDoc.getAllOutputs();
 
 			// Add completions for each output
-			for (const attr of outputsBlock.children) {
-				if (attr.type === 'attribute') {
-					const outputName = attr.children.find(c => c.type === 'identifier')?.value;
-					if (typeof outputName === 'string') {
-						completions.push({
-							label: `${depName}.outputs.${outputName}`,
-							kind: CompletionItemKind.Property,
-							detail: `Output from ${depName}`,
-							documentation: {
-								kind: 'markdown',
-								value: `Output variable from dependency "${depName}"
-	
-	Source: ${dep.targetPath}
-	Type: dependency`
-							}
-						});
+			outputs.forEach((value, outputName) => {
+				completions.push({
+					label: `${depName}.outputs.${outputName}`,
+					kind: CompletionItemKind.Property,
+					detail: `Output from ${depName}`,
+					documentation: {
+						kind: 'markdown',
+						value: `Output variable from dependency "${depName}"\n\nSource: ${dep.targetPath}\nType: dependency\n\nCurrent value: ${this.formatRuntimeValue(value)}`
 					}
-				}
-			}
+				});
+			});
 		}
 
 		return completions;
@@ -190,9 +176,60 @@ export class CompletionsProvider {
 			}
 		}
 	}
+
+	private isDependencyReferenceContext(token: Token | null): boolean {
+		if (!token) return false;
+
+		// Check if we're in a dependency reference chain
+		let current: Token | null = token;
+		while (current) {
+			if (current.type === 'dependency_reference') return true;
+			if (current.type === 'access_chain' && current.parent?.type === 'dependency_reference') return true;
+			current = current.parent;
+		}
+
+		return false;
+	}
+	private findRootContext(token: Token | null): { type: string; name: string } | null {
+		let current = token;
+		while (current?.parent) {
+			if (current.type === 'root_assignment_identifier' ||
+				(current.parent.type === 'root' && current.type === 'assignment')) {
+				return {
+					type: 'root_assignment',
+					name: current.value?.toString() || ''
+				};
+			}
+			current = current.parent;
+		}
+		return null;
+	}
 	private determineCompletionContext(token: Token | null, line: string, position: Position): CompletionContext {
 		const lineUptoCursor = line.slice(0, position.character);
 		const currentWord = this.getCurrentWord(lineUptoCursor);
+
+		// Special handling for dependency references
+		if (this.isDependencyReferenceContext(token) || currentWord.startsWith('dependency.')) {
+			return {
+				type: 'attribute_value',
+				blockType: 'dependency',  // Using 'dependency' as block type for consistency
+				attributeName: 'outputs', // Since we're always dealing with outputs
+				currentWord,
+				partial: true
+			};
+		}
+
+		// Find the root context
+		const rootCtx = this.findRootContext(token);
+		if (rootCtx?.type === 'root_assignment' && rootCtx.name === 'inputs') {
+			return {
+				type: 'attribute_value',
+				blockType: 'inputs',
+				attributeName: this.findCurrentAttributeName(token) || '',
+				currentWord,
+				partial: true
+			};
+		}
 
 		// Check if we're in the middle of typing a function name
 		if (token?.type === 'function_identifier' ||
@@ -380,9 +417,14 @@ export class CompletionsProvider {
 		if (context.currentWord.startsWith('local.')) {
 			completions = await this.getLocalCompletions(parsedDoc, context.currentWord.slice(6));
 		}
-		// If we're in a dependency reference
-		else if (token?.type === 'reference' && token.parent && token.parent.value === 'dependency') {
-			completions = await this.getDependencyCompletions(parsedDoc, context.currentWord);
+		// If we're in a dependency reference context
+		else if (this.isDependencyReferenceContext(token)) {
+			console.log("isDependencyReferenceContext context", context);
+			// If we have a partial dependency name (e.g., "dependency.gl")
+			const parts = context.currentWord.split('.');
+			const depPrefix = parts.length > 1 ? parts[1] : '';
+			completions = await this.getDependencyCompletions(parsedDoc, depPrefix);
+			console.log("isDependencyReferenceContext completions", completions);
 		}
 		else {
 			switch (context.type) {

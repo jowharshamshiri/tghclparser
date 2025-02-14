@@ -4,7 +4,7 @@ import type { MarkupContent } from 'vscode-languageserver-types';
 import { MarkupKind } from 'vscode-languageserver-types';
 import { URI } from 'vscode-uri';
 
-import type { AttributeDefinition, BlockDefinition, FunctionDefinition, RuntimeValue, TokenType, ValueType } from './model';
+import type { AttributeDefinition, BlockDefinition, FunctionDefinition, RuntimeValue, TerragruntConfig, TokenType, ValueType } from './model';
 import { Token } from './model';
 import type { ParsedDocument } from './ParsedDocument';
 import type { Schema } from './Schema';
@@ -640,7 +640,71 @@ export class HoverProvider {
 		console.log('No matching block found');
 		return null;
 	}
+	private async getDependencyHoverInfo(token: Token, doc: ParsedDocument): Promise<string[]> {
+		// Build reference path
+		const parts = this.buildReferencePath(token);
+		if (parts.length < 3 || parts[1] !== 'outputs') return [];
 
+		const depName = parts[0];
+		const workspace = doc.getWorkspace();
+		const configTree = workspace.getConfigTreeRoot();
+
+		if (!configTree) return [];
+
+		// Find the dependency in the tree
+		let targetConfig: TerragruntConfig | undefined;
+		configTree.breadthFirstTraversal((node, _depth, _parent) => {
+			if (node.data.parameterValue === depName) {
+				targetConfig = node.data;
+				return Promise.resolve(false);
+			}
+			return Promise.resolve(true);
+		});
+
+		if (!targetConfig) return [];
+
+		// Load dependency document
+		const depDoc = await workspace.getDocument(targetConfig.uri);
+		if (!depDoc) return [];
+
+		// Get the output value
+		const outputName = parts[2];
+		const value = await this.getOutputValue(depDoc, outputName);
+		if (!value) return [];
+
+		return [
+			`## Dependency Output: ${outputName}`,
+			'',
+			`From dependency: ${depName}`,
+			`Source: ${targetConfig.targetPath}`,
+			'',
+			'Current value:',
+			'```hcl',
+			this.formatRuntimeValue(value),
+			'```'
+		];
+	}
+
+
+	private async getOutputValue(doc: ParsedDocument, outputName: string): Promise<RuntimeValue<ValueType> | undefined> {
+		const ast = doc.getAST();
+		if (!ast) return undefined;
+
+		const outputsBlock = this.findBlock(ast, 'outputs');
+		if (!outputsBlock) return undefined;
+
+		const outputAttr = outputsBlock.children.find(child =>
+			child.type === 'attribute' &&
+			child.children.some(c => c.type === 'identifier' && c.value === outputName)
+		);
+
+		if (!outputAttr) return undefined;
+
+		const valueToken = outputAttr.children.find(c => c.type !== 'identifier');
+		if (!valueToken) return undefined;
+
+		return await doc.evaluateValue(valueToken);
+	}
 	private async getLocalHoverInfo(token: Token, doc: ParsedDocument): Promise<string[]> {
 		const parts = this.buildReferencePath(token);
 		if (parts.length < 2 || parts[0] !== 'local') return [];

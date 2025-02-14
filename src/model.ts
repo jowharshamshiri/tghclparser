@@ -467,17 +467,17 @@ export class TreeNode<T> {
 		return child;
 	}
 
-	preOrderTraversal(callback: (node: TreeNode<T>, depth: number, parent: TreeNode<T> | null) => boolean): number {
-		const result = this._preOrderTraversalHelper(callback, 0, null);
+	async preOrderTraversal(callback: (node: TreeNode<T>, depth: number, parent: TreeNode<T> | null) => Promise<boolean>): Promise<number> {
+		const result = await this._preOrderTraversalHelper(callback, 0, null);
 		return result.maxDepth;
 	}
 
-	private _preOrderTraversalHelper(
-		callback: (node: TreeNode<T>, depth: number, parent: TreeNode<T> | null) => boolean,
+	private async _preOrderTraversalHelper(
+		callback: (node: TreeNode<T>, depth: number, parent: TreeNode<T> | null) => Promise<boolean>,
 		currentDepth: number,
 		parent: TreeNode<T> | null
-	): { maxDepth: number, shouldContinue: boolean } {
-		const continueTraversal = callback(this, currentDepth, parent);
+	): Promise<{ maxDepth: number; shouldContinue: boolean; }> {
+		const continueTraversal = await callback(this, currentDepth, parent);
 		if (!continueTraversal) {
 			return { maxDepth: currentDepth, shouldContinue: false };
 		}
@@ -486,7 +486,7 @@ export class TreeNode<T> {
 		let shouldContinue = true;
 
 		for (const child of this.children) {
-			const childResult = child._preOrderTraversalHelper(callback, currentDepth + 1, this);
+			const childResult = await child._preOrderTraversalHelper(callback, currentDepth + 1, this);
 			maxDepth = Math.max(maxDepth, childResult.maxDepth);
 
 			if (!childResult.shouldContinue) {
@@ -498,7 +498,7 @@ export class TreeNode<T> {
 		return { maxDepth, shouldContinue };
 	}
 
-	breadthFirstTraversal(callback: (node: TreeNode<T>, depth: number, parent: TreeNode<T> | null) => boolean): void {
+	async breadthFirstTraversal(callback: (node: TreeNode<T>, depth: number, parent: TreeNode<T> | null) => Promise<boolean>): Promise<void> {
 		const queue: Array<{ node: TreeNode<T>, depth: number, parent: TreeNode<T> | null }> = [];
 		queue.push({ node: this, depth: 0, parent: null });
 
@@ -506,7 +506,8 @@ export class TreeNode<T> {
 			const current = queue.shift()!;
 			const { node, depth, parent } = current;
 
-			const continueTraversal = callback(node, depth, parent);
+			const continueTraversal = await callback(node, depth, parent);
+
 			if (!continueTraversal) {
 				return;
 			}
