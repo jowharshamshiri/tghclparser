@@ -28,39 +28,79 @@ async function findParentWithFile(
     context: FunctionContext,
     includeStart = true
 ): Promise<string | null> {
-    let currentDir = startDir;
-    const maxDepth = 100; // Prevent infinite loops
+    let currentDir = path.resolve(startDir);
+    const maxDepth = 100;
     let depth = 0;
 
-    // If we should check the start directory, don't skip first iteration
-    if (includeStart) {
-        try {
-            const filePath = path.join(currentDir, filename);
-            await context.fs?.access(filePath);
-            return currentDir;
-        } catch {
-            // Continue to parent if file not found
-        }
+    if (!context.fs?.access) {
+        console.warn('No fs.access provided in context');
+        return null;
+    }
+
+    if (!includeStart) {
+        currentDir = path.dirname(currentDir);
     }
 
     while (depth < maxDepth) {
-        const parentDir = path.dirname(currentDir);
-        if (parentDir === currentDir) {
-            // Reached root directory
-            return null;
-        }
-        
         try {
-            const filePath = path.join(parentDir, filename);
-            await context.fs?.access(filePath);
-            return parentDir;
+            const filePath = path.join(currentDir, filename);
+            // console.log(`Checking directory for ${filename}:`, currentDir);
+            
+            // Check if file exists
+            await context.fs.access(filePath);
+            
+            // Check if this is a project root
+            const isProjectRoot = await isRoot(currentDir, context.fs);
+            
+            // If this is the project root or we're at filesystem root, return immediately
+            if (isProjectRoot || currentDir === path.dirname(currentDir)) {
+                // console.log('Found file at root:', filePath);
+                return filePath;
+            }
+            
+            // Store this as candidate but keep going up
+            const parentDir = path.dirname(currentDir);
+            if (parentDir === currentDir) {
+                // console.log('Found file at filesystem root:', filePath);
+                return filePath;
+            }
+            currentDir = parentDir;
         } catch {
+            const parentDir = path.dirname(currentDir);
+            if (parentDir === currentDir) {
+                return null;
+            }
             currentDir = parentDir;
         }
         depth++;
     }
     
     return null;
+}
+// Helper function to detect if a directory is the root of our project
+async function isRoot(dir: string, fs: { access: (path: string) => Promise<void> }): Promise<boolean> {
+    try {
+        // Try to access a combination of files that would indicate this is our project root
+        await fs.access(path.join(dir, '.git'));
+        return true;
+    } catch {
+        try {
+            // Check for terragrunt.hcl and no parent terragrunt.hcl
+            const hasTerragrunt = await fs.access(path.join(dir, 'terragrunt.hcl'));
+            const parentDir = path.dirname(dir);
+            if (parentDir === dir) {
+                return hasTerragrunt !== undefined;
+            }
+            try {
+                await fs.access(path.join(parentDir, 'terragrunt.hcl'));
+                return false;
+            } catch {
+                return hasTerragrunt !== undefined;
+            }
+        } catch {
+            return false;
+        }
+    }
 }
 export const coreFunctionGroup = {
     namespace: 'core',
@@ -125,6 +165,12 @@ export const coreFunctionGroup = {
             args: RuntimeValue<ValueType>[],
             context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
+            // console.log(`find_in_parent_folders called with args:`, args);
+            // console.log(`context:`, {
+            //     workingDirectory: context.workingDirectory,
+            //     uri: context.document.uri
+            // });
+
             const fileToFind = args[0]?.type === 'string' ? String(args[0].value) : 'terragrunt.hcl';
             const fallback = args[1]?.type === 'string' ? String(args[1].value) : undefined;
             
@@ -133,14 +179,18 @@ export const coreFunctionGroup = {
                 const foundDir = await findParentWithFile(currentDir, fileToFind, context, true);
                 
                 if (!foundDir) {
+                    // console.log(`No parent directory found containing:`, fileToFind);
                     if (fallback !== undefined) {
                         return makeStringValue(fallback);
                     }
                     throw new Error(`Could not find ${fileToFind} in parent folders`);
                 }
                 
-                return makeStringValue(path.join(foundDir, fileToFind));
+                // const result = path.join(foundDir, fileToFind);
+                // console.log(`Found file at:`, foundDir);
+                return makeStringValue(foundDir);
             } catch (error) {
+                // console.error(`Error in find_in_parent_folders:`, error);
                 if (fallback !== undefined) {
                     return makeStringValue(fallback);
                 }

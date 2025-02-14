@@ -35,63 +35,67 @@ export class ParsedDocument {
 		this.parseContent();
 		this.buildProfile();
 	}
+	private createToken(node: any): Token {
+		const token = new Token(
+			node.id,
+			node.type as TokenType,
+			node.value,
+			node.location
+		);
+	
+		if (node.children && Array.isArray(node.children)) {
+			token.children = node.children
+				.map(child => this.createToken(child))
+				.filter((t): t is Token => t !== null);
+	
+			// For function calls, use the function identifier's value
+			if (node.type === 'function_call') {
+				const funcId = token.children.find(c => c.type === 'function_identifier');
+				if (funcId) {
+					token.value = funcId.value;
+				}
+			}
+		}
+	
+		return token;
+	}
+	
 	public findIncludeBlocks(ast: any): { path: Token, block: Token }[] {
 		const includes: { path: Token, block: Token }[] = [];
 	
 		const processNode = (node: any) => {
-			// Check for include block with "root" parameter
 			if (node.type === 'block' && node.value === 'include') {
-				const paramNode = node.children?.find((c: any) => 
-					c.type === 'parameter' && c.children?.some((ch: any) => 
-						ch.type === 'string_lit' && ch.value === 'root'
-					)
+				// console.log('Found include block:', {
+				// 	node: {
+				// 		type: node.type,
+				// 		value: node.value,
+				// 		children: node.children?.map(c => ({
+				// 			type: c.type,
+				// 			value: c.value
+				// 		}))
+				// 	}
+				// });
+				const pathAttr = node.children?.find(child =>
+					child.type === 'attribute' &&
+					child.children?.some(c => c.type === 'attribute_identifier' && c.value === 'path')
 				);
 	
-				if (paramNode) {
-					const pathAttr = node.children?.find((child: any) =>
-						child.type === 'attribute' &&
-						child.children?.some((c: any) => 
-							c.type === 'attribute_identifier' && c.value === 'path'
-						)
+				if (pathAttr) {
+					const pathValueNode = pathAttr.children?.find(c =>
+						c.type === 'function_call' ||
+						c.type === 'string_lit' ||
+						c.type === 'interpolated_string'
 					);
 	
-					if (pathAttr) {
-						const pathValueNode = pathAttr.children?.find((c: any) =>
-							c.type === 'function_call' || 
-							c.type === 'string_lit' ||
-							c.type === 'interpolated_string'
-						);
-	
-						if (pathValueNode) {
-							const pathToken = new Token(
-								pathValueNode.id,
-								pathValueNode.type as TokenType,
-								pathValueNode.value,
-								pathValueNode.location
-							);
-	
-							const blockToken = new Token(
-								node.id,
-								node.type as TokenType,
-								node.value,
-								node.location
-							);
-	
-							// Add parameter to the block token
-							blockToken.children.push(new Token(
-								paramNode.id,
-								paramNode.type as TokenType,
-								paramNode.value,
-								paramNode.location
-							));
-	
-							includes.push({ path: pathToken, block: blockToken });
-						}
+					if (pathValueNode) {
+						includes.push({
+							path: this.createToken(pathValueNode),
+							block: this.createToken(node)
+						});
 					}
 				}
 			}
 	
-			// Recursively process children
 			if (node.children) {
 				node.children.forEach(processNode);
 			}
@@ -101,59 +105,58 @@ export class ParsedDocument {
 		return includes;
 	}
 	
-	public findDependencyBlocks(ast: any): { path: Token, block: Token }[] {
-		const dependencies: { path: Token, block: Token }[] = [];
+	public findDependencyBlocks(ast: any): { path: Token, block: Token, parameter?: string }[] {
+		const dependencies: { path: Token, block: Token, parameter?: string }[] = [];
 	
 		const processNode = (node: any) => {
-			if (node.type === 'block' && node.value === 'dependency') {
-				// Get the dependency name (parameter)
-				const depNameParam = node.children?.find((c: any) => c.type === 'parameter');
-				
-				// Get config_path attribute
-				const configPathAttr = node.children?.find((c: any) =>
-					c.type === 'attribute' &&
-					c.children?.some((ch: any) => 
-						ch.type === 'attribute_identifier' && ch.value === 'config_path'
-					)
-				);
+			if (node.type === 'block') {
+				if (node.value === 'dependency') {
+					const paramNode = node.children.find((c: any) => c.type === 'parameter');
+					const parameter = paramNode?.value as string | undefined;
 	
-				if (configPathAttr) {
-					const pathValueNode = configPathAttr.children?.find((c: any) =>
-						c.type === 'string_lit' ||
-						c.type === 'interpolated_string' ||
-						c.type === 'function_call'
+					const configPathAttr = node.children.find((child: any) =>
+						child.type === 'attribute' &&
+						child.children?.some((c: any) => c.type === 'attribute_identifier' && c.value === 'config_path')
 					);
 	
-					if (pathValueNode) {
-						const pathToken = new Token(
-							pathValueNode.id,
-							pathValueNode.type as TokenType,
-							pathValueNode.value,
-							pathValueNode.location
+					if (configPathAttr) {
+						const pathNode = configPathAttr.children.find((c: any) =>
+							c.type === 'string_lit' ||
+							c.type === 'interpolated_string' ||
+							c.type === 'function_call'
 						);
 	
-						const blockToken = new Token(
-							node.id,
-							node.type as TokenType,
-							node.value,
-							node.location
-						);
-	
-						if (depNameParam) {
-							blockToken.children.push(new Token(
-								depNameParam.id,
-								depNameParam.type as TokenType,
-								depNameParam.value,
-								depNameParam.location
-							));
+						if (pathNode) {
+							dependencies.push({
+								path: this.createToken(pathNode),
+								block: this.createToken(node),
+								parameter
+							});
 						}
+					}
+				} else if (node.value === 'dependencies') {
+					const pathsAttr = node.children.find((child: any) =>
+						child.type === 'attribute' &&
+						child.children?.some((c: any) => c.type === 'attribute_identifier' && c.value === 'paths')
+					);
 	
-						dependencies.push({ path: pathToken, block: blockToken });
+					if (pathsAttr) {
+						const arrayLit = pathsAttr.children.find((c: any) => c.type === 'array_lit');
+						if (arrayLit) {
+							arrayLit.children.forEach((pathElement: any) => {
+								if (pathElement.type === 'string_lit' || pathElement.type === 'interpolated_string' || pathElement.type === 'function_call') {
+									dependencies.push({
+										path: this.createToken(pathElement),
+										block: this.createToken(node),
+										parameter: undefined
+									});
+								}
+							});
+						}
 					}
 				}
 			}
 	
-			// Recursively process children
 			if (node.children) {
 				node.children.forEach(processNode);
 			}
@@ -645,41 +648,10 @@ export class ParsedDocument {
 
 		return { type: 'boolean', value: result };
 	}
-
-	private evaluateFunction(funcName: string, args: RuntimeValue<ValueType>[]): RuntimeValue<ValueType> | undefined {
-		switch (funcName) {
-			case 'find_in_parent_folders': {
-				const result = this.workspace.findInParentFolders(this.uri, args);
-				return result ?? { type: 'null', value: null } as RuntimeValue<'null'>;
-			}
-			case 'get_env': {
-				if (!args[0] || args[0].type !== 'string') {
-					return { type: 'string', value: '' } as RuntimeValue<'string'>;
-				}
-				return {
-					type: 'string',
-					value: process.env[args[0].value as string] ?? ''
-				} as RuntimeValue<'string'>;
-			}
-			case 'get_terraform_commands_that_need_vars': {
-				return {
-					type: 'array',
-					value: ['plan', 'apply', 'destroy', 'import', 'push', 'refresh'].map(cmd => ({
-						type: 'string',
-						value: cmd
-					} as RuntimeValue<'string'>))
-				} as RuntimeValue<'array'>;
-			}
-			default: {
-				return undefined;
-			}
-		}
-	}
-
 	public async resolveReference(node: Token): Promise<ResolvedReference | undefined> {
 		const parts = this.buildReferencePath(node);
 		if (parts.length === 0) return undefined;
-
+	
 		switch (parts[0]) {
 			case 'local': {
 				return this.resolveLocalReference(parts.slice(1));
@@ -687,15 +659,38 @@ export class ParsedDocument {
 			case 'dependency': {
 				return this.resolveDependencyReference(parts.slice(1), node);
 			}
-			case 'get_parent_terragrunt_dir': {
-				return {
-					value: {
-						type: 'string',
-						value: path.dirname(this.uri)
-					} as RuntimeValue<'string'>,
-					source: this.uri,
-					found: true
-				};
+			default: {
+				// Check if it's a function in the registry
+				const registry = this.schema.getFunctionRegistry();
+				if (registry.hasFunction(parts[0])) {
+					const context: FunctionContext = {
+						workingDirectory: path.dirname(URI.parse(this.uri).fsPath),
+						environmentVariables: process.env as Record<string, string>,
+						document: {
+							uri: this.uri,
+							content: this.content
+						}
+					};
+	
+					try {
+						// Create function arguments from remaining parts if any
+						const args = parts.slice(1).map(part => ({
+							type: 'string' as const,
+							value: part
+						}));
+	
+						const result = await registry.evaluateFunction(parts[0], args, context);
+						if (result) {
+							return {
+								value: result,
+								source: this.uri,
+								found: true
+							};
+						}
+					} catch (error) {
+						console.warn(`Error evaluating function ${parts[0]}:`, error);
+					}
+				}
 			}
 		}
 		return undefined;
@@ -803,17 +798,6 @@ export class ParsedDocument {
 				}
 			}
 		}
-	}
-
-	private createToken(node: any): Token | null {
-		if (!node || !node.location) return null;
-
-		return new Token(
-			node.id,
-			node.type as any,
-			node.value,
-			node.location
-		);
 	}
 
 	private processNode(node: any, parentToken: Token | null = null): Token | null {
