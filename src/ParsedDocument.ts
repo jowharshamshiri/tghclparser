@@ -1,13 +1,14 @@
 import path from 'node:path';
 
-import type { CompletionItem, Diagnostic, MarkupContent, Position } from 'vscode-languageserver';
+import type { CompletionItem, Diagnostic, DocumentLink, MarkupContent, Position } from 'vscode-languageserver';
 import { URI } from 'vscode-uri';
 
-import { CompletionsProvider } from './CompletionsProvider';
-import { DiagnosticsProvider } from './DiagnosticsProvider';
-import { HoverProvider } from './HoverProvider';
 import type { FunctionContext, ResolvedReference, RuntimeValue, TerragruntConfig, TokenType, ValueType } from './model';
 import { Token } from './model';
+import { CompletionsProvider } from './providers/CompletionsProvider';
+import { DiagnosticsProvider } from './providers/DiagnosticsProvider';
+import { HoverProvider } from './providers/HoverProvider';
+import { LinkProvider } from './providers/LinkProvider';
 import { Schema } from './Schema';
 import { parse as tg_parse, SyntaxError } from './terragrunt-parser';
 import { StateManager } from './tf/StateManager';
@@ -23,6 +24,7 @@ export class ParsedDocument {
 	private completionsProvider: CompletionsProvider;
 	private hoverProvider: HoverProvider;
 	private diagnosticsProvider: DiagnosticsProvider;
+	private linkProvider: LinkProvider;
 	private stateManager: StateManager;
 
 	constructor(
@@ -34,14 +36,15 @@ export class ParsedDocument {
 		this.completionsProvider = new CompletionsProvider(this.schema);
 		this.hoverProvider = new HoverProvider(this.schema);
 		this.diagnosticsProvider = new DiagnosticsProvider(this.schema);
+		this.linkProvider = new LinkProvider(this);
 		this.stateManager = new StateManager();
 		this.parseContent();
 		this.buildProfile();
 	}
 
 	/**
- * Gets all outputs from terraform.tfstate
- */
+	 * Gets all outputs from terraform.tfstate
+	 */
 	public async getAllOutputs(): Promise<Map<string, RuntimeValue<ValueType>>> {
 		return this.stateManager.getAllOutputs(this.uri);
 	}
@@ -1033,6 +1036,11 @@ export class ParsedDocument {
 		const token = this.findTokenAtPosition(position);
 		if (!token) return null;
 		return this.hoverProvider.getHoverInfo(token, this);
+	}
+
+	public async getLinks(): Promise<DocumentLink[]> {
+		// Let the link provider's output pass through directly
+		return this.linkProvider.getLinks();
 	}
 
 	public findTokenAtPosition(position: Position): Token | null {

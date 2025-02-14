@@ -4,10 +4,10 @@ import type { MarkupContent } from 'vscode-languageserver-types';
 import { MarkupKind } from 'vscode-languageserver-types';
 import { URI } from 'vscode-uri';
 
-import type { AttributeDefinition, BlockDefinition, FunctionDefinition, RuntimeValue, TerragruntConfig, TokenType, ValueType } from './model';
-import { Token } from './model';
-import type { ParsedDocument } from './ParsedDocument';
-import type { Schema } from './Schema';
+import type { AttributeDefinition, BlockDefinition, FunctionDefinition, RuntimeValue, TerragruntConfig, TokenType, ValueType } from '../model';
+import { Token } from '../model';
+import type { ParsedDocument } from '../ParsedDocument';
+import type { Schema } from '../Schema';
 
 
 export class HoverProvider {

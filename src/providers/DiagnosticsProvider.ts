@@ -4,9 +4,9 @@ import type { Diagnostic } from 'vscode-languageserver';
 import { DiagnosticSeverity } from 'vscode-languageserver';
 import { URI } from 'vscode-uri';
 
-import type { AttributeDefinition, BlockDefinition, FunctionDefinition, Token, ValueType } from './model';
-import type { ParsedDocument } from './ParsedDocument';
-import type { Schema } from './Schema';
+import type { AttributeDefinition, BlockDefinition, FunctionDefinition, Token, ValueType } from '../model';
+import type { ParsedDocument } from '../ParsedDocument';
+import type { Schema } from '../Schema';
 
 export class DiagnosticsProvider {
 	constructor(private schema: Schema) { }
