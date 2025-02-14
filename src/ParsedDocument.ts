@@ -6,10 +6,11 @@ import { URI } from 'vscode-uri';
 import { CompletionsProvider } from './CompletionsProvider';
 import { DiagnosticsProvider } from './DiagnosticsProvider';
 import { HoverProvider } from './HoverProvider';
-import type { FunctionContext, ResolvedReference, RuntimeValue, TokenType, ValueType } from './model';
+import type { FunctionContext, ResolvedReference, RuntimeValue, TerragruntConfig, TokenType, ValueType } from './model';
 import { Token } from './model';
 import { Schema } from './Schema';
 import { parse as tg_parse, SyntaxError } from './terragrunt-parser';
+import { StateManager } from './tf/StateManager';
 import type { Workspace } from './Workspace';
 
 export class ParsedDocument {
@@ -22,6 +23,7 @@ export class ParsedDocument {
 	private completionsProvider: CompletionsProvider;
 	private hoverProvider: HoverProvider;
 	private diagnosticsProvider: DiagnosticsProvider;
+	private stateManager: StateManager;
 
 	constructor(
 		private workspace: Workspace,
@@ -32,10 +34,93 @@ export class ParsedDocument {
 		this.completionsProvider = new CompletionsProvider(this.schema);
 		this.hoverProvider = new HoverProvider(this.schema);
 		this.diagnosticsProvider = new DiagnosticsProvider(this.schema);
+		this.stateManager = new StateManager();
 		this.parseContent();
 		this.buildProfile();
 	}
-	
+
+	/**
+ * Gets all outputs from terraform.tfstate
+ */
+	public async getAllOutputs(): Promise<Map<string, RuntimeValue<ValueType>>> {
+		return this.stateManager.getAllOutputs(this.uri);
+	}
+
+	/**
+	 * Gets a specific output from terraform.tfstate
+	 */
+	public async getOutput(name: string): Promise<RuntimeValue<ValueType> | undefined> {
+		return this.stateManager.getOutput(this.uri, name);
+	}
+
+	/**
+	 * Resolves an output reference from terraform.tfstate
+	 */
+	public async resolveOutputReference(parts: string[], node: Token): Promise<ResolvedReference | undefined> {
+		const outputName = parts[0];
+		const value = await this.getOutput(outputName);
+
+		if (!value) return undefined;
+
+		// If there are more parts, traverse the value
+		const result = parts.length > 1 ? this.traverseValue(value, parts.slice(1)) : value;
+
+		return {
+			value: result,
+			source: this.uri,
+			found: true
+		};
+	}
+
+	/**
+	 * Helper method to find a block of specific type in the AST
+	 */
+	private findBlock(ast: any, type: string): any {
+		if (ast.type === 'block' && ast.value === type) return ast;
+		if (!ast.children) return null;
+		for (const child of ast.children) {
+			const found = this.findBlock(child, type);
+			if (found) return found;
+		}
+		return null;
+	}
+
+
+	private async resolveDependencyReference(parts: string[], node: Token): Promise<ResolvedReference | undefined> {
+		if (parts.length < 2) return undefined;
+
+		// Get the dependency name (first part)
+		const depName = parts[0];
+
+		// First check if we have this dependency in our config map
+		const workspace = this.getWorkspace();
+		const configMap = workspace.getConfigTreeRoot();
+		if (!configMap) return undefined;
+
+		// Find the dependency config node in the tree
+		let targetConfig: TerragruntConfig | undefined;
+		configMap.breadthFirstTraversal((node, _depth, _parent) => {
+			if (node.data.parameterValue === depName) {
+				targetConfig = node.data;
+				return Promise.resolve(false); // Stop traversal
+			}
+			return Promise.resolve(true); // Continue traversal
+		});
+
+		if (!targetConfig) return undefined;
+
+		// Load the dependency document
+		const depDoc = await workspace.getDocument(targetConfig.uri);
+		if (!depDoc) return undefined;
+
+		// If this is an outputs reference
+		if (parts[1] === 'outputs') {
+			const outputRef = parts.slice(2);
+			return depDoc.resolveOutputReference(outputRef, node);
+		}
+
+		return undefined;
+	}
 	private createToken(node: any): Token {
 		const token = new Token(
 			node.id,
@@ -43,12 +128,12 @@ export class ParsedDocument {
 			node.value,
 			node.location
 		);
-	
+
 		if (node.children && Array.isArray(node.children)) {
 			token.children = node.children
 				.map(child => this.createToken(child))
 				.filter((t): t is Token => t !== null);
-	
+
 			// For function calls, use the function identifier's value
 			if (node.type === 'function_call') {
 				const funcId = token.children.find(c => c.type === 'function_identifier');
@@ -57,13 +142,13 @@ export class ParsedDocument {
 				}
 			}
 		}
-	
+
 		return token;
 	}
-	
+
 	public findIncludeBlocks(ast: any): { path: Token, block: Token }[] {
 		const includes: { path: Token, block: Token }[] = [];
-	
+
 		const processNode = (node: any) => {
 			if (node.type === 'block' && node.value === 'include') {
 				// console.log('Found include block:', {
@@ -80,14 +165,14 @@ export class ParsedDocument {
 					child.type === 'attribute' &&
 					child.children?.some(c => c.type === 'attribute_identifier' && c.value === 'path')
 				);
-	
+
 				if (pathAttr) {
 					const pathValueNode = pathAttr.children?.find(c =>
 						c.type === 'function_call' ||
 						c.type === 'string_lit' ||
 						c.type === 'interpolated_string'
 					);
-	
+
 					if (pathValueNode) {
 						includes.push({
 							path: this.createToken(pathValueNode),
@@ -96,37 +181,37 @@ export class ParsedDocument {
 					}
 				}
 			}
-	
+
 			if (node.children) {
 				node.children.forEach(processNode);
 			}
 		};
-	
+
 		processNode(ast);
 		return includes;
 	}
-	
+
 	public findDependencyBlocks(ast: any): { path: Token, block: Token, parameter?: string }[] {
 		const dependencies: { path: Token, block: Token, parameter?: string }[] = [];
-	
+
 		const processNode = (node: any) => {
 			if (node.type === 'block') {
 				if (node.value === 'dependency') {
 					const paramNode = node.children.find((c: any) => c.type === 'parameter');
 					const parameter = paramNode?.value as string | undefined;
-	
+
 					const configPathAttr = node.children.find((child: any) =>
 						child.type === 'attribute' &&
 						child.children?.some((c: any) => c.type === 'attribute_identifier' && c.value === 'config_path')
 					);
-	
+
 					if (configPathAttr) {
 						const pathNode = configPathAttr.children.find((c: any) =>
 							c.type === 'string_lit' ||
 							c.type === 'interpolated_string' ||
 							c.type === 'function_call'
 						);
-	
+
 						if (pathNode) {
 							dependencies.push({
 								path: this.createToken(pathNode),
@@ -140,7 +225,7 @@ export class ParsedDocument {
 						child.type === 'attribute' &&
 						child.children?.some((c: any) => c.type === 'attribute_identifier' && c.value === 'paths')
 					);
-	
+
 					if (pathsAttr) {
 						const arrayLit = pathsAttr.children.find((c: any) => c.type === 'array_lit');
 						if (arrayLit) {
@@ -157,16 +242,16 @@ export class ParsedDocument {
 					}
 				}
 			}
-	
+
 			if (node.children) {
 				node.children.forEach(processNode);
 			}
 		};
-	
+
 		processNode(ast);
 		return dependencies;
 	}
-	
+
 	private buildProfile() {
 		if (!this.ast) return;
 		this.processLocalsBlock(this.ast);
@@ -244,15 +329,15 @@ export class ParsedDocument {
 
 
 		console.log('evaluateValue called for node:', {
-            type: node.type,
-            value: node.value,
-            children: node.children?.map(c => ({
-                type: c.type,
-                value: c.value,
-                children: c.children?.length
-            }))
-        });
-        
+			type: node.type,
+			value: node.value,
+			children: node.children?.map(c => ({
+				type: c.type,
+				value: c.value,
+				children: c.children?.length
+			}))
+		});
+
 
 		// If we have a target name and this is a function_call that's NOT our target,
 		// skip evaluation (this prevents evaluating parent functions)
@@ -541,32 +626,6 @@ export class ParsedDocument {
 		}
 	}
 
-	public async resolveOutputReference(parts: string[], _node: Token): Promise<ResolvedReference | undefined> {
-		const outputsBlock = this.findBlock(this.ast, 'outputs');
-		if (!outputsBlock) return undefined;
-
-		const outputName = parts[0];
-		const outputAttr = outputsBlock.children.find((c: any) =>
-			c.type === 'attribute' &&
-			c.children.some((cc: any) => cc.type === 'identifier' && cc.value === outputName)
-		);
-
-		if (!outputAttr) return undefined;
-
-		const valueToken = outputAttr.children.find((c: any) => c.type !== 'identifier');
-		if (!valueToken) return undefined;
-
-		const value = await this.evaluateValue(valueToken);
-		if (!value) return undefined;
-
-		const result = parts.length > 1 ? this.traverseValue(value, parts.slice(1)) : value;
-		return {
-			value: result,
-			source: this.uri,
-			found: true
-		};
-	}
-
 	private async evaluateExpression(node: Token): Promise<RuntimeValue<ValueType> | undefined> {
 		switch (node.type) {
 			case 'ternary_expression': {
@@ -652,7 +711,7 @@ export class ParsedDocument {
 	public async resolveReference(node: Token): Promise<ResolvedReference | undefined> {
 		const parts = this.buildReferencePath(node);
 		if (parts.length === 0) return undefined;
-	
+
 		switch (parts[0]) {
 			case 'local': {
 				return this.resolveLocalReference(parts.slice(1));
@@ -672,14 +731,14 @@ export class ParsedDocument {
 							content: this.content
 						}
 					};
-	
+
 					try {
 						// Create function arguments from remaining parts if any
 						const args = parts.slice(1).map(part => ({
 							type: 'string' as const,
 							value: part
 						}));
-	
+
 						const result = await registry.evaluateFunction(parts[0], args, context);
 						if (result) {
 							return {
@@ -708,23 +767,6 @@ export class ParsedDocument {
 			source: this.uri,
 			found: true
 		};
-	}
-
-	private async resolveDependencyReference(parts: string[], node: Token): Promise<ResolvedReference | undefined> {
-		if (parts.length < 2) return undefined;
-
-		const depUri = this.dependencies.get(parts[0]);
-		if (!depUri) return undefined;
-
-		const depDoc = await this.workspace.getDocument(depUri);
-		if (!depDoc) return undefined;
-
-		if (parts[1] === 'outputs') {
-			const outputRef = parts.slice(2);
-			return depDoc.resolveOutputReference(outputRef, node);
-		}
-
-		return undefined;
 	}
 
 	private findAllBlocks(ast: any, types: string[]): any[] {
@@ -991,16 +1033,6 @@ export class ParsedDocument {
 		const token = this.findTokenAtPosition(position);
 		if (!token) return null;
 		return this.hoverProvider.getHoverInfo(token, this);
-	}
-
-	public findBlock(ast: any, type: string): any {
-		if (ast.type === 'block' && ast.value === type) return ast;
-		if (!ast.children) return null;
-		for (const child of ast.children) {
-			const found = this.findBlock(child, type);
-			if (found) return found;
-		}
-		return null;
 	}
 
 	public findTokenAtPosition(position: Position): Token | null {
