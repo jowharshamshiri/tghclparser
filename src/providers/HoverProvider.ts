@@ -22,7 +22,7 @@ export class HoverProvider {
 	private async getFunctionDocumentationWithEval(
 		funcDef: FunctionDefinition,
 		token: Token,
-		doc: ParsedDocument
+		_doc: ParsedDocument
 	): Promise<string[]> {
 		const contents = this.getFunctionDocumentation(funcDef);
 		// contents.push('', '---', '', '## 🔍 Live Evaluation');
