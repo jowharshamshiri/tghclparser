@@ -35,11 +35,11 @@ export default defineConfig(
       'no-empty': 'off',
       'new-cap': 'off',
       'unused-imports/no-unused-vars': ['error', {
-        'vars': 'all',
-        'varsIgnorePattern': '^_|s[0-9]+|minus|int|frac|exp|expr|offset|range|expected|token|path|value',
-        'args': 'after-used',
-        'argsIgnorePattern': '^_|s[0-9]+|minus|int|frac|exp|expr|offset|range|expected|token|path|value'
-      }],
+		'vars': 'all',
+		'varsIgnorePattern': '^_|s[0-9]+|minus|int|frac|exp|expr|offset|range|expected|token|path|value|node|context|uri',
+		'args': 'after-used',
+		'argsIgnorePattern': '^_|s[0-9]+|minus|int|frac|exp|expr|offset|range|expected|token|path|value|node|context|uri'
+		}],
       '@eslint-react/no-clone-element': 'off',
       '@eslint-react/hooks-extra/no-direct-set-state-in-use-effect': 'off',
       'react-compiler/react-compiler': 'off',

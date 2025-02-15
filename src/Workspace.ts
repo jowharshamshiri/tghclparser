@@ -22,6 +22,7 @@ export class Workspace {
 		this.configMap = new Map();
 		this.workspaceRoot = null;
 	}
+
 	private async updateConfigMap(doc: ParsedDocument, processedPaths = new Set<string>()): Promise<void> {
 		const uri = doc.getUri();
 		if (processedPaths.has(uri)) return;
@@ -30,72 +31,100 @@ export class Workspace {
 		const ast = doc.getAST();
 		if (!ast) return;
 
+		// First ensure the current config exists in the map
+		let currentConfig = this.configMap.get(uri);
+		if (!currentConfig) {
+			currentConfig = {
+				uri,
+				content: doc.getContent(),
+				includes: [],
+				dependencies: [],
+				referencedBy: [],
+				sourcePath: URI.parse(uri).fsPath,
+				targetPath: URI.parse(uri).fsPath,
+				block: undefined,
+				dependencyType: 'include',
+				parameterValue: undefined
+			};
+			this.configMap.set(uri, currentConfig);
+		}
+
 		// Process includes
 		const includes = doc.findIncludeBlocks(ast);
 		const includePaths = await Promise.all(includes.map(async inc => {
 			const resolvedPath = await this.resolveIncludePath(inc.path, uri);
+
+			// Create or update the included config
 			let includedConfig = this.configMap.get(resolvedPath);
 			if (!includedConfig) {
+				const includedDoc = await this.getParsedDocument(resolvedPath);
+				const outputs = await includedDoc?.getAllOutputs();
+
 				includedConfig = createIncludeConfig(
 					resolvedPath,
 					'', // Content loaded later
 					uri,
 					resolvedPath,
-					inc.block
+					inc.block,
+					outputs
 				);
 				this.configMap.set(resolvedPath, includedConfig);
 			}
+
 			if (!includedConfig.referencedBy.includes(uri)) {
 				includedConfig.referencedBy.push(uri);
 			}
+
 			return resolvedPath;
 		}));
 
 		// Process dependencies
-		const dependencyEntries = doc.findDependencyBlocks(ast);
+		const dependencyEntries = await doc.findDependencyBlocks(ast);
+		// console.log('Found outputs for dependencies:', dependencyEntries.map(dep => dep.outputs));
 		const dependencyPaths = await Promise.all(dependencyEntries.map(async dep => {
 			const resolvedPath = await this.resolveDependencyPath(dep.path, uri);
+			const exists = await this.fileExists(URI.parse(resolvedPath).fsPath);
+			if (!exists) {
+				console.warn(`Warning: Dependency ${resolvedPath} not found`);
+				return;
+			}
+			const content = await fs.readFile(URI.parse(resolvedPath).fsPath, 'utf-8');
+			// Create or update the dependency config
 			let depConfig = this.configMap.get(resolvedPath);
 			if (!depConfig) {
 				depConfig = createDependencyConfig(
 					resolvedPath,
-					'', // Content loaded later
+					content,
 					uri,
 					resolvedPath,
 					dep.block,
-					dep.parameter
+					dep.parameter,
+					dep.outputs
 				);
 				this.configMap.set(resolvedPath, depConfig);
+			} else if (dep.outputs) {
+				// Update outputs even if config exists
+				depConfig.outputs = dep.outputs;
 			}
+
 			if (!depConfig.referencedBy.includes(uri)) {
 				depConfig.referencedBy.push(uri);
 			}
+
 			return resolvedPath;
 		}));
 
 		// Update current config
-		const existingConfig = this.configMap.get(uri);
-		const config: TerragruntConfig = existingConfig || {
-			uri,
-			content: doc.getContent(),
-			includes: [],
-			dependencies: [],
-			referencedBy: [],
-			sourcePath: URI.parse(uri).fsPath,
-			targetPath: URI.parse(uri).fsPath,
-			block: undefined,
-			dependencyType: 'include', // Default, adjusted if necessary
-			parameterValue: undefined
-		};
-
-		config.includes = includePaths.filter(Boolean);
-		config.dependencies = dependencyPaths.filter(Boolean);
-		this.configMap.set(uri, config);
+		currentConfig.includes = includePaths.filter(Boolean);
+		if (dependencyPaths && dependencyPaths.length > 0) {
+			currentConfig.dependencies = dependencyPaths.filter((path): path is string => path !== undefined);
+		}
+		this.configMap.set(uri, currentConfig);
 
 		// Recursively process includes and dependencies
 		for (const refUri of [...includePaths, ...dependencyPaths]) {
-			if (!processedPaths.has(refUri)) {
-				const refDoc = await this.getDocument(refUri);
+			if (refUri && !processedPaths.has(refUri)) {
+				const refDoc = await this.getParsedDocument(refUri);
 				if (refDoc) {
 					await this.updateConfigMap(refDoc, processedPaths);
 				}
@@ -157,30 +186,6 @@ export class Workspace {
 		}
 
 		return URI.file(path.join(resolvedPath, 'terragrunt.hcl')).toString();
-	}
-	private async resolveFindInParentFolders(sourceDir: string): Promise<string> {
-		const rootDir = this.workspaceRoot ?
-			URI.parse(this.workspaceRoot).fsPath :
-			path.parse(sourceDir).root;
-
-		let currentDir = path.dirname(sourceDir);
-
-		// Walk up the directory tree until we find a terragrunt.hcl file
-		while (currentDir !== rootDir && currentDir !== path.parse(currentDir).root) {
-			const configPath = path.join(currentDir, 'terragrunt.hcl');
-			try {
-				const stats = await fs.stat(configPath);
-				if (stats.isFile()) {
-					return URI.file(configPath).toString();
-				}
-			} catch {
-				// Continue searching up
-			}
-			currentDir = path.dirname(currentDir);
-		}
-
-		// If we reach the root without finding a file, return root terragrunt.hcl
-		return URI.file(path.join(rootDir, 'terragrunt.hcl')).toString();
 	}
 
 	private async resolveIncludePath(pathToken: Token, sourceUri: string): Promise<string> {
@@ -290,16 +295,16 @@ export class Workspace {
 		// Fallback to default directory
 		return sourceDir;
 	}
+
 	private async buildDependencyTree(): Promise<void> {
 		if (!this.workspaceRoot) return;
 
 		// Find all terragrunt.hcl files
 		const configs = await this.findTerragruntConfigs(this.workspaceRoot);
-		// console.log('Found terragrunt configs:', configs);
 
 		// First pass: Load and parse all configs
 		for (const uri of configs) {
-			const doc = await this.getDocument(uri);
+			const doc = await this.getParsedDocument(uri);
 			if (doc) {
 				await this.updateConfigMap(doc);
 			}
@@ -314,6 +319,7 @@ export class Workspace {
 			}
 		}
 
+		// Find root config
 		const rootConfig = Array.from(this.configMap.entries()).find(([uri]) => {
 			const parsedUri = URI.parse(uri);
 			const isRoot =
@@ -332,23 +338,121 @@ export class Workspace {
 			return;
 		}
 
-		const traverseConfigTree = (treeNode: TreeNode<TerragruntConfig>) => {
-			if (!this.configMap.get(treeNode.data.uri))
-				return new Error(`Config not found for uri ${treeNode.data.uri}`);
+		// Initialize the tree with root node
+		const [uri, config] = rootConfig;
+		this.configTreeRoot = new TreeNode<TerragruntConfig>(
+			config,
+			this.formatPath(config.uri),
+			'root'
+		);
 
-			treeNode.data.referencedBy.forEach(refUri => {
-				const childConfig = this.configMap.get(refUri);
-				if (!childConfig) return new Error(`Config not found for uri ${refUri}`);
-				const childNode=treeNode.addChild(childConfig, this.formatPath(childConfig.uri), childConfig.dependencyType);
-				traverseConfigTree(childNode);
-			});
+		// Build the tree structure
+		await this.traverseConfigTree();
+	}
+
+	private dumpTreeStructure(node: TreeNode<TerragruntConfig>, depth = 0): void {
+		const indent = '  '.repeat(depth);
+		console.log(`${indent}${node.name} (${node.type})`);
+		if (node.data.outputs && node.data.outputs.size > 0) {
+			console.log(`${indent}  outputs:`);
+			for (const [key, value] of node.data.outputs.entries()) {
+				console.log(`${indent}    ${key}: ${JSON.stringify(value.value)}`);
+			}
+		}
+		for (const child of node.children) {
+			this.dumpTreeStructure(child, depth + 1);
+		}
+	}
+
+	private async traverseConfigTree(): Promise<void> {
+		if (!this.configTreeRoot) {
+			console.log('No config tree root exists');
+			return;
+		}
+
+		const traverseNode = async (treeNode: TreeNode<TerragruntConfig>) => {
+			const config = this.configMap.get(treeNode.data.uri);
+			if (!config) {
+				console.error(`Config not found for uri ${treeNode.data.uri}`);
+				return;
+			}
+
+			// console.log(`Processing node: ${config.uri}`);
+
+			// Add outputs if they exist
+			if (config.outputs && config.outputs.size > 0) {
+				const outputsNode = treeNode.addChild(
+					config,
+					"outputs",
+					"outputs"
+				);
+
+				for (const [outputName, outputValue] of config.outputs.entries()) {
+					let displayValue = '';
+					if (outputValue.value !== null && outputValue.value !== undefined) {
+						if (typeof outputValue.value === 'string') {
+							try {
+								const parsed = JSON.parse(outputValue.value);
+								if (Array.isArray(parsed)) {
+									displayValue = `[${parsed.length} items]`;
+									const outputNode = outputsNode.addChild(
+										config,
+										`${outputName}: ${displayValue}`,
+										`output:${outputValue.type}`
+									);
+									parsed.forEach(item => {
+										outputNode.addChild(
+											config,
+											String(item),
+											'output:item'
+										);
+									});
+									continue;
+								}
+								displayValue = JSON.stringify(parsed, null, 2);
+							} catch {
+								displayValue = outputValue.value;
+							}
+						} else {
+							displayValue = JSON.stringify(outputValue.value, null, 2);
+						}
+					}
+
+					outputsNode.addChild(
+						config,
+						`${outputName}: ${displayValue}`,
+						`output:${outputValue.type}`
+					);
+				}
+			}
+
+			// Process all child nodes (configs that reference this one)
+			// console.log(`Processing children for ${config.uri}, referencedBy:`, config.referencedBy);
+			for (const refUri of config.referencedBy) {
+				const refConfig = this.configMap.get(refUri);
+				if (!refConfig) {
+					console.error(`Referenced config not found for uri ${refUri}`);
+					continue;
+				}
+
+				// Check if this child has already been processed to avoid cycles
+				const existingChild = treeNode.children.find(child => child.data.uri === refUri);
+				if (!existingChild) {
+					// console.log(`Adding child node: ${refUri}`);
+					const childNode = treeNode.addChild(
+						refConfig,
+						this.formatPath(refConfig.uri),
+						refConfig.dependencyType
+					);
+					await traverseNode(childNode);
+				} else {
+					console.log(`Skipping already processed child: ${refUri}`);
+				}
+			}
 		};
 
-		if (rootConfig) {
-			const [uri, config] = rootConfig;
-			this.configTreeRoot = new TreeNode<TerragruntConfig>(config, this.formatPath(config.uri), 'root');
-			traverseConfigTree(this.configTreeRoot);
-		}
+		// Start traversal from the root
+		await traverseNode(this.configTreeRoot);
 	}
 
 	private formatPath(uri: string): string {
@@ -357,6 +461,7 @@ export class Workspace {
 		const rootPath = URI.parse(this.workspaceRoot).fsPath;
 		return path.relative(rootPath, fullPath);
 	}
+
 	async findTerragruntConfigs(rootDir: string): Promise<string[]> {
 		const configs: string[] = [];
 		const fsRootDir = URI.parse(rootDir).fsPath;  // Convert URI to filesystem path
@@ -420,7 +525,7 @@ export class Workspace {
 		});
 
 		await this.updateConfigMap(document);  // Update just this document's config
-		await this.buildDependencyTree();     // Rebuild entire tree to update references
+		await this.buildDependencyTree();
 	}
 
 	private getDependencyName(block: Token): string | undefined {
@@ -538,7 +643,7 @@ export class Workspace {
 		};
 	}
 
-	async getDocument(uri: string): Promise<ParsedDocument | undefined> {
+	async getParsedDocument(uri: string): Promise<ParsedDocument | undefined> {
 		if (!this.documents.has(uri)) {
 			return await this.loadDocument(uri);
 		}
@@ -550,7 +655,7 @@ export class Workspace {
 		const config = this.configMap.get(uri);
 		if (!config) {
 			// If config isn't loaded yet, try to load it first
-			const doc = await this.getDocument(uri);
+			const doc = await this.getParsedDocument(uri);
 			if (!doc) return [];
 			// After loading, check configMap again
 			const loadedConfig = this.configMap.get(uri);
@@ -571,7 +676,7 @@ export class Workspace {
 		const config = this.configMap.get(uri);
 		if (!config) {
 			// If config isn't loaded yet, try to load it first
-			const doc = await this.getDocument(uri);
+			const doc = await this.getParsedDocument(uri);
 			if (!doc) return [];
 			// After loading, check configMap again
 			const loadedConfig = this.configMap.get(uri);

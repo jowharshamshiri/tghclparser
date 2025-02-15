@@ -1,14 +1,17 @@
 {
 	"name": "tghclparser",
 	"type": "module",
-	"version": "0.2.1",
-	"packageManager": "pnpm@9.6.0",
+	"version": "0.4.1",
 	"description": "Parser for .hcl files developed to be used as a vscode language server.",
 	"author": {
 		"name": "Bahram Shamshiri",
 		"email": "jowharshamshiri@gmail.com"
 	},
 	"license": "MIT",
+	"funding": {
+		"type": "ko-fi",
+		"url": "https://ko-fi.com/jowharshamshiri"
+	},
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/jowharshamshiri/tghclparser.git"
@@ -60,7 +63,7 @@
 		"@types/js-yaml": "^4.0.9",
 		"@types/lodash-es": "4.17.12",
 		"@types/mocha": "^10.0.10",
-		"@types/node": "^22.9.3",
+		"@types/node": "^22.13.4",
 		"@types/vscode": "^1.97.0",
 		"chai": "5.1.2",
 		"eslint": "9.15.0",
@@ -71,7 +74,7 @@
 		"simple-git-hooks": "2.11.1",
 		"ts-node": "^10.9.2",
 		"tsup": "^8.0.2",
-		"typescript": "^5.7.2"
+		"typescript": "^5.7.3"
 	},
 	"simple-git-hooks": {
 		"pre-commit": "pnpm exec lint-staged"
