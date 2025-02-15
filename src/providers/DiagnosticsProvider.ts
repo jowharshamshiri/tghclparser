@@ -270,7 +270,7 @@ export class DiagnosticsProvider {
 
 		try {
 			// Try to load and parse the dependency
-			const dependencyDoc = await workspaceManager.getDocument(targetUri);
+			const dependencyDoc = await workspaceManager.getParsedDocument(targetUri);
 
 			if (!dependencyDoc) {
 				// Add a diagnostic for the missing file

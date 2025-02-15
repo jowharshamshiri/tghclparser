@@ -383,13 +383,6 @@ export interface FunctionGroup {
 }
 
 export interface TerragruntConfig {
-	uri: string;
-	content: string;
-	includes: string[];  // URIs of included configs
-	dependencies: string[];  // URIs of explicit dependencies
-	referencedBy: string[];  // URIs of configs that include/depend on this one
-}
-export interface TerragruntConfig {
 	// Basic config info
 	uri: string;                   // URI of this config file
 	content: string;              // Raw content of the file
@@ -407,6 +400,8 @@ export interface TerragruntConfig {
 	// Additional metadata
 	dependencyType: 'include' | 'dependency';  // Whether this is an include or dependency relationship
 	parameterValue?: string;    // For dependencies, the name parameter value
+
+	outputs?: Map<string, RuntimeValue<ValueType>>;
 }
 
 // Helper functions for creating TerragruntConfig objects
@@ -416,7 +411,8 @@ export const createDependencyConfig = (
 	sourcePath: string,
 	targetPath: string,
 	block: Token,
-	parameterValue?: string
+	parameterValue?: string,
+	outputs?: Map<string, RuntimeValue<ValueType>>
 ): TerragruntConfig => ({
 	uri,
 	content,
@@ -427,7 +423,8 @@ export const createDependencyConfig = (
 	targetPath,
 	block,
 	dependencyType: 'dependency',
-	parameterValue
+	parameterValue,
+	outputs
 });
 
 export const createIncludeConfig = (
@@ -435,7 +432,8 @@ export const createIncludeConfig = (
 	content: string,
 	sourcePath: string,
 	targetPath: string,
-	block: Token
+	block: Token,
+	outputs?: Map<string, RuntimeValue<ValueType>>
 ): TerragruntConfig => ({
 	uri,
 	content,
@@ -445,7 +443,8 @@ export const createIncludeConfig = (
 	sourcePath,
 	targetPath,
 	block,
-	dependencyType: 'include'
+	dependencyType: 'include',
+	outputs
 });
 
 export class TreeNode<T> {
@@ -517,6 +516,7 @@ export class TreeNode<T> {
 			});
 		}
 	}
+	
 
 	toString(): string {
 		let result = '';

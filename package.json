@@ -8,6 +8,10 @@
 		"email": "jowharshamshiri@gmail.com"
 	},
 	"license": "MIT",
+	"funding": {
+		"type": "ko-fi",
+		"url": "https://ko-fi.com/jowharshamshiri"
+	},
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/jowharshamshiri/tghclparser.git"
