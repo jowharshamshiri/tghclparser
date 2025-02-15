@@ -664,7 +664,7 @@ export class HoverProvider {
 		if (!targetConfig) return [];
 
 		// Load dependency document
-		const depDoc = await workspace.getDocument(targetConfig.uri);
+		const depDoc = await workspace.getParsedDocument(targetConfig.uri);
 		if (!depDoc) return [];
 
 		// Get the output value
