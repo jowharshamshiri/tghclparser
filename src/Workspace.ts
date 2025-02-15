@@ -370,14 +370,15 @@ export class Workspace {
 
 					// Get all outputs from the terraform state
 					const outputs = await doc.getAllOutputs();
-					const outputsNode = treeNode.addChild(
-						treeNode.data, // Keep the same config data
-						"outputs3",
-						"outputs3"
-					);
+					
 
 					if (outputs && outputs.size > 0) {
 						// Create an "outputs" node to group all outputs
+						const outputsNode = treeNode.addChild(
+							treeNode.data, // Keep the same config data
+							"outputs",
+							"outputs"
+						);
 						
 						// Add each output as a child of the outputs node
 						for (const [outputName, outputValue] of outputs.entries()) {
