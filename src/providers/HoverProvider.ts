@@ -22,51 +22,51 @@ export class HoverProvider {
 	private async getFunctionDocumentationWithEval(
 		funcDef: FunctionDefinition,
 		token: Token,
-		doc: ParsedDocument
+		_doc: ParsedDocument
 	): Promise<string[]> {
 		const contents = this.getFunctionDocumentation(funcDef);
-		contents.push('', '---', '', '## 🔍 Live Evaluation');
+		// contents.push('', '---', '', '## 🔍 Live Evaluation');
 
-		try {
-			const functionCall = token.parent;
-			if (functionCall && functionCall.type === 'function_call') {
-				const argTokens = functionCall.children.filter(child =>
-					child.type !== 'function_identifier'
-				);
+		// try {
+		// 	const functionCall = token.parent;
+		// 	if (functionCall && functionCall.type === 'function_call') {
+		// 		const argTokens = functionCall.children.filter(child =>
+		// 			child.type !== 'function_identifier'
+		// 		);
 
-				const evaluatedArgs = await Promise.all(
-					argTokens.map(arg => doc.evaluateValue(arg))
-				);
+		// 		const evaluatedArgs = await Promise.all(
+		// 			argTokens.map(arg => doc.evaluateValue(arg))
+		// 		);
 
-				const argsDisplay = argTokens.map((arg, i) => {
-					const evalResult = evaluatedArgs[i];
-					return `* Arg ${i + 1}: \`${arg.getDisplayText()}\`\n  * Value: ${evalResult ? `\`${this.formatRuntimeValue(evalResult)}\`` : '_unable to evaluate_'
-						}`;
-				}).join('\n');
+		// 		const argsDisplay = argTokens.map((arg, i) => {
+		// 			const evalResult = evaluatedArgs[i];
+		// 			return `* Arg ${i + 1}: \`${arg.getDisplayText()}\`\n  * Value: ${evalResult ? `\`${this.formatRuntimeValue(evalResult)}\`` : '_unable to evaluate_'
+		// 				}`;
+		// 		}).join('\n');
 
-				// Create properly encoded command URI
-				const args = [{
-					function: funcDef.name,
-					uri: doc.getUri(),
-					position: token.startPosition
-				}];
-				const commandUri = `command:terragrunt.evaluateFunction?${encodeURIComponent(JSON.stringify(args))}`;
+		// 		// Create properly encoded command URI
+		// 		const args = [{
+		// 			function: funcDef.name,
+		// 			uri: doc.getUri(),
+		// 			position: token.startPosition
+		// 		}];
+		// 		const commandUri = `command:terragrunt.evaluateFunction?${encodeURIComponent(JSON.stringify(args))}`;
 
-				contents.push(
-					'Arguments:',
-					argsDisplay || '_(no arguments)_',
-					'',
-					`[📝 Evaluate ${funcDef.name}](${commandUri})`
-				);
-			}
-		} catch (error) {
-			contents.push(
-				'*Error preparing function evaluation:*',
-				'```',
-				error instanceof Error ? error.message : String(error),
-				'```'
-			);
-		}
+		// 		contents.push(
+		// 			'Arguments:',
+		// 			argsDisplay || '_(no arguments)_',
+		// 			'',
+		// 			`[📝 Evaluate ${funcDef.name}](${commandUri})`
+		// 		);
+		// 	}
+		// } catch (error) {
+		// 	contents.push(
+		// 		'*Error preparing function evaluation:*',
+		// 		'```',
+		// 		error instanceof Error ? error.message : String(error),
+		// 		'```'
+		// 	);
+		// }
 
 		return contents;
 	}
@@ -664,7 +664,7 @@ export class HoverProvider {
 		if (!targetConfig) return [];
 
 		// Load dependency document
-		const depDoc = await workspace.getDocument(targetConfig.uri);
+		const depDoc = await workspace.getParsedDocument(targetConfig.uri);
 		if (!depDoc) return [];
 
 		// Get the output value

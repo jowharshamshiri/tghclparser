@@ -168,7 +168,7 @@ export class CompletionsProvider {
 			);
 
 			if (dep) {
-				const depDoc = await parsedDoc.getWorkspace().getDocument(dep.uri);
+				const depDoc = await parsedDoc.getWorkspace().getParsedDocument(dep.uri);
 				if (depDoc) {
 					const outputs = await depDoc.getAllOutputs();
 					outputs.forEach((value, outputName) => {

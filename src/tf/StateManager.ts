@@ -18,7 +18,7 @@ export class StateManager {
 	 */
 	public async findState(documentUri: string): Promise<TerraformState | undefined> {
 		if (!fs?.readFile) {
-			console.error('No filesystem API available');
+			console.warn('No filesystem API available');
 			return undefined;
 		}
 		try {
@@ -26,20 +26,40 @@ export class StateManager {
 			if (this.stateCache.has(documentUri)) {
 				return this.stateCache.get(documentUri);
 			}
-
+	
 			const parsedUri = URI.parse(documentUri);
 			const directory = path.dirname(parsedUri.fsPath);
-			const statePath = path.join(directory, 'terraform.tfstate');
-
-			const stateContent = await fs.readFile(statePath);
-			const stateText = new TextDecoder().decode(stateContent);
-			const state = JSON.parse(stateText) as TerraformState;
-
-			// Cache the result
-			this.stateCache.set(documentUri, state);
-			return state;
+			
+			// Try both terraform.tfstate and .terraform/terraform.tfstate
+			const possiblePaths = [
+				path.join(directory, 'terraform.tfstate'),
+				path.join(directory, '.terraform', 'terraform.tfstate')
+			];
+	
+			for (const statePath of possiblePaths) {
+				try {
+					// console.log(`Checking for state file at: ${statePath}`);
+					const stateContent = await fs.readFile(statePath);
+					const stateText = new TextDecoder().decode(stateContent);
+					const state = JSON.parse(stateText) as TerraformState;
+	
+					// Log what we found
+					// if (state.outputs) {
+					// 	console.log(`Found outputs in state file ${statePath}:`, Object.keys(state.outputs));
+					// }
+	
+					// Cache the result
+					this.stateCache.set(documentUri, state);
+					return state;
+				} catch {
+					console.log(`No state file found at ${statePath}`);
+				}
+			}
+	
+			console.log(`No state files found for ${documentUri}`);
+			return undefined;
 		} catch (error) {
-			console.warn(`No state file found for ${documentUri}:`, error);
+			console.warn(`Error reading state for ${documentUri}:`, error);
 			return undefined;
 		}
 	}
@@ -49,13 +69,17 @@ export class StateManager {
 	 */
 	public async getAllOutputs(documentUri: string): Promise<Map<string, RuntimeValue<ValueType>>> {
 		const outputs = new Map<string, RuntimeValue<ValueType>>();
-		const state = await this.findState(documentUri);
+		try {
+			const state = await this.findState(documentUri);
 
-		if (!state?.outputs) return outputs;
+			if (!state?.outputs) return outputs;
 
-		// Convert state outputs to RuntimeValues
-		for (const [name, output] of Object.entries(state.outputs)) {
-			outputs.set(name, this.convertToRuntimeValue(output.value, output.type));
+			// Convert state outputs to RuntimeValues
+			for (const [name, output] of Object.entries(state.outputs)) {
+				outputs.set(name, this.convertToRuntimeValue(output.value, output.type));
+			}
+		} catch (error) {
+			console.error('Error getting outputs:', error);
 		}
 
 		return outputs;

@@ -41,23 +41,140 @@ export class ParsedDocument {
 		this.parseContent();
 		this.buildProfile();
 	}
+	public findIncludeBlocks(ast: any): { path: Token, block: Token }[] {
+		const includes: { path: Token, block: Token }[] = [];
+	
+		const processNode = (node: any) => {
+			if (node.type === 'block' && node.value === 'include') {
+				const pathAttr = node.children?.find(child =>
+					child.type === 'attribute' &&
+					child.children?.some(c => c.type === 'attribute_identifier' && c.value === 'path')
+				);
+	
+				if (pathAttr) {
+					// Find the path value node (can be function_call, string_lit, or interpolated_string)
+					const pathValueNode = pathAttr.children?.find(c =>
+						c.type === 'function_call' ||
+						c.type === 'string_lit' ||
+						c.type === 'interpolated_string'
+					);
+	
+					// Create block token first to preserve hierarchy
+					const blockToken = this.createToken(node);
+	
+					if (pathValueNode) {
+						// Create path token from the path value node
+						const pathToken = this.createToken(pathValueNode);
+	
+						includes.push({
+							path: pathToken,
+							block: blockToken
+						});
+					}
+				}
+			}
+	
+			// Recursively process children
+			if (node.children) {
+				node.children.forEach(processNode);
+			}
+		};
+	
+		processNode(ast);
+		return includes;
+	}
+
+	public async findDependencyBlocks(ast: any): Promise<{ path: Token, block: Token, parameter?: string, outputs?: Map<string, RuntimeValue<ValueType>> }[]> {
+		const dependencies: { path: Token, block: Token, parameter?: string, outputs?: Map<string, RuntimeValue<ValueType>> }[] = [];
+
+		const processNode = async (node: any) => {
+			if (node.type === 'block') {
+				if (node.value === 'dependency') {
+					const paramNode = node.children.find((c: any) => c.type === 'parameter');
+					const parameter = paramNode?.value as string | undefined;
+
+					const configPathAttr = node.children.find((child: any) =>
+						child.type === 'attribute' &&
+						child.children?.some((c: any) => c.type === 'attribute_identifier' && c.value === 'config_path')
+					);
+
+					if (configPathAttr) {
+						const pathNode = configPathAttr.children.find((c: any) =>
+							c.type === 'string_lit' ||
+							c.type === 'interpolated_string' ||
+							c.type === 'function_call'
+						);
+
+						if (pathNode) {
+							// if pathNode.value is a relative path, we need to resolve it
+							const absolutePath = path.isAbsolute(pathNode.value) ? pathNode.value : path.resolve(path.dirname(URI.parse(this.uri).fsPath), pathNode.value);
+							const referencedParsedDocument = await this.workspace.getParsedDocument(absolutePath);
+							const outputs = await referencedParsedDocument?.getAllOutputs();
+
+							dependencies.push({
+								path: this.createToken(pathNode),
+								block: this.createToken(node),
+								parameter,
+								outputs
+							});
+						}
+					}
+				} else if (node.value === 'dependencies') {
+					const pathsAttr = node.children.find((child: any) =>
+						child.type === 'attribute' &&
+						child.children?.some((c: any) => c.type === 'attribute_identifier' && c.value === 'paths')
+					);
+
+					if (pathsAttr) {
+						const arrayLit = pathsAttr.children.find((c: any) => c.type === 'array_lit');
+						if (arrayLit) {
+							// Use Promise.all to properly wait for all async operations
+							await Promise.all(arrayLit.children.map(async (pathElement: any) => {
+								if (pathElement.type === 'string_lit' || pathElement.type === 'interpolated_string' || pathElement.type === 'function_call') {
+									// if pathElement.value is a relative path, we need to resolve it
+									const absolutePathElement = path.isAbsolute(pathElement.value) ? pathElement.value : path.resolve(path.dirname(URI.parse(this.uri).fsPath), pathElement.value);
+									const referencedParsedDocument = await this.workspace.getParsedDocument(absolutePathElement);
+									const outputs = await referencedParsedDocument?.getAllOutputs();
+
+									dependencies.push({
+										path: this.createToken(pathElement),
+										block: this.createToken(node),
+										parameter: undefined,
+										outputs
+									});
+								}
+							}));
+						}
+					}
+				}
+			}
+
+			if (node.children) {
+				// Use Promise.all to wait for all child nodes to be processed
+				await Promise.all(node.children.map(processNode));
+			}
+		};
+
+		await processNode(ast);
+		return dependencies;
+	}
 	public async getAllLocals(): Promise<Map<string, RuntimeValue<ValueType>>> {
 		console.log('getAllLocals called');
 		const locals = new Map<string, RuntimeValue<ValueType>>();
 		const ast = this.getAST();
 		if (!ast) return locals;
-	
+
 		const localsBlock = this.findBlock(ast, 'locals');
 		if (!localsBlock) {
 			console.log('No locals block found');
 			return locals;
 		}
-	
+
 		console.log('Processing locals block children:', localsBlock.children.map(c => ({
 			type: c.type,
 			value: c.value
 		})));
-	
+
 		// Process each attribute in the locals block
 		for (const child of localsBlock.children) {
 			if (child.type === 'attribute') {
@@ -65,13 +182,13 @@ export class ParsedDocument {
 				const name = child.value;
 				if (typeof name === 'string') {
 					console.log(`Processing local variable: ${name}`);
-					
+
 					// Find the value token (first non-identifier child)
-					const valueToken = child.children.find(c => 
-						c.type !== 'identifier' && 
+					const valueToken = child.children.find(c =>
+						c.type !== 'identifier' &&
 						c.type !== 'attribute_identifier'
 					);
-	
+
 					if (valueToken) {
 						try {
 							// Attempt to evaluate the value
@@ -92,7 +209,7 @@ export class ParsedDocument {
 				}
 			}
 		}
-	
+
 		console.log('Final locals:', Array.from(locals.entries()));
 		return locals;
 	}
@@ -167,7 +284,7 @@ export class ParsedDocument {
 		if (!targetConfig) return undefined;
 
 		// Load the dependency document
-		const depDoc = await workspace.getDocument(targetConfig.uri);
+		const depDoc = await workspace.getParsedDocument(targetConfig.uri);
 		if (!depDoc) return undefined;
 
 		// If this is an outputs reference
@@ -203,111 +320,8 @@ export class ParsedDocument {
 		return token;
 	}
 
-	public findIncludeBlocks(ast: any): { path: Token, block: Token }[] {
-		const includes: { path: Token, block: Token }[] = [];
+	
 
-		const processNode = (node: any) => {
-			if (node.type === 'block' && node.value === 'include') {
-				// console.log('Found include block:', {
-				// 	node: {
-				// 		type: node.type,
-				// 		value: node.value,
-				// 		children: node.children?.map(c => ({
-				// 			type: c.type,
-				// 			value: c.value
-				// 		}))
-				// 	}
-				// });
-				const pathAttr = node.children?.find(child =>
-					child.type === 'attribute' &&
-					child.children?.some(c => c.type === 'attribute_identifier' && c.value === 'path')
-				);
-
-				if (pathAttr) {
-					const pathValueNode = pathAttr.children?.find(c =>
-						c.type === 'function_call' ||
-						c.type === 'string_lit' ||
-						c.type === 'interpolated_string'
-					);
-
-					if (pathValueNode) {
-						includes.push({
-							path: this.createToken(pathValueNode),
-							block: this.createToken(node)
-						});
-					}
-				}
-			}
-
-			if (node.children) {
-				node.children.forEach(processNode);
-			}
-		};
-
-		processNode(ast);
-		return includes;
-	}
-
-	public findDependencyBlocks(ast: any): { path: Token, block: Token, parameter?: string }[] {
-		const dependencies: { path: Token, block: Token, parameter?: string }[] = [];
-
-		const processNode = (node: any) => {
-			if (node.type === 'block') {
-				if (node.value === 'dependency') {
-					const paramNode = node.children.find((c: any) => c.type === 'parameter');
-					const parameter = paramNode?.value as string | undefined;
-
-					const configPathAttr = node.children.find((child: any) =>
-						child.type === 'attribute' &&
-						child.children?.some((c: any) => c.type === 'attribute_identifier' && c.value === 'config_path')
-					);
-
-					if (configPathAttr) {
-						const pathNode = configPathAttr.children.find((c: any) =>
-							c.type === 'string_lit' ||
-							c.type === 'interpolated_string' ||
-							c.type === 'function_call'
-						);
-
-						if (pathNode) {
-							dependencies.push({
-								path: this.createToken(pathNode),
-								block: this.createToken(node),
-								parameter
-							});
-						}
-					}
-				} else if (node.value === 'dependencies') {
-					const pathsAttr = node.children.find((child: any) =>
-						child.type === 'attribute' &&
-						child.children?.some((c: any) => c.type === 'attribute_identifier' && c.value === 'paths')
-					);
-
-					if (pathsAttr) {
-						const arrayLit = pathsAttr.children.find((c: any) => c.type === 'array_lit');
-						if (arrayLit) {
-							arrayLit.children.forEach((pathElement: any) => {
-								if (pathElement.type === 'string_lit' || pathElement.type === 'interpolated_string' || pathElement.type === 'function_call') {
-									dependencies.push({
-										path: this.createToken(pathElement),
-										block: this.createToken(node),
-										parameter: undefined
-									});
-								}
-							});
-						}
-					}
-				}
-			}
-
-			if (node.children) {
-				node.children.forEach(processNode);
-			}
-		};
-
-		processNode(ast);
-		return dependencies;
-	}
 
 	private buildProfile() {
 		if (!this.ast) return;

@@ -1,3 +1,4 @@
+export type {TerragruntConfig,TreeNode} from './model';
 export {Token} from './model';
 export {ParsedDocument} from './ParsedDocument';
 export {CompletionsProvider} from './providers/CompletionsProvider';
