@@ -2,6 +2,10 @@
 
 A parser for the Terragrunt HCL language.
 
+This parser is under active development and new features are being added regularly. Please report any issues or feature requests in the [GitHub repository](https://github.com/jowharshamshiri/tghclparser/issues). 🚀🚀🚀
+
+If you found this helpful, consider supporting my work with a [tip](https://ko-fi.com/jowharshamshiri). Your support helps me create more quality tools.
+
 ## Features
 
 - Parses Terragrunt HCL files.
@@ -15,7 +19,7 @@ A parser for the Terragrunt HCL language.
 
    ```
    npm install tghclparser
-   ```   
+   ```
 
 ### From Source
 
