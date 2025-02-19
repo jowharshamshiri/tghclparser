@@ -41,7 +41,7 @@
 		"build": "tsup src/index.ts --format cjs,esm --dts --external vscode-languageserver-types --external vscode-languageserver",
 		"format": "prettier --write \"src/**/*.ts\"",
 		"lint": "eslint --fix",
-		"parser": "peggy --format 'es' --dts --dependency \"{Schema}:./Schema\" --trace --output src/parser.js grammar.peggy && npm run build && peggy-tracks -d 5 grammar.peggy",
+		"parser": "peggy --format 'es' --dts --dependency \"{Schema}:./Schema\" --trace --output src/parser.js grammar.peggy && npm run build && peggy-tracks -c peggy.css -d 5 grammar.peggy",
 		"prepare": "npm run build",
 		"prepublishOnly": "npm test && npm run lint",
 		"test": "mocha -r ts-node/register --loader=ts-node/esm 'tests/**/*.test.ts'"
