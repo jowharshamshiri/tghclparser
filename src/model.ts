@@ -1,6 +1,6 @@
 import type { Location, Position } from 'vscode-languageserver';
 
-import type { LocationRange } from './terragrunt-parser';
+import type { LocationRange } from './parser';
 
 export class AnError extends Error {
 	constructor(message: string) {

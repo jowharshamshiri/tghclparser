@@ -1,0 +1,149 @@
+svg {
+	background-color: #f8f9fa;
+	padding: 20px;
+	transition: all 0.3s ease;
+  }
+  
+  path {
+	stroke-width: 2.5;
+	stroke: #2d3436;
+	fill: transparent;
+	transition: all 0.2s ease;
+  }
+  
+  text {
+	font-family: 'Fira Code', 'Consolas', monospace;
+	font-weight: 500;
+	font-size: 14px;
+	text-anchor: middle;
+	white-space: pre;
+	fill: #2d3436;
+  }
+  
+  text.diagram-text {
+	font-size: 13px;
+	letter-spacing: 0.5px;
+  }
+  
+  text.diagram-arrow {
+	font-size: 16px;
+	font-weight: 600;
+  }
+  
+  text.label {
+	text-anchor: start;
+	fill: #636e72;
+  }
+  
+  text.comment {
+	font-style: italic;
+	font-size: 12px;
+	fill: #636e72;
+  }
+  
+  g.non-terminal text {
+	font-style: normal;
+	font-weight: 500;
+  }
+  
+  rect {
+	stroke-width: 2;
+	stroke: #00b894;
+	fill: #55efc4;
+	rx: 4;
+	ry: 4;
+	transition: all 0.2s ease;
+  }
+  
+  rect.group-box {
+	stroke: #b2bec3;
+	stroke-dasharray: 6 4;
+	fill: none;
+	rx: 6;
+	ry: 6;
+  }
+  
+  path.diagram-text {
+	stroke-width: 2;
+	stroke: #2d3436;
+	fill: #fff;
+	cursor: help;
+	filter: drop-shadow(0 2px 3px rgba(0,0,0,0.1));
+  }
+  
+  .decision path {
+	fill: #dfe6e9;
+  }
+  
+  g.diagram-text:hover path.diagram-text {
+	fill: #f1f2f6;
+	filter: drop-shadow(0 3px 6px rgba(0,0,0,0.15));
+  }
+  
+  text.repeat-text {
+	font-style: italic;
+	font-size: 12px;
+	text-anchor: end;
+	fill: #636e72;
+  }
+  
+  .repeat-box > rect.group-box {
+	stroke: #b2bec3;
+	stroke-width: 1.5;
+	stroke-dasharray: 4 3;
+	fill: none;
+  }
+  
+  .delimiter > rect.group-box {
+	stroke: #b2bec3;
+	stroke-width: 1.5;
+	stroke-dasharray: 4 3;
+	fill: none;
+  }
+  
+  /* Hover effects */
+  rect:hover {
+	fill: #00b894;
+	filter: drop-shadow(0 2px 4px rgba(0,0,0,0.1));
+  }
+  
+  g:hover path {
+	stroke-width: 3;
+  }
+  
+  /* Dark mode support */
+  @media (prefers-color-scheme: dark) {
+	svg {
+	  background-color: #2d3436;
+	}
+	
+	path {
+	  stroke: #dfe6e9;
+	}
+	
+	text {
+	  fill: #dfe6e9;
+	}
+	
+	rect {
+	  stroke: #00b894;
+	  fill: #006b5a;
+	}
+	
+	rect.group-box {
+	  stroke: #636e72;
+	}
+	
+	path.diagram-text {
+	  stroke: #dfe6e9;
+	  fill: #2d3436;
+	}
+	
+	.decision path {
+	  fill: #636e72;
+	}
+	
+	g.diagram-text:hover path.diagram-text {
+	  fill: #2d3436;
+	}
+  }
