@@ -5,12 +5,12 @@ import { URI } from 'vscode-uri';
 
 import type { FunctionContext, ResolvedReference, RuntimeValue, TerragruntConfig, TokenType, ValueType } from './model';
 import { Token } from './model';
+import { parse as tg_parse, SyntaxError } from './parser';
 import { CompletionsProvider } from './providers/CompletionsProvider';
 import { DiagnosticsProvider } from './providers/DiagnosticsProvider';
 import { HoverProvider } from './providers/HoverProvider';
 import { LinkProvider } from './providers/LinkProvider';
 import { Schema } from './Schema';
-import { parse as tg_parse, SyntaxError } from './terragrunt-parser';
 import { StateManager } from './tf/StateManager';
 import type { Workspace } from './Workspace';
 
