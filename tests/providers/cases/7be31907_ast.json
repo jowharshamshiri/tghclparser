@@ -1,0 +1,171 @@
+{
+  "id": 12,
+  "type": "root",
+  "location": {
+    "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/global/terragrunt.hcl",
+    "start": {
+      "offset": 0,
+      "line": 1,
+      "column": 1
+    },
+    "end": {
+      "offset": 107,
+      "line": 9,
+      "column": 1
+    }
+  },
+  "children": [
+    {
+      "id": 11,
+      "type": "block",
+      "value": "include",
+      "location": {
+        "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/global/terragrunt.hcl",
+        "start": {
+          "offset": 0,
+          "line": 1,
+          "column": 1
+        },
+        "end": {
+          "offset": 52,
+          "line": 3,
+          "column": 2
+        }
+      },
+      "children": [
+        {
+          "id": 2,
+          "type": "block_identifier",
+          "value": "include",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/global/terragrunt.hcl",
+            "start": {
+              "offset": 0,
+              "line": 1,
+              "column": 1
+            },
+            "end": {
+              "offset": 7,
+              "line": 1,
+              "column": 8
+            }
+          }
+        },
+        {
+          "id": 4,
+          "type": "parameter",
+          "value": "root",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/global/terragrunt.hcl",
+            "start": {
+              "offset": 8,
+              "line": 1,
+              "column": 9
+            },
+            "end": {
+              "offset": 14,
+              "line": 1,
+              "column": 15
+            }
+          },
+          "children": [
+            {
+              "id": 3,
+              "type": "string_lit",
+              "value": "root",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/global/terragrunt.hcl",
+                "start": {
+                  "offset": 8,
+                  "line": 1,
+                  "column": 9
+                },
+                "end": {
+                  "offset": 14,
+                  "line": 1,
+                  "column": 15
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": 10,
+          "type": "attribute",
+          "value": "path",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/global/terragrunt.hcl",
+            "start": {
+              "offset": 19,
+              "line": 2,
+              "column": 3
+            },
+            "end": {
+              "offset": 51,
+              "line": 3,
+              "column": 1
+            }
+          },
+          "children": [
+            {
+              "id": 5,
+              "type": "attribute_identifier",
+              "value": "path",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/global/terragrunt.hcl",
+                "start": {
+                  "offset": 19,
+                  "line": 2,
+                  "column": 3
+                },
+                "end": {
+                  "offset": 23,
+                  "line": 2,
+                  "column": 7
+                }
+              }
+            },
+            {
+              "id": 9,
+              "type": "function_call",
+              "value": "find_in_parent_folders",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/global/terragrunt.hcl",
+                "start": {
+                  "offset": 26,
+                  "line": 2,
+                  "column": 10
+                },
+                "end": {
+                  "offset": 50,
+                  "line": 2,
+                  "column": 34
+                }
+              },
+              "children": [
+                {
+                  "id": 8,
+                  "type": "function_identifier",
+                  "value": "find_in_parent_folders",
+                  "location": {
+                    "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/global/terragrunt.hcl",
+                    "start": {
+                      "offset": 26,
+                      "line": 2,
+                      "column": 10
+                    },
+                    "end": {
+                      "offset": 48,
+                      "line": 2,
+                      "column": 32
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -44,7 +44,7 @@
 		"parser": "peggy --format 'es' --dts --dependency \"{Schema}:./Schema\" --trace --output src/parser.js grammar.peggy && npm run build && peggy-tracks -c peggy.css -d 5 grammar.peggy",
 		"prepare": "npm run build",
 		"prepublishOnly": "npm test && npm run lint",
-		"test": "mocha -r ts-node/register --loader=ts-node/esm 'tests/**/*.test.ts'"
+		"test": "tsx node_modules/.bin/mocha 'tests/**/*.test.ts'"
 	},
 	"peerDependencies": {
 		"typescript": ">=4.7.0"
@@ -62,6 +62,7 @@
 		"vscode-uri": "^3.1.0"
 	},
 	"devDependencies": {
+		"@types/chai": "^5.0.1",
 		"@types/js-yaml": "^4.0.9",
 		"@types/lodash-es": "4.17.12",
 		"@types/mocha": "^10.0.10",
@@ -71,12 +72,12 @@
 		"eslint": "9.15.0",
 		"eslint-config-hyoban": "3.1.13",
 		"lint-staged": "15.2.10",
-		"mocha": "^10.3.0",
+		"mocha": "^10.8.2",
 		"peggy": "^4.2.0",
 		"prettier": "^3.3.3",
 		"simple-git-hooks": "2.11.1",
-		"ts-node": "^10.9.2",
 		"tsup": "^8.0.2",
+		"tsx": "^4.7.0",
 		"typescript": "^5.7.3"
 	},
 	"lint-staged": {
@@ -86,9 +87,6 @@
 		"*.{js,ts,cjs,mjs}": [
 			"eslint --fix"
 		]
-	},
-	"ts-node": {
-		"esm": true
 	},
 	"source": "./src/index.ts"
 }
