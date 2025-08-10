@@ -2,6 +2,10 @@
 
 A powerful and efficient parser for Terragrunt HCL (HashiCorp Configuration Language) files. This library provides convenience features and tools for parsing and analyzing Terragrunt configuration files. The parser is available as an npm package that can be integrated into your projects.
 
+[![npm version](https://img.shields.io/npm/v/tghclparser.svg)](https://www.npmjs.com/package/tghclparser)
+[![npm downloads](https://img.shields.io/npm/dm/tghclparser.svg)](https://www.npmjs.com/package/tghclparser)
+[![License](https://img.shields.io/npm/l/tghclparser.svg)](LICENSE)
+
 This parser is under active development and new features are being added regularly. Please report any issues or feature requests in the [GitHub repository](https://github.com/jowharshamshiri/tghclparser/issues). 🚀🚀🚀
 
 If you found this helpful, consider supporting my work with a [tip](https://ko-fi.com/jowharshamshiri). Your support helps me create more quality tools.

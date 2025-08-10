@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 
 import type { CompletionItem, Diagnostic, DocumentLink, MarkupContent, Position } from 'vscode-languageserver';
@@ -932,6 +934,15 @@ export class ParsedDocument {
 			this.ast = tg_parse(this.content, { grammarSource: this.uri });
 			// console.log('AST:', this.removeCircularReferences(this.ast));
 			this.tokens = [this.parseNode(this.ast)];
+
+			//hash the uri
+			const uriHash = crypto.createHash('md5').
+				update(this.uri).
+				digest('hex').slice(0, 8);
+			//write ast to file
+			fs.writeFileSync(`/tmp/${uriHash}_ast.json`, JSON.stringify(this.ast, null, 2));
+			//write tokens to file
+			fs.writeFileSync(`/tmp/${uriHash}_content.hcl`, this.content);
 
 			this.diagnostics = this.diagnosticsProvider.getDiagnostics(this);
 		} catch (error) {
