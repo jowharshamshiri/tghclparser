@@ -1,5 +1,4 @@
 {
-  let debugEnabled = false;
   let heredocMarkerStack = [];
   let nextId = 1;
 
@@ -38,37 +37,6 @@
   	return result;
   }
 
-  function debugLog(rule, text, pos, context = {}) {
-    if (debugEnabled) {
-      let preview = '';
-      // Check if text is a string
-      if (typeof text == 'string') {
-        preview = text?.substring(Math.max(0, pos - 20), pos + 20)
-          .replace(/\n/g, '\\n');
-      } else {
-        if (typeof text == 'function') {
-          preview = text().substring(Math.max(0, pos - 20), pos + 20);
-        } else {
-          preview = '';
-          console.log('text is not a function, it is a ' + typeof text);
-        }
-      }
-      const positionMarker = '→';
-      const markerPos = Math.min(20, pos);
-
-      const contextInfo = Object.entries(context)
-        .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
-        .join(', ');
-
-      console.log(
-        `[${rule}] at pos ${pos}\n` +
-        `Context: ${contextInfo}\n` +
-        `${preview.slice(0, markerPos)}${positionMarker}${preview.slice(markerPos)}\n` +
-        `${' '.repeat(markerPos)}${positionMarker}\n`
-      );
-    }
-  }
-
   function getNextId() {
     return nextId++;
   }
@@ -82,10 +50,6 @@
       ...(children.length > 0 && { children })
     };
 
-    if (debugEnabled) {
-      console.log('Created Node:', JSON.stringify(node, null, 2));
-    }
-
     return node;
   }
 
@@ -95,7 +59,6 @@
 }
 
 Start = _ statements:Statement* _ {
-  debugLog('Start', text, location().start.offset, { statementsCount: statements.length });
   return makeNode('root', null, location(), statements);
 }
 
@@ -129,7 +92,7 @@ Block = _ name:BlockIdentifier _ params:BlockParameter* _ metaArgs:MetaArguments
   ]);
 }
 
-BlockItems = items:(
+BlockItems = items:(item:(
   Pair /
   ParameterizedBlock /
   DynamicBlock /
@@ -139,7 +102,7 @@ BlockItems = items:(
   ImportBlock /
   LocalsBlock /
   Block
-)* {
+) _ { return item; })* {
   return items;
 }
 MovedBlock = "moved" _ "{" _
@@ -239,6 +202,7 @@ PrimaryExpression =
   StringLiteral /
   Number /
   Boolean /
+  Null /
   FunctionCall /
   Reference /
   "(" _ expr:Expression _ ")" { return expr; } /
@@ -261,7 +225,8 @@ Reference = !FunctionCall ref:(
   TerraformReference /
   VarReference /
   DataReference /
-  PathReference
+  PathReference /
+  GenericReference
 ) {
   return ref;
 }
@@ -361,6 +326,14 @@ PathReference =
     ]);
 }
 
+GenericReference = namespace:ReferenceIdentifier chain:("." ReferenceIdentifier)+ {
+  const accessChain = chain.map(c => c[1]);
+  return makeNode('reference', namespace.value, location(), [
+    makeNode('namespace', namespace.value, namespace.location),
+    makeNode('access_chain', null, location(), accessChain)
+  ]);
+}
+
 ReferenceChain = head:ReferenceIdentifier tail:("." ReferenceIdentifier)* {
   return [head, ...tail.map(t => t[1])];
 }
@@ -395,7 +368,7 @@ Object = "{" _ pairs:(Pair (_ ","? _ Pair)* (_ ",")?)? _ "}" {
   return makeNode('object', null, location(), values);
 }
 
-StringLiteral = QuotedString / SingleQuotedString / Heredoc
+StringLiteral = QuotedString / Heredoc
 Heredoc = "<<" trim:"-"? marker:beginMarker newline content:heredocContent endMarkerLine {
   popHeredocMarker();
   
@@ -500,44 +473,16 @@ QuotedString = '"' chars:DoubleStringChar* '"' {
   );
 }
 
-SingleQuotedString = "'" chars:SingleStringChar* "'" {
-  // Use same consolidation logic as QuotedString
-  const consolidated = consolidateStringChars(chars);
-  
-  if (consolidated.length === 1 && typeof consolidated[0] === 'string') {
-    return makeNode('string_lit', consolidated[0], location());
-  }
-  
-  if (consolidated.every(c => typeof c === 'string')) {
-    return makeNode('string_lit', consolidated.join(''), location());
-  }
-  
-  return makeNode('interpolated_string', null, location(),
-    consolidated.map(c => {
-      if (typeof c === 'string') {
-        return makeNode('string_lit', c, location());
-      }
-      return c;
-    })
-  );
-}
-
-DoubleStringChar = 
-  [^"\\${%] / 
-  EscapedChar / 
-  InterpolatedExpr
-
-SingleStringChar = 
-  [^'\\${%] / 
-  EscapedChar / 
-  InterpolatedExpr
+DoubleStringChar =
+  InterpolatedExpr /
+  EscapedChar /
+  [^"\\]
 
 EscapeSequence = "\\" . { return text(); }
 EscapedChar = "\\" . { return text(); }
 InterpolatedExpr = (
-  SimpleInterpolation /
   DirectiveInterpolation /
-  LegacyInterpolation
+  TemplateInterpolation
 )
 
 StringContent = chars:(
@@ -561,11 +506,7 @@ StringContent = chars:(
   );
 }
 
-LegacyInterpolation = "${" expr:Expression "}" {
-  return makeNode('legacy_interpolation', null, location(), [expr]);
-}
-
-SimpleInterpolation = "%{" _ expr:Expression _ "}" {
+TemplateInterpolation = "${" expr:Expression "}" {
   return makeNode('interpolation', null, location(), [expr]);
 }
 
@@ -619,6 +560,8 @@ Exponent = [eE] [+-]? [0-9]+
 Boolean = val:("true" / "false") { 
   return makeNode('boolean_lit', val === 'true', location()); 
 }
+
+Null = "null" { return makeNode('null_lit', null, location()); }
 
 Array = "[" _ items:(ArrayItem (_ "," _ ArrayItem)* (_ ",")?)? _ "]" {
   const values = items ? [items[0], ...items[1].map(item => item[3])] : [];

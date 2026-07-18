@@ -15,21 +15,13 @@
     "moduleResolution": "Node",
     "resolveJsonModule": true,
     "isolatedModules": true,
-	"esModuleInterop": true,
+    "esModuleInterop": true,
     "skipDefaultLibCheck": true,
     "noImplicitAny": false,
     "noEmit": true,
-    "jsx": "preserve",
-    "paths": {
-      "~/*": [
-        "./src/*"
-      ],
-      "@pkg": [
-        "./package.json"
-      ]
-    },
+    "jsx": "preserve"
   },
   "include": [
-    "./src/**/*",
+    "./src/**/*"
   ]
 }

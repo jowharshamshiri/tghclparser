@@ -29,76 +29,27 @@ async function findParentWithFile(
     includeStart = true
 ): Promise<string | null> {
     let currentDir = path.resolve(startDir);
-    const maxDepth = 100;
-    let depth = 0;
-
     if (!context.fs?.access) {
-        // console.warn('No fs.access provided in context');
-        return null;
+		throw new Error('Filesystem access is required to resolve parent files');
     }
 
     if (!includeStart) {
         currentDir = path.dirname(currentDir);
     }
 
-    while (depth < maxDepth) {
+    while (true) {
         try {
             const filePath = path.join(currentDir, filename);
-            // console.log(`Checking directory for ${filename}:`, currentDir);
-            
-            // Check if file exists
             await context.fs.access(filePath);
-            
-            // Check if this is a project root
-            const isProjectRoot = await isRoot(currentDir, context.fs);
-            
-            // If this is the project root or we're at filesystem root, return immediately
-            if (isProjectRoot || currentDir === path.dirname(currentDir)) {
-                // console.log('Found file at root:', filePath);
-                return filePath;
-            }
-            
-            // Store this as candidate but keep going up
-            const parentDir = path.dirname(currentDir);
-            if (parentDir === currentDir) {
-                // console.log('Found file at filesystem root:', filePath);
-                return filePath;
-            }
-            currentDir = parentDir;
-        } catch {
+            return filePath;
+        } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
             const parentDir = path.dirname(currentDir);
             if (parentDir === currentDir) {
                 return null;
             }
             currentDir = parentDir;
-        }
-        depth++;
-    }
-    
-    return null;
-}
-// Helper function to detect if a directory is the root of our project
-async function isRoot(dir: string, fs: { access: (path: string) => Promise<void> }): Promise<boolean> {
-    try {
-        // Try to access a combination of files that would indicate this is our project root
-        await fs.access(path.join(dir, '.git'));
-        return true;
-    } catch {
-        try {
-            // Check for terragrunt.hcl and no parent terragrunt.hcl
-            const hasTerragrunt = await fs.access(path.join(dir, 'terragrunt.hcl'));
-            const parentDir = path.dirname(dir);
-            if (parentDir === dir) {
-                return hasTerragrunt !== undefined;
-            }
-            try {
-                await fs.access(path.join(parentDir, 'terragrunt.hcl'));
-                return false;
-            } catch {
-                return hasTerragrunt !== undefined;
-            }
-        } catch {
-            return false;
         }
     }
 }
@@ -114,88 +65,26 @@ export const coreFunctionGroup = {
             return makeStringValue(dirPath);
         },
 
-        get_parent_terragrunt_dir: async (
-            _args: RuntimeValue<ValueType>[],
-            context: FunctionContext
-        ): Promise<RuntimeValue<ValueType>> => {
-            const configPath = context.document.uri;
-            const currentDir = path.dirname(URI.parse(configPath).fsPath);
-            
-            const parentTerragruntDir = await findParentWithFile(currentDir, 'terragrunt.hcl', context, false);
-            if (!parentTerragruntDir) {
-                throw new Error('No parent terragrunt.hcl file found');
-            }
-            
-            return makeStringValue(parentTerragruntDir);
-        },
-
-        path_relative_to_include: async (
-            _args: RuntimeValue<ValueType>[],
-            context: FunctionContext
-        ): Promise<RuntimeValue<ValueType>> => {
-            if (!context.includedFrom) {
-                throw new Error('path_relative_to_include can only be called from an included config');
-            }
-            
-            const currentPath = path.dirname(URI.parse(context.document.uri).fsPath);
-            const includedFromPath = path.dirname(URI.parse(context.includedFrom).fsPath);
-            
-            // Get the relative path from the included config to the current config
-            const relativePath = path.relative(includedFromPath, currentPath);
-            return makeStringValue(relativePath || '.');
-        },
-
-        path_relative_from_include: async (
-            _args: RuntimeValue<ValueType>[],
-            context: FunctionContext
-        ): Promise<RuntimeValue<ValueType>> => {
-            if (!context.includedFrom) {
-                throw new Error('path_relative_from_include can only be called from an included config');
-            }
-            
-            const currentPath = path.dirname(URI.parse(context.document.uri).fsPath);
-            const includedFromPath = path.dirname(URI.parse(context.includedFrom).fsPath);
-            
-            // Get the relative path from the current config to the included config
-            const relativePath = path.relative(currentPath, includedFromPath);
-            return makeStringValue(relativePath || '.');
-        },
-
         find_in_parent_folders: async (
             args: RuntimeValue<ValueType>[],
             context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
-            // console.log(`find_in_parent_folders called with args:`, args);
-            // console.log(`context:`, {
-            //     workingDirectory: context.workingDirectory,
-            //     uri: context.document.uri
-            // });
-
-            const fileToFind = args[0]?.type === 'string' ? String(args[0].value) : 'terragrunt.hcl';
+			if (args[0]?.type !== 'string' || !args[0].value) {
+				throw new Error('find_in_parent_folders requires an explicit filename');
+			}
+			const fileToFind = String(args[0].value);
             const fallback = args[1]?.type === 'string' ? String(args[1].value) : undefined;
             
-            try {
-                const currentDir = path.dirname(URI.parse(context.document.uri).fsPath);
-                const foundDir = await findParentWithFile(currentDir, fileToFind, context, true);
+			const currentDir = path.dirname(URI.parse(context.document.uri).fsPath);
+			const foundDir = await findParentWithFile(currentDir, fileToFind, context, true);
                 
-                if (!foundDir) {
-                    // console.log(`No parent directory found containing:`, fileToFind);
-                    if (fallback !== undefined) {
-                        return makeStringValue(fallback);
-                    }
-                    throw new Error(`Could not find ${fileToFind} in parent folders`);
-                }
-                
-                // const result = path.join(foundDir, fileToFind);
-                // console.log(`Found file at:`, foundDir);
-                return makeStringValue(foundDir);
-            } catch (error) {
-                // console.error(`Error in find_in_parent_folders:`, error);
-                if (fallback !== undefined) {
-                    return makeStringValue(fallback);
-                }
-                throw error;
-            }
+			if (!foundDir) {
+				if (fallback !== undefined) {
+					return makeStringValue(fallback);
+				}
+				throw new Error(`Could not find ${fileToFind} in parent folders`);
+			}
+			return makeStringValue(foundDir);
         },
         get_terraform_commands_that_need_vars: async (
             _args: RuntimeValue<ValueType>[],
@@ -229,14 +118,16 @@ export const coreFunctionGroup = {
             _args: RuntimeValue<ValueType>[],
             context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
-            return makeStringValue(context.terraformCommand || '');
+			if (context.terraformCommand === undefined) throw new Error('Terraform command context is unavailable');
+			return makeStringValue(context.terraformCommand);
         },
 
         get_terraform_cli_args: async (
             _args: RuntimeValue<ValueType>[],
             context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
-            const cliArgs = context.terraformCliArgs || [];
+			if (context.terraformCliArgs === undefined) throw new Error('Terraform CLI argument context is unavailable');
+			const cliArgs = context.terraformCliArgs;
             return makeArrayValue(cliArgs.map(arg => makeStringValue(arg)));
         },
 
@@ -262,10 +153,12 @@ export const coreFunctionGroup = {
             }
 
             const envName = String(args[0].value);
-            const defaultValue = args[1]?.type === 'string' ? String(args[1].value) : '';
+			const defaultValue = args[1]?.type === 'string' ? String(args[1].value) : undefined;
 
-            const envValue = context.environmentVariables[envName];
-            return makeStringValue(envValue ?? defaultValue);
+			const envValue = context.environmentVariables[envName];
+			if (envValue !== undefined) return makeStringValue(envValue);
+			if (defaultValue !== undefined) return makeStringValue(defaultValue);
+			throw new Error(`Required environment variable ${envName} is not set`);
         }
     }
 };

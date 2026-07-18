@@ -41,13 +41,13 @@ export type TokenType =
 	| 'string_lit'
 	| 'number_lit'
 	| 'boolean_lit'
+	| 'null_lit'
 	| 'array_lit'
 	| 'object'
 
 	// References and interpolation
 	| 'reference'
 	| 'interpolation'
-	| 'legacy_interpolation'
 	| 'interpolated_string'
 	| 'string_content'
 
@@ -110,6 +110,8 @@ export type ValueType =
 	| ComplexValueType
 	| ExpressionValueType;
 
+export type TerragruntFileKind = 'unit' | 'stack' | 'values' | 'unit-autoinclude' | 'stack-autoinclude';
+
 export type PrimitiveValueType =
 	| 'string'
 	| 'number'
@@ -138,7 +140,6 @@ export type ExpressionValueType =
 	| 'list_comprehension'
 	| 'map_comprehension'
 	| 'interpolation'
-	| 'legacy_interpolation'
 	| 'reference';
 
 export class Token {
@@ -246,6 +247,7 @@ export interface AttributeDefinition {
 	attributes?: AttributeDefinition[];
 	deprecated?: boolean;
 	deprecationMessage?: string;
+	fileKinds?: TerragruntFileKind[];
 }
 
 export interface ParameterDefinition {
@@ -270,6 +272,7 @@ export interface BlockDefinition {
 	max?: number;
 	description?: string;
 	arbitraryAttributes?: boolean;
+	fileKinds?: TerragruntFileKind[];
 	validation?: {
 		requiredAttributes?: string[];
 		mutuallyExclusive?: string[][];
@@ -374,7 +377,6 @@ export interface FunctionContext {
 	fs?: {
 		access: (path: string) => Promise<void>;
 	};
-	includedFrom?: string;  // URI of the config file that included this one
 }
 
 export interface FunctionGroup {
@@ -392,13 +394,13 @@ export interface TerragruntConfig {
 	dependencies: string[];       // URIs of explicit dependencies
 	referencedBy: string[];      // URIs of configs that include/depend on this one
 
-	// Dependency-specific info (from old DependencyInfo)
+	// Relationship source and target metadata
 	sourcePath: string;          // Path of the config file containing the dependency reference
 	targetPath: string;          // Resolved path of the dependency target
 	block?: Token;              // Token containing the dependency or include block
 
 	// Additional metadata
-	dependencyType: 'include' | 'dependency';  // Whether this is an include or dependency relationship
+	dependencyType: 'root' | 'include' | 'dependency' | 'stack' | 'unit';
 	parameterValue?: string;    // For dependencies, the name parameter value
 
 	outputs?: Map<string, RuntimeValue<ValueType>>;

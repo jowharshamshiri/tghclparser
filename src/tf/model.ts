@@ -1,6 +1,6 @@
 export interface TerraformStateOutput {
     value: any;
-    type: string;
+    type: string | [string, unknown];
     sensitive?: boolean;
 }
 

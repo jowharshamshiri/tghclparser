@@ -44,7 +44,6 @@ export class AWSHelper {
             this.credentials = await credentialProvider();
             return this.credentials;
         } catch (err) {
-            console.error('Error getting AWS credentials:', err);
             throw new Error(`Failed to get AWS credentials: ${err}`);
         }
     }
@@ -89,9 +88,9 @@ export const awsFunctionGroup = {
                 const client = getSTSClient();
                 const command = new GetCallerIdentityCommand({});
                 const response = await client.send(command);
-                return makeStringValue(response.Account || '');
+                if (!response.Account) throw new Error('AWS STS response omitted Account');
+                return makeStringValue(response.Account);
             } catch (err) {
-                console.error('Error getting AWS Account ID:', err);
                 throw new Error(`Failed to get AWS Account ID: ${err}`);
             }
         },
@@ -104,9 +103,10 @@ export const awsFunctionGroup = {
                 const client = getIAMClient();
                 const command = new ListAccountAliasesCommand({});
                 const response = await client.send(command);
-                return makeStringValue(response.AccountAliases?.[0] || '');
+                const alias = response.AccountAliases?.[0];
+                if (!alias) throw new Error('AWS account has no alias');
+                return makeStringValue(alias);
             } catch (err) {
-                console.error('Error getting AWS Account Alias:', err);
                 throw new Error(`Failed to get AWS Account Alias: ${err}`);
             }
         },
@@ -119,9 +119,9 @@ export const awsFunctionGroup = {
                 const client = getSTSClient();
                 const command = new GetCallerIdentityCommand({});
                 const response = await client.send(command);
-                return makeStringValue(response.Arn || '');
+                if (!response.Arn) throw new Error('AWS STS response omitted Arn');
+                return makeStringValue(response.Arn);
             } catch (err) {
-                console.error('Error getting AWS Caller Identity ARN:', err);
                 throw new Error(`Failed to get AWS Caller Identity ARN: ${err}`);
             }
         },
@@ -134,9 +134,9 @@ export const awsFunctionGroup = {
                 const client = getSTSClient();
                 const command = new GetCallerIdentityCommand({});
                 const response = await client.send(command);
-                return makeStringValue(response.UserId || '');
+                if (!response.UserId) throw new Error('AWS STS response omitted UserId');
+                return makeStringValue(response.UserId);
             } catch (err) {
-                console.error('Error getting AWS Caller Identity User ID:', err);
                 throw new Error(`Failed to get AWS Caller Identity User ID: ${err}`);
             }
         }

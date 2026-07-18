@@ -28,7 +28,6 @@ export class FunctionRegistry {
 
     registerFunctionGroup(group: FunctionGroup) {
         if (this.functionGroups.has(group.namespace)) {
-            console.log(`Function group ${group.namespace} already registered`);
             return;
         }
 
@@ -44,20 +43,14 @@ export class FunctionRegistry {
         name: string,
         args: RuntimeValue<ValueType>[],
         context: FunctionContext
-    ): Promise<RuntimeValue<ValueType> | undefined> {
-		// console.log(`Evaluating function "${name}" with args:`, args,context);
+    ): Promise<RuntimeValue<ValueType>> {
         const implementation = this.functions.get(name);
         if (!implementation) {
-            console.warn(`Function "${name}" not implemented`);
-            return undefined;
+            throw new Error(`Terragrunt function "${name}" is known by the language schema but has no local evaluator`);
         }
-
-        try {
-            return await implementation(args, context);
-        } catch (error) {
-            console.error(`Error evaluating function "${name}":`, error);
-            throw error;
-        }
+        const value = await implementation(args, context);
+        if (!value) throw new Error(`Terragrunt function "${name}" returned no value`);
+        return value;
     }
 
     getFunctionNames(): string[] {

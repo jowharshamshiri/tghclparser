@@ -1,11 +1,9 @@
-import * as fsSync from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
-import { DiagnosticSeverity } from 'vscode-languageserver-types';
 import { URI } from 'vscode-uri';
 
-import type { FunctionContext, RuntimeValue, TerragruntConfig, Token, ValueType } from './model';
+import type { FunctionContext, TerragruntConfig, Token } from './model';
 import { createDependencyConfig, createIncludeConfig, TreeNode } from './model';
 import { ParsedDocument } from './ParsedDocument';
 import { Schema } from './Schema';
@@ -43,16 +41,37 @@ export class Workspace {
 				sourcePath: URI.parse(uri).fsPath,
 				targetPath: URI.parse(uri).fsPath,
 				block: undefined,
-				dependencyType: 'include',
+				dependencyType: 'root',
 				parameterValue: undefined
 			};
 			this.configMap.set(uri, currentConfig);
 		}
+		currentConfig.content = doc.getContent();
+		for (const previousTarget of [...currentConfig.includes, ...currentConfig.dependencies]) {
+			const target = this.configMap.get(previousTarget);
+			if (!target) continue;
+			target.referencedBy = target.referencedBy.filter(reference => reference !== uri);
+			if (target.dependencyType === 'unit' || target.dependencyType === 'stack') {
+				for (const childUri of target.dependencies) {
+					const child = this.configMap.get(childUri);
+					if (child) child.referencedBy = child.referencedBy.filter(reference => reference !== target.uri);
+				}
+				target.dependencies = [];
+			}
+			if (!this.documents.has(previousTarget) && target.referencedBy.length === 0 && (target.dependencyType === 'unit' || target.dependencyType === 'stack')) {
+				this.configMap.delete(previousTarget);
+			}
+		}
+		currentConfig.includes = [];
+		currentConfig.dependencies = [];
 
 		// Process includes
 		const includes = doc.findIncludeBlocks(ast);
 		const includePaths = await Promise.all(includes.map(async inc => {
 			const resolvedPath = await this.resolveIncludePath(inc.path, uri);
+			if (!await this.fileExists(URI.parse(resolvedPath).fsPath)) {
+				throw new Error(`Included configuration not found: ${URI.parse(resolvedPath).fsPath}`);
+			}
 
 			// Create or update the included config
 			let includedConfig = this.configMap.get(resolvedPath);
@@ -78,47 +97,84 @@ export class Workspace {
 			return resolvedPath;
 		}));
 
-		// Process dependencies
+		// Explicit stack components are graph edges even before `terragrunt stack generate`
+		// materializes their target files.
+		const componentPaths: string[] = [];
+		if (this.schema.getFileKind(uri) === 'stack') {
+			const rootToken = doc.getTokens()[0];
+			for (const block of rootToken?.children.filter(child => child.type === 'block' && (child.value === 'unit' || child.value === 'stack')) ?? []) {
+				const targetUri = this.stackComponentTarget(block, uri);
+				const sourceAttribute = block.children.find(child => child.type === 'attribute' && child.value === 'source');
+				const sourceValue = sourceAttribute?.children.find(child => child.type !== 'attribute_identifier');
+				if (!sourceValue) throw new Error(`${block.value} "${this.getDependencyName(block) ?? ''}" requires source`);
+				const source = sourceValue.getDisplayText();
+				let component = this.configMap.get(targetUri);
+				if (!component) {
+					component = {
+						uri: targetUri,
+						content: source,
+						includes: [],
+						dependencies: [],
+						referencedBy: [uri],
+						sourcePath: source,
+						targetPath: URI.parse(targetUri).fsPath,
+						block,
+						dependencyType: block.value as 'unit' | 'stack',
+						parameterValue: this.getDependencyName(block)
+					};
+					this.configMap.set(targetUri, component);
+				} else {
+					if (component.dependencyType !== block.value || component.parameterValue !== this.getDependencyName(block) || component.sourcePath !== source) {
+						throw new Error(`Conflicting generated stack component target: ${URI.parse(targetUri).fsPath}`);
+					}
+					if (!component.referencedBy.includes(uri)) component.referencedBy.push(uri);
+				}
+				componentPaths.push(targetUri);
+			}
+		}
+
+		// Dependencies inside a stack component's autoinclude body belong to that
+		// generated component, not to the stack file that declares the component.
 		const dependencyEntries = await doc.findDependencyBlocks(ast);
-		// console.log('Found outputs for dependencies:', dependencyEntries.map(dep => dep.outputs));
-		const dependencyPaths = await Promise.all(dependencyEntries.map(async dep => {
+		const dependencyPaths: string[] = [];
+		for (const dep of dependencyEntries) {
 			const resolvedPath = await this.resolveDependencyPath(dep.path, uri);
 			const exists = await this.fileExists(URI.parse(resolvedPath).fsPath);
-			if (!exists) {
-				console.warn(`Warning: Dependency ${resolvedPath} not found`);
-				return;
-			}
-			const content = await fs.readFile(URI.parse(resolvedPath).fsPath, 'utf-8');
-			// Create or update the dependency config
 			let depConfig = this.configMap.get(resolvedPath);
+			let content = depConfig?.content ?? '';
+			let outputs = depConfig?.outputs ?? new Map();
+			if (exists) {
+				content = await fs.readFile(URI.parse(resolvedPath).fsPath, 'utf-8');
+				const dependencyDocument = await this.getParsedDocument(resolvedPath);
+				if (!dependencyDocument) throw new Error(`Unable to parse dependency configuration: ${URI.parse(resolvedPath).fsPath}`);
+				outputs = await dependencyDocument.getAllOutputs();
+			} else if (!depConfig) {
+				throw new Error(`Dependency configuration not found: ${URI.parse(resolvedPath).fsPath}`);
+			}
+
 			if (!depConfig) {
-				depConfig = createDependencyConfig(
-					resolvedPath,
-					content,
-					uri,
-					resolvedPath,
-					dep.block,
-					dep.parameter,
-					dep.outputs
-				);
+				depConfig = createDependencyConfig(resolvedPath, content, uri, resolvedPath, dep.block, dep.parameter, outputs);
 				this.configMap.set(resolvedPath, depConfig);
-			} else if (dep.outputs) {
-				// Update outputs even if config exists
-				depConfig.outputs = dep.outputs;
-			}
+			} else depConfig.outputs = outputs;
 
-			if (!depConfig.referencedBy.includes(uri)) {
-				depConfig.referencedBy.push(uri);
+			let ownerUri = uri;
+			if (this.schema.getFileKind(uri) === 'stack' && dep.owner) {
+				if (dep.owner.value === 'stack') throw new Error('Nested stacks cannot declare dependencies through autoinclude');
+				ownerUri = this.stackComponentTarget(dep.owner, uri);
 			}
-
-			return resolvedPath;
-		}));
+			const ownerConfig = this.configMap.get(ownerUri);
+			if (!ownerConfig) throw new Error(`Dependency owner is missing from workspace graph: ${ownerUri}`);
+			if (!ownerConfig.dependencies.includes(resolvedPath)) ownerConfig.dependencies.push(resolvedPath);
+			if (!depConfig.referencedBy.includes(ownerUri)) depConfig.referencedBy.push(ownerUri);
+			if (ownerUri === uri) dependencyPaths.push(resolvedPath);
+		}
 
 		// Update current config
 		currentConfig.includes = includePaths.filter(Boolean);
-		if (dependencyPaths && dependencyPaths.length > 0) {
-			currentConfig.dependencies = dependencyPaths.filter((path): path is string => path !== undefined);
-		}
+		currentConfig.dependencies = [
+			...dependencyPaths.filter((path): path is string => path !== undefined),
+			...componentPaths
+		];
 		this.configMap.set(uri, currentConfig);
 
 		// Recursively process includes and dependencies
@@ -132,12 +188,30 @@ export class Workspace {
 		}
 	}
 
+	private stackComponentTarget(block: Token, stackUri: string): string {
+		if (block.type !== 'block' || (block.value !== 'unit' && block.value !== 'stack')) {
+			throw new Error(`Expected a unit or stack component block, got ${block.type}:${block.value}`);
+		}
+		const pathAttribute = block.children.find(child => child.type === 'attribute' && child.value === 'path');
+		const pathValue = pathAttribute?.children.find(child => child.type !== 'attribute_identifier');
+		if (pathValue?.type !== 'string_lit' || typeof pathValue.value !== 'string') {
+			throw new Error(`${block.value} "${this.getDependencyName(block) ?? ''}" requires a literal path for workspace graph resolution`);
+		}
+		const noStackAttribute = block.children.find(child => child.type === 'attribute' && child.value === 'no_dot_terragrunt_stack');
+		const noStack = noStackAttribute?.children.some(child => child.type === 'boolean_lit' && child.value === true) === true;
+		const baseDir = path.dirname(URI.parse(stackUri).fsPath);
+		const targetDir = path.resolve(noStack ? baseDir : path.join(baseDir, '.terragrunt-stack'), pathValue.value);
+		return URI.file(path.join(targetDir, block.value === 'unit' ? 'terragrunt.hcl' : 'terragrunt.stack.hcl')).toString();
+	}
+
 	private async fileExists(filePath: string): Promise<boolean> {
 		try {
 			await fs.access(filePath);
 			return true;
-		} catch {
-			return false;
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+			throw error;
 		}
 	}
 
@@ -153,26 +227,38 @@ export class Workspace {
 				break;
 			}
 			case 'interpolated_string': {
-				// Handle interpolated strings
 				const parts = await Promise.all(
 					pathToken.children.map(async child => {
-						if (child.type === 'legacy_interpolation') {
+						if (child.type === 'interpolation') {
 							const innerToken = child.children[0];
-							return await this.evaluatePathExpression(innerToken, sourceDir);
+							if (!innerToken) throw new Error('Empty dependency path interpolation');
+							return this.evaluatePathExpression(innerToken, sourceDir, sourceUri);
 						}
-						return child.value || '';
+						if (child.type === 'string_lit') return String(child.value);
+						throw new Error(`Unsupported dependency path segment: ${child.type}`);
 					})
 				);
 				configPath = parts.join('');
 				break;
 			}
 			case 'function_call': {
-				configPath = await this.evaluatePathFunction(pathToken, sourceDir);
+				configPath = await this.evaluatePathFunction(pathToken, sourceDir, sourceUri);
 				break;
 			}
-			default: {
-				configPath = pathToken.value as string || '';
+			case 'reference': {
+				const namespace = pathToken.children.find(child => child.type === 'namespace')?.value;
+				const access = pathToken.children.find(child => child.type === 'access_chain')?.children.map(child => child.value);
+				if ((namespace !== 'unit' && namespace !== 'stack') || access?.length !== 2 || access[1] !== 'path' || typeof access[0] !== 'string') {
+					throw new Error(`Dependency paths only support unit.<name>.path or stack.<name>.path references, got ${pathToken.getDisplayText()}`);
+				}
+				const sourceDocument = await this.getParsedDocument(sourceUri);
+				const component = sourceDocument?.getTokens()[0]?.children.find(child =>
+					child.type === 'block' && child.value === namespace && this.getDependencyName(child) === access[0]
+				);
+				if (!component) throw new Error(`Unknown ${namespace} component referenced by dependency path: ${access[0]}`);
+				return this.stackComponentTarget(component, sourceUri);
 			}
+			default: throw new Error(`Unsupported dependency path expression: ${pathToken.type}`);
 		}
 
 		// Resolve the final path
@@ -180,86 +266,70 @@ export class Workspace {
 			configPath :
 			path.resolve(sourceDir, configPath);
 
-		// Don't append terragrunt.hcl if already an .hcl file
+		// Explicit HCL paths are authoritative.
 		if (path.extname(resolvedPath) === '.hcl') {
 			return URI.file(resolvedPath).toString();
 		}
 
-		return URI.file(path.join(resolvedPath, 'terragrunt.hcl')).toString();
+		const unitPath = path.join(resolvedPath, 'terragrunt.hcl');
+		const stackPath = path.join(resolvedPath, 'terragrunt.stack.hcl');
+		const [hasUnit, hasStack] = await Promise.all([this.fileExists(unitPath), this.fileExists(stackPath)]);
+		if (hasUnit && hasStack) throw new Error(`Ambiguous dependency path ${resolvedPath}: both unit and stack configuration files exist`);
+		if (hasUnit) return URI.file(unitPath).toString();
+		if (hasStack) return URI.file(stackPath).toString();
+		throw new Error(`Dependency path ${resolvedPath} contains neither terragrunt.hcl nor terragrunt.stack.hcl`);
 	}
 
-	private async resolveIncludePath(pathToken: Token, sourceUri: string): Promise<string> {
+	public async resolveIncludePath(pathToken: Token, sourceUri: string): Promise<string> {
 		const sourcePath = URI.parse(sourceUri).fsPath;
 		const sourceDir = path.dirname(sourcePath);
 
-		if (pathToken.type === 'function_call' && pathToken.value === 'find_in_parent_folders') {
-			const registry = this.schema.getFunctionRegistry();
-			const context: FunctionContext = {
-				workingDirectory: sourceDir,
-				environmentVariables: process.env as Record<string, string>,
-				document: {
-					uri: sourceUri,
-					content: ''
-				},
-				fs: {
-					access: async (path: string) => fs.access(path)
-				}
-			};
-
-			try {
-				const result = await registry.evaluateFunction('find_in_parent_folders', [], context);
-				if (result?.type === 'string' && typeof result.value === 'string') {
-					// The result should already be a full path, just convert to URI
-					return URI.file(result.value).toString();
-				}
-			} catch (error) {
-				console.warn(`Error evaluating function find_in_parent_folders:`, error);
-			}
-
-			// Still fall through to default behavior if function fails
+		if (pathToken.type === 'function_call') {
+			const resolved = await this.evaluatePathFunction(pathToken, sourceDir, sourceUri);
+			if (!path.isAbsolute(resolved)) throw new Error(`Include function returned a non-absolute path: ${resolved}`);
+			return URI.file(resolved).toString();
 		}
 
-		// For string literals and interpolated strings
 		if (pathToken.type === 'string_lit' || pathToken.type === 'interpolated_string') {
-			const configPath = pathToken.value as string;
+			const configPath = pathToken.type === 'string_lit'
+				? String(pathToken.value)
+				: (await Promise.all(pathToken.children.map(async child => {
+					if (child.type === 'interpolation') {
+						const expression = child.children[0];
+						if (!expression) throw new Error('Empty include path interpolation');
+						return this.evaluatePathExpression(expression, sourceDir, sourceUri);
+					}
+					if (child.type === 'string_lit') return String(child.value);
+					throw new Error(`Unsupported include path segment: ${child.type}`);
+				}))).join('');
 			// For absolute paths use as-is, otherwise resolve relative to source
 			const resolvedPath = path.isAbsolute(configPath) ?
 				configPath :
 				path.resolve(sourceDir, configPath);
 
-			// Don't append terragrunt.hcl if already an .hcl file
-			if (path.extname(resolvedPath) === '.hcl') {
-				return URI.file(resolvedPath).toString();
-			}
-
-			// Check if terragrunt.hcl is already part of the path
-			if (resolvedPath.endsWith('terragrunt.hcl')) {
-				return URI.file(resolvedPath).toString();
-			}
-
-			return URI.file(path.join(resolvedPath, 'terragrunt.hcl')).toString();
+			if (path.extname(resolvedPath) !== '.hcl') throw new Error(`Include path must name an HCL file: ${resolvedPath}`);
+			return URI.file(resolvedPath).toString();
 		}
 
-		// Default case
-		return URI.file(path.join(sourceDir, 'terragrunt.hcl')).toString();
+		throw new Error(`Unsupported include path expression: ${pathToken.type}`);
 	}
-	private async evaluatePathExpression(token: Token, sourceDir: string): Promise<string> {
+	private async evaluatePathExpression(token: Token, sourceDir: string, sourceUri = URI.file(sourceDir).toString()): Promise<string> {
 		switch (token.type) {
 			case 'function_call': {
-				return await this.evaluatePathFunction(token, sourceDir);
+				return this.evaluatePathFunction(token, sourceDir, sourceUri);
 			}
-			default: {
-				return token.value as string || '';
+			case 'string_lit': {
+				return String(token.value);
 			}
+			default: throw new Error(`Unsupported path interpolation expression: ${token.type}`);
 		}
 	}
-	private async evaluatePathFunction(token: Token, sourceDir: string): Promise<string> {
+	private async evaluatePathFunction(token: Token, sourceDir: string, sourceUri = URI.file(sourceDir).toString()): Promise<string> {
 		const functionIdentifier = token.children.find(c => c.type === 'function_identifier');
 		const funcName = functionIdentifier?.value as string;
 
 		if (!funcName) {
-			console.log('Function identifier not found in token:', token);
-			return sourceDir;
+			throw new Error('Path function call has no function identifier');
 		}
 
 		// Create function context
@@ -269,9 +339,10 @@ export class Workspace {
 				Object.entries(process.env).filter(([_, v]) => v !== undefined)
 			) as Record<string, string>,
 			document: {
-				uri: URI.file(sourceDir).toString(),
+					uri: sourceUri,
 				content: '' // Not needed for path functions
-			}
+			},
+			fs: { access: async filePath => fs.access(filePath) }
 		};
 
 		// Get function arguments
@@ -282,24 +353,17 @@ export class Workspace {
 				value: arg.value?.toString() || ''
 			}));
 
-		// Use function registry to evaluate
-		try {
-			const result = await this.schema.getFunctionRegistry().evaluateFunction(funcName, args, context);
-			if (result && typeof result.value === 'string') {
-				return result.value;
-			}
-		} catch (error) {
-			console.warn(`Error evaluating function ${funcName}:`, error);
+		const result = await this.schema.getFunctionRegistry().evaluateFunction(funcName, args, context);
+		if (!result || result.type !== 'string' || typeof result.value !== 'string') {
+			throw new Error(`Path function ${funcName} did not return a string`);
 		}
-
-		// Fallback to default directory
-		return sourceDir;
+		return result.value;
 	}
 
 	private async buildDependencyTree(): Promise<void> {
 		if (!this.workspaceRoot) return;
 
-		// Find all terragrunt.hcl files
+		// Discover both unit and explicit stack entrypoints.
 		const configs = await this.findTerragruntConfigs(this.workspaceRoot);
 
 		// First pass: Load and parse all configs
@@ -310,74 +374,48 @@ export class Workspace {
 			}
 		}
 
-		// Second pass: Verify all references and log any missing dependencies
+		// Second pass: verify that the graph is closed over every authored edge.
 		for (const [uri, config] of this.configMap.entries()) {
 			for (const depUri of [...config.includes, ...config.dependencies]) {
 				if (!this.configMap.has(depUri)) {
-					console.warn(`Warning: Missing dependency ${depUri} referenced from ${uri}`);
+					throw new Error(`Missing configuration ${depUri} referenced from ${uri}`);
 				}
 			}
 		}
 
-		// Find root config
-		const rootConfig = Array.from(this.configMap.entries()).find(([uri]) => {
-			const parsedUri = URI.parse(uri);
-			const isRoot =
-				parsedUri.fsPath.endsWith('/terragrunt.hcl') &&
-				parsedUri.fsPath.split('/').filter(p => p !== '').length ===
-				(this.workspaceRoot ? URI.parse(this.workspaceRoot).fsPath.split('/').filter(p => p !== '').length + 1 : 1);
-
-			if (isRoot) {
-				console.log('Found root config:', parsedUri.fsPath);
-			}
-			return isRoot;
-		});
-
-		if (!rootConfig) {
-			console.log('No root configuration found');
-			return;
+		const rootUri = this.workspaceRoot;
+		const rootData: TerragruntConfig = {
+			uri: rootUri,
+			content: '',
+			includes: [],
+			dependencies: [],
+			referencedBy: [],
+			sourcePath: URI.parse(rootUri).fsPath,
+			targetPath: URI.parse(rootUri).fsPath,
+			dependencyType: 'root'
+		};
+		this.configTreeRoot = new TreeNode(rootData, path.basename(URI.parse(rootUri).fsPath), 'workspace');
+		const roots = [...this.configMap.values()].filter(config => config.referencedBy.length === 0);
+		if (roots.length === 0 && this.configMap.size > 0) {
+			throw new Error('Configuration graph has no roots; check for include or dependency cycles');
 		}
-
-		// Initialize the tree with root node
-		const [uri, config] = rootConfig;
-		this.configTreeRoot = new TreeNode<TerragruntConfig>(
-			config,
-			this.formatPath(config.uri),
-			'root'
-		);
-
-		// Build the tree structure
-		await this.traverseConfigTree();
-	}
-
-	private dumpTreeStructure(node: TreeNode<TerragruntConfig>, depth = 0): void {
-		const indent = '  '.repeat(depth);
-		console.log(`${indent}${node.name} (${node.type})`);
-		if (node.data.outputs && node.data.outputs.size > 0) {
-			console.log(`${indent}  outputs:`);
-			for (const [key, value] of node.data.outputs.entries()) {
-				console.log(`${indent}    ${key}: ${JSON.stringify(value.value)}`);
-			}
-		}
-		for (const child of node.children) {
-			this.dumpTreeStructure(child, depth + 1);
+		for (const config of roots) {
+			const node = this.configTreeRoot.addChild(config, this.formatPath(config.uri), config.dependencyType);
+			await this.traverseConfigTree(node, new Set());
 		}
 	}
 
-	private async traverseConfigTree(): Promise<void> {
-		if (!this.configTreeRoot) {
-			console.log('No config tree root exists');
-			return;
-		}
-
-		const traverseNode = async (treeNode: TreeNode<TerragruntConfig>) => {
+	private async traverseConfigTree(startNode: TreeNode<TerragruntConfig>, ancestry: Set<string>): Promise<void> {
+		const traverseNode = async (treeNode: TreeNode<TerragruntConfig>, ancestors: Set<string>) => {
 			const config = this.configMap.get(treeNode.data.uri);
 			if (!config) {
-				console.error(`Config not found for uri ${treeNode.data.uri}`);
-				return;
+				throw new Error(`Configuration graph references an unloaded document: ${treeNode.data.uri}`);
 			}
-
-			// console.log(`Processing node: ${config.uri}`);
+			if (ancestors.has(config.uri)) {
+				throw new Error(`Configuration cycle detected at ${config.uri}`);
+			}
+			const nextAncestors = new Set(ancestors);
+			nextAncestors.add(config.uri);
 
 			// Add outputs if they exist
 			if (config.outputs && config.outputs.size > 0) {
@@ -426,33 +464,33 @@ export class Workspace {
 				}
 			}
 
-			// Process all child nodes (configs that reference this one)
-			// console.log(`Processing children for ${config.uri}, referencedBy:`, config.referencedBy);
-			for (const refUri of config.referencedBy) {
+			// Follow dependencies away from each entrypoint so the visual direction
+			// matches the authored relationship (consumer/stack -> dependency/component).
+			for (const refUri of [...config.includes, ...config.dependencies]) {
 				const refConfig = this.configMap.get(refUri);
 				if (!refConfig) {
-					console.error(`Referenced config not found for uri ${refUri}`);
-					continue;
+					throw new Error(`Configuration graph references an unloaded document: ${refUri}`);
 				}
 
 				// Check if this child has already been processed to avoid cycles
 				const existingChild = treeNode.children.find(child => child.data.uri === refUri);
 				if (!existingChild) {
-					// console.log(`Adding child node: ${refUri}`);
+					const relationshipType = config.includes.includes(refUri)
+						? 'include'
+						: refConfig.dependencyType === 'unit' || refConfig.dependencyType === 'stack'
+							? refConfig.dependencyType
+							: 'dependency';
 					const childNode = treeNode.addChild(
 						refConfig,
 						this.formatPath(refConfig.uri),
-						refConfig.dependencyType
+						relationshipType
 					);
-					await traverseNode(childNode);
-				} else {
-					console.log(`Skipping already processed child: ${refUri}`);
+					await traverseNode(childNode, nextAncestors);
 				}
 			}
 		};
 
-		// Start traversal from the root
-		await traverseNode(this.configTreeRoot);
+		await traverseNode(startNode, ancestry);
 	}
 
 	private formatPath(uri: string): string {
@@ -467,65 +505,41 @@ export class Workspace {
 		const fsRootDir = URI.parse(rootDir).fsPath;  // Convert URI to filesystem path
 
 		const scan = async (dir: string) => {
-			try {
-				const entries = await fs.readdir(dir, { withFileTypes: true });
+			const entries = await fs.readdir(dir, { withFileTypes: true });
 
-				for (const entry of entries) {
-					const fullPath = path.join(dir, entry.name);
+			for (const entry of entries) {
+				const fullPath = path.join(dir, entry.name);
 
-					if (entry.isDirectory() && !entry.name.startsWith('.')) {
-						await scan(fullPath);
-					} else if (entry.isFile() && entry.name === 'terragrunt.hcl') {
-						configs.push(URI.file(fullPath).toString());
-					}
-				}
-			} catch (error) {
-				// Check if directory exists first
-				try {
-					await fs.access(dir);
-					console.error(`Error reading directory ${dir}:`, error);
-				} catch {
-					// Directory doesn't exist, which is okay - might be creating a new file
-					console.log(`Directory ${dir} does not exist yet`);
+				if (entry.isDirectory() && !entry.name.startsWith('.')) {
+					await scan(fullPath);
+				} else if (entry.isFile() && (entry.name === 'terragrunt.hcl' || entry.name === 'terragrunt.stack.hcl')) {
+					configs.push(URI.file(fullPath).toString());
 				}
 			}
 		};
 
-		try {
-			// Check if root directory exists
-			await fs.access(fsRootDir);
-			await scan(fsRootDir);
-		} catch {
-			// Root directory doesn't exist yet, which is fine for new workspaces
-			console.log(`Workspace root directory ${fsRootDir} does not exist yet`);
-		}
+		await fs.access(fsRootDir);
+		await scan(fsRootDir);
 
 		return configs;
 	}
 
 	setWorkspaceRoot(root: string) {
 		this.workspaceRoot = root;
-		// Get the filesystem path
-		const { fsPath } = URI.parse(root);
-		// Create the directory if it doesn't exist
-		fs.mkdir(fsPath, { recursive: true }).catch(error => {
-			console.error(`Error creating workspace root directory: ${error}`);
-		});
 	}
 
 	async addDocument(document: ParsedDocument) {
 		const uri = document.getUri();
 		this.documents.set(uri, document);
 
-		// Ensure parent directory exists
-		const { fsPath } = URI.parse(uri);
-		const dir = path.dirname(fsPath);
-		await fs.mkdir(dir, { recursive: true }).catch(error => {
-			console.error(`Error creating document directory: ${error}`);
-		});
-
 		await this.updateConfigMap(document);  // Update just this document's config
+	}
+
+	async refreshDependencyTree(): Promise<TreeNode<TerragruntConfig> | undefined> {
+		this.configTreeRoot = undefined;
+		this.configMap.clear();
 		await this.buildDependencyTree();
+		return this.configTreeRoot;
 	}
 
 	private getDependencyName(block: Token): string | undefined {
@@ -539,93 +553,41 @@ export class Workspace {
 	}
 
 	private async loadDocument(uri: string): Promise<ParsedDocument | undefined> {
-		try {
-			if (this.documents.has(uri)) {
-				return this.documents.get(uri);
-			}
-
-			const fsPath = this.decodeUri(uri);
-			try {
-				const stats = await fs.stat(fsPath);
-				let actualPath = fsPath;
-
-				if (stats.isDirectory()) {
-					actualPath = path.join(fsPath, 'terragrunt.hcl');
-					uri = URI.file(actualPath).toString();
-
-					if (this.documents.has(uri)) {
-						return this.documents.get(uri);
-					}
-				}
-
-				const content = await fs.readFile(actualPath, 'utf-8');
-				const document = new ParsedDocument(this, uri, content);
-				this.documents.set(uri, document);
-
-				return document;
-			} catch {
-				const diagnostic = {
-					severity: DiagnosticSeverity.Error,
-					range: {
-						start: { line: 0, character: 0 },
-						end: { line: 0, character: 0 }
-					},
-					message: `File not found: ${fsPath}`,
-					source: 'terragrunt'
-				};
-
-				// Update diagnostics for any configs that reference this missing file
-				for (const [sourceUri, config] of this.configMap.entries()) {
-					if (config.dependencies.includes(uri) || config.includes.includes(uri)) {
-						const sourceDoc = this.documents.get(sourceUri);
-						if (sourceDoc) {
-							sourceDoc.addDiagnostic(diagnostic);
-						}
-					}
-				}
-
-				// console.error(`Error accessing file ${fsPath}:`, error);
-				return undefined;
-			}
-		} catch (error) {
-			console.error(`Error loading document ${uri}:`, error);
-			return undefined;
+		if (this.documents.has(uri)) {
+			return this.documents.get(uri);
 		}
+
+		const fsPath = this.decodeUri(uri);
+		const stats = await fs.stat(fsPath);
+		let actualPath = fsPath;
+
+		if (stats.isDirectory()) {
+			const unitPath = path.join(fsPath, 'terragrunt.hcl');
+			const stackPath = path.join(fsPath, 'terragrunt.stack.hcl');
+			const [hasUnit, hasStack] = await Promise.all([this.fileExists(unitPath), this.fileExists(stackPath)]);
+			if (hasUnit && hasStack) throw new Error(`Ambiguous configuration directory: ${fsPath}`);
+			if (!hasUnit && !hasStack) throw new Error(`No Terragrunt unit or stack configuration in ${fsPath}`);
+			actualPath = hasUnit ? unitPath : stackPath;
+			uri = URI.file(actualPath).toString();
+			if (this.documents.has(uri)) return this.documents.get(uri);
+		}
+
+		const content = await fs.readFile(actualPath, 'utf-8');
+		const document = new ParsedDocument(this, uri, content);
+		this.documents.set(uri, document);
+		return document;
 	}
 
 	removeDocument(uri: string) {
+		const config = this.configMap.get(uri);
+		if (config) {
+			for (const targetUri of [...config.includes, ...config.dependencies]) {
+				const target = this.configMap.get(targetUri);
+				if (target) target.referencedBy = target.referencedBy.filter(reference => reference !== uri);
+			}
+		}
 		this.documents.delete(uri);
 		this.configMap.delete(uri);
-	}
-
-	findInParentFolders(startUri: string, args: RuntimeValue<ValueType>[]): RuntimeValue<ValueType> {
-		const filename = args[0];
-		if (filename?.type !== 'string') {
-			return { type: 'null', value: null };
-		}
-
-		const startPath = URI.parse(startUri).fsPath;
-		let currentDir = path.dirname(startPath);
-		const stopAt = args[1];
-
-		while (currentDir !== path.parse(currentDir).root) {
-			if (typeof filename.value !== 'string') {
-				return { type: 'null', value: null };
-			}
-			const filePath = path.join(currentDir, filename.value);
-			if (fsSync.existsSync(filePath)) {
-				return {
-					type: 'string',
-					value: filePath
-				} as RuntimeValue<'string'>;
-			}
-			if (stopAt?.type === 'string' && currentDir === stopAt.value) {
-				break;
-			}
-			currentDir = path.dirname(currentDir);
-		}
-
-		return { type: 'null', value: null };
 	}
 
 	getReferencingConfigs(uri: string): TerragruntConfig[] {

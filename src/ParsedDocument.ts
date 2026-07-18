@@ -1,5 +1,3 @@
-import crypto from 'node:crypto';
-import fs from 'node:fs';
 import path from 'node:path';
 
 import type { CompletionItem, Diagnostic, DocumentLink, MarkupContent, Position } from 'vscode-languageserver';
@@ -8,6 +6,7 @@ import { URI } from 'vscode-uri';
 import type { FunctionContext, ResolvedReference, RuntimeValue, TerragruntConfig, TokenType, ValueType } from './model';
 import { Token } from './model';
 import { parse as tg_parse, SyntaxError } from './parser';
+import type { ParserTracerEvent } from './parser';
 import { CompletionsProvider } from './providers/CompletionsProvider';
 import { DiagnosticsProvider } from './providers/DiagnosticsProvider';
 import { HoverProvider } from './providers/HoverProvider';
@@ -20,14 +19,28 @@ export class ParsedDocument {
 	private ast: any | null = null;
 	private diagnostics: Diagnostic[] = [];
 	private tokens: Token[] = [];
-	private locals = new Map<string, RuntimeValue<ValueType>>();
-	private dependencies = new Map<string, string>();
 	private schema: Schema;
 	private completionsProvider: CompletionsProvider;
 	private hoverProvider: HoverProvider;
 	private diagnosticsProvider: DiagnosticsProvider;
 	private linkProvider: LinkProvider;
 	private stateManager: StateManager;
+
+	private parserTracer() {
+		const maximumEvents = Math.max(100_000, this.content.length * 250);
+		let events = 0;
+		return {
+			trace: (event: ParserTracerEvent): void => {
+				events += 1;
+				if (events <= maximumEvents) return;
+				const { line, column, offset } = event.location.start;
+				throw new Error(
+					`Parser complexity limit exceeded after ${maximumEvents} rule events at ${line}:${column} ` +
+					`(offset ${offset}) while processing ${event.rule}`
+				);
+			}
+		};
+	}
 
 	constructor(
 		private workspace: Workspace,
@@ -41,18 +54,17 @@ export class ParsedDocument {
 		this.linkProvider = new LinkProvider(this);
 		this.stateManager = new StateManager();
 		this.parseContent();
-		this.buildProfile();
 	}
 	public findIncludeBlocks(ast: any): { path: Token, block: Token }[] {
 		const includes: { path: Token, block: Token }[] = [];
-	
+
 		const processNode = (node: any) => {
 			if (node.type === 'block' && node.value === 'include') {
 				const pathAttr = node.children?.find(child =>
 					child.type === 'attribute' &&
 					child.children?.some(c => c.type === 'attribute_identifier' && c.value === 'path')
 				);
-	
+
 				if (pathAttr) {
 					// Find the path value node (can be function_call, string_lit, or interpolated_string)
 					const pathValueNode = pathAttr.children?.find(c =>
@@ -60,14 +72,14 @@ export class ParsedDocument {
 						c.type === 'string_lit' ||
 						c.type === 'interpolated_string'
 					);
-	
+
 					// Create block token first to preserve hierarchy
 					const blockToken = this.createToken(node);
-	
+
 					if (pathValueNode) {
 						// Create path token from the path value node
 						const pathToken = this.createToken(pathValueNode);
-	
+
 						includes.push({
 							path: pathToken,
 							block: blockToken
@@ -75,21 +87,22 @@ export class ParsedDocument {
 					}
 				}
 			}
-	
+
 			// Recursively process children
 			if (node.children) {
 				node.children.forEach(processNode);
 			}
 		};
-	
+
 		processNode(ast);
 		return includes;
 	}
 
-	public async findDependencyBlocks(ast: any): Promise<{ path: Token, block: Token, parameter?: string, outputs?: Map<string, RuntimeValue<ValueType>> }[]> {
-		const dependencies: { path: Token, block: Token, parameter?: string, outputs?: Map<string, RuntimeValue<ValueType>> }[] = [];
+	public async findDependencyBlocks(ast: any): Promise<{ path: Token, block: Token, owner?: Token, parameter?: string, outputs?: Map<string, RuntimeValue<ValueType>> }[]> {
+		const dependencies: { path: Token, block: Token, owner?: Token, parameter?: string, outputs?: Map<string, RuntimeValue<ValueType>> }[] = [];
 
-		const processNode = async (node: any) => {
+		const processNode = async (node: any, componentOwner?: any) => {
+			const nextOwner = node.type === 'block' && (node.value === 'unit' || node.value === 'stack') ? node : componentOwner;
 			if (node.type === 'block') {
 				if (node.value === 'dependency') {
 					const paramNode = node.children.find((c: any) => c.type === 'parameter');
@@ -104,20 +117,16 @@ export class ParsedDocument {
 						const pathNode = configPathAttr.children.find((c: any) =>
 							c.type === 'string_lit' ||
 							c.type === 'interpolated_string' ||
-							c.type === 'function_call'
+							c.type === 'function_call' ||
+							c.type === 'reference'
 						);
 
 						if (pathNode) {
-							// if pathNode.value is a relative path, we need to resolve it
-							const absolutePath = path.isAbsolute(pathNode.value) ? pathNode.value : path.resolve(path.dirname(URI.parse(this.uri).fsPath), pathNode.value);
-							const referencedParsedDocument = await this.workspace.getParsedDocument(absolutePath);
-							const outputs = await referencedParsedDocument?.getAllOutputs();
-
 							dependencies.push({
 								path: this.createToken(pathNode),
 								block: this.createToken(node),
-								parameter,
-								outputs
+								owner: componentOwner ? this.createToken(componentOwner) : undefined,
+								parameter
 							});
 						}
 					}
@@ -133,16 +142,11 @@ export class ParsedDocument {
 							// Use Promise.all to properly wait for all async operations
 							await Promise.all(arrayLit.children.map(async (pathElement: any) => {
 								if (pathElement.type === 'string_lit' || pathElement.type === 'interpolated_string' || pathElement.type === 'function_call') {
-									// if pathElement.value is a relative path, we need to resolve it
-									const absolutePathElement = path.isAbsolute(pathElement.value) ? pathElement.value : path.resolve(path.dirname(URI.parse(this.uri).fsPath), pathElement.value);
-									const referencedParsedDocument = await this.workspace.getParsedDocument(absolutePathElement);
-									const outputs = await referencedParsedDocument?.getAllOutputs();
-
 									dependencies.push({
 										path: this.createToken(pathElement),
 										block: this.createToken(node),
-										parameter: undefined,
-										outputs
+										owner: componentOwner ? this.createToken(componentOwner) : undefined,
+										parameter: undefined
 									});
 								}
 							}));
@@ -153,7 +157,7 @@ export class ParsedDocument {
 
 			if (node.children) {
 				// Use Promise.all to wait for all child nodes to be processed
-				await Promise.all(node.children.map(processNode));
+				await Promise.all(node.children.map((child: any) => processNode(child, nextOwner)));
 			}
 		};
 
@@ -161,21 +165,12 @@ export class ParsedDocument {
 		return dependencies;
 	}
 	public async getAllLocals(): Promise<Map<string, RuntimeValue<ValueType>>> {
-		console.log('getAllLocals called');
 		const locals = new Map<string, RuntimeValue<ValueType>>();
 		const ast = this.getAST();
 		if (!ast) return locals;
 
 		const localsBlock = this.findBlock(ast, 'locals');
-		if (!localsBlock) {
-			console.log('No locals block found');
-			return locals;
-		}
-
-		console.log('Processing locals block children:', localsBlock.children.map(c => ({
-			type: c.type,
-			value: c.value
-		})));
+		if (!localsBlock) return locals;
 
 		// Process each attribute in the locals block
 		for (const child of localsBlock.children) {
@@ -183,8 +178,6 @@ export class ParsedDocument {
 				// Get the attribute name directly from the value
 				const name = child.value;
 				if (typeof name === 'string') {
-					console.log(`Processing local variable: ${name}`);
-
 					// Find the value token (first non-identifier child)
 					const valueToken = child.children.find(c =>
 						c.type !== 'identifier' &&
@@ -192,27 +185,13 @@ export class ParsedDocument {
 					);
 
 					if (valueToken) {
-						try {
-							// Attempt to evaluate the value
-							const value = await this.evaluateValue(valueToken);
-							if (value) {
-								console.log(`Successfully evaluated ${name}:`, value);
-								locals.set(name, value);
-							}
-						} catch {
-							// If evaluation fails, create a simple string value
-							console.log(`Failed to evaluate ${name}, using string value:`, valueToken.value);
-							locals.set(name, {
-								type: 'string',
-								value: String(valueToken.value || '')
-							});
-						}
+						const value = await this.evaluateValue(valueToken);
+						if (value) locals.set(name, value);
 					}
 				}
 			}
 		}
 
-		console.log('Final locals:', Array.from(locals.entries()));
 		return locals;
 	}
 	/**
@@ -322,14 +301,8 @@ export class ParsedDocument {
 		return token;
 	}
 
-	
 
 
-	private buildProfile() {
-		if (!this.ast) return;
-		this.processLocalsBlock(this.ast);
-		this.processDependencyBlocks(this.ast);
-	}
 
 	// Helper to find the specific function we want to evaluate
 	private findTargetFunctionNode(startNode: Token, targetName: string): Token | null {
@@ -360,18 +333,6 @@ export class ParsedDocument {
 
 	public async evaluateValue(node: Token, targetName?: string): Promise<RuntimeValue<ValueType> | undefined> {
 		if (!node) return undefined;
-
-
-		// console.log('evaluateValue called for node:', {
-		// 	type: node.type,
-		// 	value: node.value,
-		// 	children: node.children?.map(c => ({
-		// 		type: c.type,
-		// 		value: c.value,
-		// 		children: c.children?.length
-		// 	}))
-		// });
-
 
 		// If we have a target name and this is a function_call that's NOT our target,
 		// skip evaluation (this prevents evaluating parent functions)
@@ -423,8 +384,7 @@ export class ParsedDocument {
 				};
 			}
 
-			case 'legacy_interpolation': {
-				// Legacy interpolation usually wraps a single expression
+			case 'interpolation': {
 				if (node.children.length > 0) {
 					const evaluated = await this.evaluateValue(node.children[0]);
 					if (evaluated) {
@@ -564,11 +524,12 @@ export class ParsedDocument {
 		if (!value) return null;
 
 		switch (value.type) {
-			case 'string':
-			case 'number':
-			case 'boolean': {
-				if (typeof value.value === 'string' || typeof value.value === 'number' || typeof value.value === 'boolean' || value.value === null) {
-					return value.value;
+		case 'string':
+		case 'number':
+		case 'boolean': {
+				const primitive = value.value;
+				if (typeof primitive === 'string' || typeof primitive === 'number' || typeof primitive === 'boolean') {
+					return primitive;
 				}
 				return null;
 			}
@@ -634,31 +595,6 @@ export class ParsedDocument {
 		}
 	}
 
-
-	private async unwrapPromise<T extends ValueType>(promise: Promise<RuntimeValue<T> | undefined>): Promise<RuntimeValue<T> | undefined> {
-		const result = await promise;
-		if (!result) return undefined;
-		return result;
-	}
-
-	// Update the evaluate functions to properly handle async/await
-	private async processLocalsBlock(ast: any) {
-		const localsBlock = this.findBlock(ast, 'locals');
-		if (!localsBlock) return;
-
-		for (const attr of localsBlock.children) {
-			if (attr.type === 'attribute') {
-				const name = attr.children.find((c: any) => c.type === 'identifier')?.value;
-				const valueToken = attr.children.find((c: any) => c.type !== 'identifier');
-				if (name && valueToken) {
-					const value = await this.evaluateValue(valueToken);
-					if (value) {
-						this.locals.set(name, value);
-					}
-				}
-			}
-		}
-	}
 
 	private async evaluateExpression(node: Token): Promise<RuntimeValue<ValueType> | undefined> {
 		switch (node.type) {
@@ -766,23 +702,10 @@ export class ParsedDocument {
 						}
 					};
 
-					try {
-						// Create function arguments from remaining parts if any
-						const args = parts.slice(1).map(part => ({
-							type: 'string' as const,
-							value: part
-						}));
-
-						const result = await registry.evaluateFunction(parts[0], args, context);
-						if (result) {
-							return {
-								value: result,
-								source: this.uri,
-								found: true
-							};
-						}
-					} catch (error) {
-						console.warn(`Error evaluating function ${parts[0]}:`, error);
+					const args = parts.slice(1).map(part => ({ type: 'string' as const, value: part }));
+					const result = await registry.evaluateFunction(parts[0], args, context);
+					if (result) {
+						return { value: result, source: this.uri, found: true };
 					}
 				}
 			}
@@ -790,10 +713,10 @@ export class ParsedDocument {
 		return undefined;
 	}
 
-	private resolveLocalReference(parts: string[]): ResolvedReference | undefined {
+	private async resolveLocalReference(parts: string[]): Promise<ResolvedReference | undefined> {
 		if (parts.length === 0) return undefined;
 
-		const value = this.locals.get(parts[0]);
+		const value = (await this.getAllLocals()).get(parts[0]);
 		if (!value) return undefined;
 
 		return {
@@ -801,37 +724,6 @@ export class ParsedDocument {
 			source: this.uri,
 			found: true
 		};
-	}
-
-	private findAllBlocks(ast: any, types: string[]): any[] {
-		const blocks: any[] = [];
-		if (ast.type === 'block' && types.includes(ast.value)) {
-			blocks.push(ast);
-		}
-		if (ast.children) {
-			for (const child of ast.children) {
-				blocks.push(...this.findAllBlocks(child, types));
-			}
-		}
-		return blocks;
-	}
-
-	private findAttributeValue(block: any, name: string): any {
-		const attr = block.children.find((c: any) =>
-			c.type === 'attribute' &&
-			c.children.some((cc: any) => cc.type === 'identifier' && cc.value === name)
-		);
-		if (!attr) return undefined;
-		const valueNode = attr.children.find((c: any) => c.type !== 'identifier');
-		return valueNode?.value;
-	}
-
-	private resolveDependencyPath(configPath: string): string {
-		if (path.isAbsolute(configPath)) {
-			return configPath;
-		}
-		const sourceDir = path.dirname(URI.parse(this.uri).fsPath);
-		return path.resolve(sourceDir, configPath);
 	}
 
 	private buildReferencePath(node: Token): string[] {
@@ -846,77 +738,6 @@ export class ParsedDocument {
 		return parts;
 	}
 
-	private processDependencyBlocks(ast: any) {
-		const dependencyBlocks = this.findAllBlocks(ast, ['dependency', 'dependencies']);
-
-		for (const block of dependencyBlocks) {
-			if (block.value === 'dependency') {
-				const name = block.children.find((c: any) => c.type === 'parameter')?.value;
-				const configPath = this.findAttributeValue(block, 'config_path');
-				if (name && configPath) {
-					const uri = this.resolveDependencyPath(configPath as string);
-					this.dependencies.set(name, uri);
-				}
-			} else if (block.value === 'dependencies') {
-				const pathsAttr = block.children.find((c: any) =>
-					c.type === 'attribute' &&
-					c.children.some((cc: any) => cc.type === 'identifier' && cc.value === 'paths')
-				);
-				if (pathsAttr) {
-					const arrayLit = pathsAttr.children.find((c: any) => c.type === 'array_lit');
-					if (arrayLit) {
-						for (const pathElement of arrayLit.children) {
-							if (pathElement.type === 'string_lit') {
-								const uri = this.resolveDependencyPath(pathElement.value);
-								this.dependencies.set(pathElement.value, uri);
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	private processNode(node: any, parentToken: Token | null = null): Token | null {
-		const token = this.createToken(node);
-		if (!token) return null;
-
-		if (parentToken) {
-			token.parent = parentToken;
-		}
-
-		if (node.children && Array.isArray(node.children)) {
-			for (const childNode of node.children) {
-				const childToken = this.processNode(childNode, token);
-				if (childToken) {
-					token.children.push(childToken);
-				}
-			}
-		}
-
-		return token;
-	}
-
-	private flattenTokens(rootToken: Token): Token[] {
-		const tokens: Token[] = [];
-		const processed = new Set<number>();
-
-		const traverse = (token: Token) => {
-			if (!processed.has(token.id)) {
-				processed.add(token.id);
-				tokens.push(token);
-				token.children.forEach(child => traverse(child));
-			}
-		};
-
-		traverse(rootToken);
-		return tokens;
-	}
-
-	addDiagnostic(diagnostic: Diagnostic) {
-		this.diagnostics.push(diagnostic);
-	}
-
 	parseNode(node: any, parent: Token | null = null): Token {
 		const token = new Token(node.id, node.type as TokenType, node.value ?? null, node.location);
 		token.parent = parent;
@@ -929,79 +750,14 @@ export class ParsedDocument {
 	}
 
 	private parseContent() {
+		this.ast = null;
+		this.tokens = [];
+		this.diagnostics = [];
 		try {
-			// console.log('Parsing:', this.uri);
-			this.ast = tg_parse(this.content, { grammarSource: this.uri });
-			// console.log('AST:', this.removeCircularReferences(this.ast));
+			this.ast = tg_parse(this.content, { grammarSource: this.uri, tracer: this.parserTracer() });
 			this.tokens = [this.parseNode(this.ast)];
-
-			//hash the uri
-			const uriHash = crypto.createHash('md5').
-				update(this.uri).
-				digest('hex').slice(0, 8);
-			//write ast to file
-			fs.writeFileSync(`/tmp/${uriHash}_ast.json`, JSON.stringify(this.ast, null, 2));
-			//write tokens to file
-			fs.writeFileSync(`/tmp/${uriHash}_content.hcl`, this.content);
-
 			this.diagnostics = this.diagnosticsProvider.getDiagnostics(this);
 		} catch (error) {
-			if (error instanceof SyntaxError && error.location) {
-				// Log the basic error location
-				console.error(`Syntax Error at line ${error.location.start.line}, column ${error.location.start.column}:`);
-
-				// Log the full error location object for debugging
-				console.log('Location details:', {
-					start: error.location.start,
-					end: error.location.end
-				});
-
-				// Log the expected rules/tokens
-				console.log('Expected rules/tokens:', error.expected);
-
-				// Log what was actually found
-				console.log('Found:', error.found || 'end of input');
-
-				// Log the rule stack if available
-				if ('rules' in error) {
-					console.log('Rule stack:', error.rules);
-				}
-
-				// Get the failing rule name - this is often in the error message or rule stack
-				const failingRule = error.message.match(/Expected [^,]+ but /)?.[0]  // Extract from message
-					|| (error as any).rule  // Some PEG implementations store it directly
-					|| error.format([{ source: this.uri, text: this.content }]).split('\n')[0]; // First line often contains rule
-
-				console.log('Failed at rule:', failingRule);
-
-
-				// Log what was actually found
-				console.log('\nFound:', error.found || 'end of input');
-
-
-
-				// Get the specific line of code where the error occurred
-				const lines = this.content.split('\n');
-				const errorLine = lines[error.location.start.line - 1];
-				console.log('\nProblematic line:', errorLine);
-
-				// Create a pointer to the exact error position
-				const pointer = `${' '.repeat("Problematic line:".length + error.location.start.column)}^`;
-				console.log(pointer);
-
-				// Log the formatted error message
-				console.log('\nFormatted error:');
-				console.log(error.format([{ source: this.uri, text: this.content }]));
-
-				// Log the full error object for debugging
-				console.log('\nFull error object:', error);
-			} else {
-				console.error("Unknown Parsing Error:", error);
-				if (error instanceof Error) {
-					console.log('Stack trace:', error.stack);
-				}
-			}
-
 			if (error instanceof SyntaxError && error.location) {
 				// Convert the parser's location format to VSCode's format
 				this.diagnostics.push({
@@ -1019,10 +775,7 @@ export class ParsedDocument {
 					message: error.message,
 					source: 'terragrunt'
 				});
-
-				// Keep your console.log statements for debugging if needed
 			} else {
-				// Fallback for unknown errors
 				this.diagnostics.push({
 					severity: 1,
 					range: {
@@ -1035,10 +788,6 @@ export class ParsedDocument {
 			}
 
 		}
-	}
-
-	private removeCircularReferences<T>(data: T[]): string {
-		return JSON.stringify(data, (key, value) => (key === "parent" ? null : value), 2);
 	}
 
 	public getUri(): string {
@@ -1067,9 +816,8 @@ export class ParsedDocument {
 	}
 
 	public getCompletionsAtPosition(position: Position): Promise<CompletionItem[]> {
-		const lineText = this.getLineAtPosition(position);
 		const token = this.findTokenAtPosition(position);
-		return this.completionsProvider.getCompletions(lineText, position, token, this);
+		return this.completionsProvider.getCompletions(this.content, position, token, this);
 	}
 
 	public async getHoverInfo(position: Position): Promise<MarkupContent | null> {
@@ -1099,10 +847,6 @@ export class ParsedDocument {
 		return findToken(this.tokens);
 	}
 
-	private getLineAtPosition(position: Position): string {
-		const lines = this.content.split('\n');
-		return position.line < lines.length ? lines[position.line] : '';
-	}
 
 	private isPositionInRange(position: Position, token: Token): boolean {
 		const startPos = token.startPosition;

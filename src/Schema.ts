@@ -1,15 +1,14 @@
 
 import blocks from './blocks.json';
 import functionsDefinitionsJson from './functions.json';
+import { awsFunctionGroup } from './functions/aws_functions';
 import { coreFunctionGroup } from './functions/core_functions';
-import { envFunctionGroup } from './functions/env_functions';
 import { fileFunctionGroup } from './functions/file_functions';
-import { pathFunctionGroup } from './functions/path_functions';
-import { stringFunctionGroup } from './functions/string_functions';
 import { FunctionRegistry } from './FunctionsRegistry';
-import type { AttributeDefinition, BlockDefinition, FunctionContext, FunctionDefinition, FunctionParameter, RuntimeValue, ValueType } from './model';
+import type { AttributeDefinition, BlockDefinition, FunctionDefinition, TerragruntFileKind, ValueType } from './model';
 
 const functionDefinitions = functionsDefinitionsJson as { functions: FunctionDefinition[] };
+const schemaDefinitions = blocks as unknown as { blocks: BlockDefinition[]; globalAttributes: AttributeDefinition[] };
 
 export class Schema {
 	private static instance: Schema;
@@ -27,29 +26,39 @@ export class Schema {
 	}
 
 
-	private registerSchemaFunction(funcDef: FunctionDefinition) {
-		// Only register if the function isn't already implemented
-		if (!this.functionRegistry.hasFunction(funcDef.name)) {
-			const implementation = async (args: RuntimeValue<ValueType>[], context: FunctionContext) => {
-				// Validate args against the schema
-				this.validateFunctionArgs(funcDef, args);
-
-				// Create a default value if none exists
-				return this.createDefaultValue(funcDef.returnType.types[0]);
-			};
-
-			this.functionRegistry.registerFunction(funcDef.name, implementation);
-		}
-	}
-
 	initializeFunctionRegistry(): void {
+		this.functionRegistry.registerFunctionGroup(awsFunctionGroup);
 		this.functionRegistry.registerFunctionGroup(coreFunctionGroup);
 		this.functionRegistry.registerFunctionGroup(fileFunctionGroup);
-		this.functionRegistry.registerFunctionGroup(pathFunctionGroup);
-		this.functionRegistry.registerFunctionGroup(envFunctionGroup);
-		this.functionRegistry.registerFunctionGroup(stringFunctionGroup);
+	}
 
-		// console.log('Registered functions:', this.functionRegistry.getFunctionNames());
+	getFileKind(uri: string): TerragruntFileKind {
+		const filename = decodeURIComponent(uri).split('/').at(-1) ?? '';
+		if (filename === 'terragrunt.stack.hcl') return 'stack';
+		if (filename === 'terragrunt.values.hcl') return 'values';
+		if (filename === 'terragrunt.autoinclude.stack.hcl') return 'stack-autoinclude';
+		if (filename === 'terragrunt.autoinclude.hcl') return 'unit-autoinclude';
+		return 'unit';
+	}
+
+	getRootBlockDefinitions(uri: string): BlockDefinition[] {
+		const kind = this.getFileKind(uri);
+		if (kind === 'values') return [];
+		return schemaDefinitions.blocks.filter(block => block.fileKinds?.includes(kind));
+	}
+
+	getRootAttributeDefinitions(uri: string): AttributeDefinition[] {
+		const kind = this.getFileKind(uri);
+		if (kind === 'values') return [];
+		return schemaDefinitions.globalAttributes.filter(attribute => attribute.fileKinds?.includes(kind));
+	}
+
+	getRootAttributeDefinition(uri: string, name: string): AttributeDefinition | undefined {
+		return this.getRootAttributeDefinitions(uri).find(attribute => attribute.name === name);
+	}
+
+	isArbitraryRootAttributes(uri: string): boolean {
+		return this.getFileKind(uri) === 'values';
 	}
 
 	findNestedBlockTemplate(parentType: string, nestedType: string): BlockDefinition | undefined {
@@ -79,14 +88,12 @@ export class Schema {
 	}
 
 	getBlockDefinition(type: string): BlockDefinition | undefined {
-		const result = blocks.blocks.find(b => b.type === type) as BlockDefinition;
+		const result = schemaDefinitions.blocks.find(b => b.type === type);
 		return result ?? undefined;
 	}
 
 	getAllBlockTemplates(): BlockDefinition[] {
-		return blocks.blocks.map(block =>
-			this.getBlockDefinition(block.type)
-		).filter((block): block is BlockDefinition => block !== undefined);
+		return [...schemaDefinitions.blocks];
 	}
 
 	getAllFunctions(): FunctionDefinition[] {
@@ -150,11 +157,10 @@ export class Schema {
 			collection_constructor: `collection(\${1:args})`,
 			directive: `@directive(\${1:args})`,
 			meta_argument: `meta(\${1:args})`,
-			legacy_interpolation: `{{\${1:expr}}}`
 		};
 
-		// Find the first supported type or fall back to string
-		const type = attr.types.find(t => t in typeMap) || 'string';
+		const type = attr.types.find(t => t in typeMap);
+		if (!type) throw new Error(`No completion representation for ${attr.name}: ${attr.types.join(', ')}`);
 		return `${attr.name} = ${typeMap[type]}`;
 	}
 
@@ -258,132 +264,5 @@ export class Schema {
 	getFunctionRegistry(): FunctionRegistry {
 		return this.functionRegistry;
 	}
-
-	private validateFunctionParameter(value: RuntimeValue<ValueType>, validation: any): boolean {
-		if (!value) return false;
-
-		if (validation.pattern && value.type === 'string') {
-			const pattern = new RegExp(validation.pattern);
-			return pattern.test(value.value as string);
-		}
-
-		if (validation.min !== undefined && value.type === 'number' && (value.value as number) < validation.min) return false;
-
-		if (validation.max !== undefined && value.type === 'number' && (value.value as number) > validation.max) return false;
-
-		if (validation.allowedValues && validation.allowedValues.length > 0) {
-			return validation.allowedValues.includes(value.value);
-		}
-
-		return true;
-	}
-
-	private createDefaultValue(type: ValueType): RuntimeValue<ValueType> {
-		switch (type) {
-			case 'string': {
-				return { type: 'string', value: '' };
-			}
-			case 'number': {
-				return { type: 'number', value: 0 };
-			}
-			case 'boolean': {
-				return { type: 'boolean', value: false };
-			}
-			case 'array': {
-				return { type: 'array', value: [] };
-			}
-			case 'object': {
-				return { type: 'object', value: new Map() };
-			}
-			default: {
-				return { type: 'null', value: null };
-			}
-		}
-	}
-
-	// Helper method to validate function arguments
-	private validateFunctionArgs(
-		funcDef: FunctionDefinition,
-		args: RuntimeValue<ValueType>[]
-	): void {
-		// Check required parameters
-		const requiredParams = funcDef.parameters.filter(p => p.required);
-		if (args.length < requiredParams.length) {
-			throw new Error(`Function ${funcDef.name} requires at least ${requiredParams.length} parameters`);
-		}
-
-		// Validate parameter types
-		funcDef.parameters.forEach((param, index) => {
-			const arg = args[index];
-			if (arg) {
-				// Check if argument type matches any of the allowed types
-				if (!param.types.includes(arg.type)) {
-					throw new Error(`Parameter ${param.name} expects types ${param.types.join('|')}, got ${arg.type}`);
-				}
-
-				// Additional validation if needed (pattern, min/max, allowed values)
-				this.validateParameterValue(param, arg);
-			}
-		});
-	}
-
-	// Helper method to validate individual parameter values
-	private validateParameterValue(
-		param: FunctionParameter,
-		value: RuntimeValue<ValueType>
-	): void {
-		const { validation } = param;
-		if (!validation) return;
-
-		// Pattern validation for string types
-		if (validation.pattern && value.type === 'string') {
-			const pattern = new RegExp(validation.pattern);
-			if (!pattern.test(value.value as string)) {
-				throw new Error(`Parameter ${param.name} does not match required pattern`);
-			}
-		}
-
-		// Min/max validation for number types
-		if (value.type === 'number') {
-			const numValue = value.value as number;
-			if (validation.min !== undefined && numValue < validation.min) {
-				throw new Error(`Parameter ${param.name} must be at least ${validation.min}`);
-			}
-			if (validation.max !== undefined && numValue > validation.max) {
-				throw new Error(`Parameter ${param.name} must be at most ${validation.max}`);
-			}
-		}
-
-		// Allowed values validation
-		if (validation.allowedValues &&
-			!validation.allowedValues.includes(value.value)) {
-			throw new Error(`Parameter ${param.name} must be one of: ${validation.allowedValues.join(', ')}`);
-		}
-	}
-
-	// Helper method to create a default return value
-	private createDefaultReturnValue(type: ValueType): RuntimeValue<ValueType> {
-		switch (type) {
-			case 'string': {
-				return { type: 'string', value: '' };
-			}
-			case 'number': {
-				return { type: 'number', value: 0 };
-			}
-			case 'boolean': {
-				return { type: 'boolean', value: false };
-			}
-			case 'array': {
-				return { type: 'array', value: [] };
-			}
-			case 'object': {
-				return { type: 'object', value: new Map() };
-			}
-			default: {
-				return { type: 'null', value: null };
-			}
-		}
-	}
-
 
 }

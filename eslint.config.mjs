@@ -1,71 +1,28 @@
-// @ts-check
-import { defineConfig } from 'eslint-config-hyoban'
+import eslint from '@eslint/js'
+import tseslint from 'typescript-eslint'
 
-export default defineConfig(
+export default tseslint.config(
   {
-    formatting: false,
-    lessOpinionated: true,
-    ignores: [
-      'src/renderer/src/hono.ts',
-      'src/hono.ts',
-      'packages/shared/src/hono.ts',
-      'resources/**',
-      'src/terragrunt-parser.js',
-    ],
-    preferESM: false,
+    ignores: ['dist/**', 'node_modules/**', 'src/parser.js'],
   },
+  eslint.configs.recommended,
+  ...tseslint.configs.recommended,
   {
-    settings: {
-      tailwindcss: {
-        whitelist: ['center'],
-      },
-    },
+    files: ['src/**/*.ts', 'tests/**/*.ts'],
     rules: {
-      'unicorn/prefer-math-trunc': 'off',
-      'unicorn/prefer-code-point': 'off',
-      'unicorn/prefer-string-slice': 'off',
-      'unicorn/no-array-callback-reference': 'off',
-      'array-callback-return': 'off',
-      'no-console': 'off',
-      'no-param-reassign': 'off',
-      'no-control-regex': 'off',
-      'no-useless-escape': 'off',
-      'no-use-before-define': 'off',
-      'no-undef': 'off',
-      'no-empty': 'off',
-      'new-cap': 'off',
-      'unused-imports/no-unused-vars': ['error', {
-		'vars': 'all',
-		'varsIgnorePattern': '^_|s[0-9]+|minus|int|frac|exp|expr|offset|range|expected|token|path|value|node|context|uri',
-		'args': 'after-used',
-		'argsIgnorePattern': '^_|s[0-9]+|minus|int|frac|exp|expr|offset|range|expected|token|path|value|node|context|uri'
-		}],
-      '@eslint-react/no-clone-element': 'off',
-      '@eslint-react/hooks-extra/no-direct-set-state-in-use-effect': 'off',
-      'react-compiler/react-compiler': 'off',
-      'no-restricted-syntax': 'off',
-      '@typescript-eslint/no-unused-expressions': 'off',
-      'no-restricted-globals': [
+      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-unused-vars': [
         'error',
         {
-          name: 'location',
-          message:
-            "Since you don't use the same router instance in electron and browser, you can't use the global location to get the route info. \n\n" +
-            'You can use `useLocaltion` or `getReadonlyRoute` to get the route info.',
+          argsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
         },
       ],
-    },
-  },
-  {
-    files: ['**/*.tsx'],
-    rules: {
-      '@stylistic/jsx-self-closing-comp': 'error',
-    },
-  },
-  {
-    files: ['locales/**/*.json'],
-    rules: {
-      'recursive-sort/recursive-sort': 'error',
+      'no-console': 'off',
+      'no-control-regex': 'off',
+      'no-empty': 'off',
+      'no-useless-escape': 'off',
     },
   },
 )

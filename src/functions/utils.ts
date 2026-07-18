@@ -1,4 +1,4 @@
-import type { RuntimeValue, ValueType } from "~/model";
+import type { RuntimeValue, ValueType } from '../model';
 
 export const makeStringValue = (value: string): RuntimeValue<'string'> => ({
     type: 'string',

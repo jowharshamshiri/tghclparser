@@ -1,9 +1,10 @@
 import fs from 'node:fs/promises';
+import path from 'node:path';
 
 import yaml from 'js-yaml';
 
 import type { FunctionContext, RuntimeValue, ValueType } from '../model';
-import { makeBooleanValue, makeStringValue } from './utils';
+import { makeStringValue } from './utils';
 
 export const fileFunctionGroup = {
     namespace: 'file',
@@ -16,15 +17,14 @@ export const fileFunctionGroup = {
                 throw new Error('file() requires a string argument');
             }
 
-            const filePath = args[0].value as string;
+			const filePath = resolveFilePath(args[0].value as string, context);
 
             try {
                 // Read the file content
                 const content = await fs.readFile(filePath, 'utf8');
                 return makeStringValue(content);
-            } catch (error) {
-                console.error(`Error reading file ${filePath}:`, error);
-                throw new Error(`Error reading file ${filePath}: ${error}`);
+			} catch (error) {
+				throw new Error(`Error reading file ${filePath}: ${error}`);
             }
         },
         yamldecode: async (
@@ -43,45 +43,16 @@ export const fileFunctionGroup = {
 
                 // Convert the parsed YAML to a RuntimeValue
                 return convertToRuntimeValue(parsed);
-            } catch (error) {
-                console.error('Error parsing YAML:', error);
+			} catch (error) {
                 throw new Error(`Error parsing YAML: ${error}`);
             }
         },
-        read: async (
-            args: RuntimeValue<ValueType>[], 
-            context: FunctionContext
-        ): Promise<RuntimeValue<ValueType>> => {
-            if (!args[0] || args[0].type !== 'string') {
-                throw new Error('file.read requires a string argument');
-            }
-            const filePath = args[0].value as string;
-            try {
-                const content = await fs.readFile(filePath, 'utf8');
-                return makeStringValue(content);
-            } catch (error) {
-                console.error(`Error reading file ${filePath}:`, error);
-                throw new Error(`Error reading file ${filePath}: ${error}`);
-            }
-        },
-
-        exists: async (
-            args: RuntimeValue<ValueType>[], 
-            _context: FunctionContext
-        ): Promise<RuntimeValue<ValueType>> => {
-            if (!args[0] || args[0].type !== 'string') {
-                throw new Error('file.exists requires a string argument');
-            }
-            const filePath = args[0].value as string;
-            try {
-                await fs.access(filePath);
-                return makeBooleanValue(true);
-            } catch {
-                return makeBooleanValue(false);
-            }
-        }
-    }
+	}
 };
+
+function resolveFilePath(filePath: string, context: FunctionContext): string {
+	return path.isAbsolute(filePath) ? filePath : path.resolve(context.workingDirectory, filePath);
+}
 
 function convertToRuntimeValue(value: any): RuntimeValue<ValueType> {
     if (typeof value === 'string') {
