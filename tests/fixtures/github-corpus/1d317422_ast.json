@@ -1,0 +1,1074 @@
+{
+  "id": 96,
+  "type": "root",
+  "location": {
+    "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+    "start": {
+      "offset": 0,
+      "line": 1,
+      "column": 1
+    },
+    "end": {
+      "offset": 493,
+      "line": 24,
+      "column": 1
+    }
+  },
+  "children": [
+    {
+      "id": 11,
+      "type": "block",
+      "value": "include",
+      "location": {
+        "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+        "start": {
+          "offset": 0,
+          "line": 1,
+          "column": 1
+        },
+        "end": {
+          "offset": 52,
+          "line": 3,
+          "column": 2
+        }
+      },
+      "children": [
+        {
+          "id": 2,
+          "type": "block_identifier",
+          "value": "include",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+            "start": {
+              "offset": 0,
+              "line": 1,
+              "column": 1
+            },
+            "end": {
+              "offset": 7,
+              "line": 1,
+              "column": 8
+            }
+          }
+        },
+        {
+          "id": 4,
+          "type": "parameter",
+          "value": "root",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+            "start": {
+              "offset": 8,
+              "line": 1,
+              "column": 9
+            },
+            "end": {
+              "offset": 14,
+              "line": 1,
+              "column": 15
+            }
+          },
+          "children": [
+            {
+              "id": 3,
+              "type": "string_lit",
+              "value": "root",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                "start": {
+                  "offset": 8,
+                  "line": 1,
+                  "column": 9
+                },
+                "end": {
+                  "offset": 14,
+                  "line": 1,
+                  "column": 15
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": 10,
+          "type": "attribute",
+          "value": "path",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+            "start": {
+              "offset": 19,
+              "line": 2,
+              "column": 3
+            },
+            "end": {
+              "offset": 51,
+              "line": 3,
+              "column": 1
+            }
+          },
+          "children": [
+            {
+              "id": 5,
+              "type": "attribute_identifier",
+              "value": "path",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                "start": {
+                  "offset": 19,
+                  "line": 2,
+                  "column": 3
+                },
+                "end": {
+                  "offset": 23,
+                  "line": 2,
+                  "column": 7
+                }
+              }
+            },
+            {
+              "id": 9,
+              "type": "function_call",
+              "value": "find_in_parent_folders",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                "start": {
+                  "offset": 26,
+                  "line": 2,
+                  "column": 10
+                },
+                "end": {
+                  "offset": 50,
+                  "line": 2,
+                  "column": 34
+                }
+              },
+              "children": [
+                {
+                  "id": 8,
+                  "type": "function_identifier",
+                  "value": "find_in_parent_folders",
+                  "location": {
+                    "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                    "start": {
+                      "offset": 26,
+                      "line": 2,
+                      "column": 10
+                    },
+                    "end": {
+                      "offset": 48,
+                      "line": 2,
+                      "column": 32
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "block",
+      "value": "dependency",
+      "location": {
+        "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+        "start": {
+          "offset": 54,
+          "line": 5,
+          "column": 1
+        },
+        "end": {
+          "offset": 108,
+          "line": 7,
+          "column": 2
+        }
+      },
+      "children": [
+        {
+          "id": 13,
+          "type": "block_identifier",
+          "value": "dependency",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+            "start": {
+              "offset": 54,
+              "line": 5,
+              "column": 1
+            },
+            "end": {
+              "offset": 64,
+              "line": 5,
+              "column": 11
+            }
+          }
+        },
+        {
+          "id": 15,
+          "type": "parameter",
+          "value": "global",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+            "start": {
+              "offset": 65,
+              "line": 5,
+              "column": 12
+            },
+            "end": {
+              "offset": 73,
+              "line": 5,
+              "column": 20
+            }
+          },
+          "children": [
+            {
+              "id": 14,
+              "type": "string_lit",
+              "value": "global",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                "start": {
+                  "offset": 65,
+                  "line": 5,
+                  "column": 12
+                },
+                "end": {
+                  "offset": 73,
+                  "line": 5,
+                  "column": 20
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": 19,
+          "type": "attribute",
+          "value": "config_path",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+            "start": {
+              "offset": 78,
+              "line": 6,
+              "column": 3
+            },
+            "end": {
+              "offset": 107,
+              "line": 7,
+              "column": 1
+            }
+          },
+          "children": [
+            {
+              "id": 16,
+              "type": "attribute_identifier",
+              "value": "config_path",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                "start": {
+                  "offset": 78,
+                  "line": 6,
+                  "column": 3
+                },
+                "end": {
+                  "offset": 89,
+                  "line": 6,
+                  "column": 14
+                }
+              }
+            },
+            {
+              "id": 18,
+              "type": "string_lit",
+              "value": "../../global",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                "start": {
+                  "offset": 92,
+                  "line": 6,
+                  "column": 17
+                },
+                "end": {
+                  "offset": 106,
+                  "line": 6,
+                  "column": 31
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 29,
+      "type": "block",
+      "value": "dependency",
+      "location": {
+        "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+        "start": {
+          "offset": 110,
+          "line": 9,
+          "column": 1
+        },
+        "end": {
+          "offset": 170,
+          "line": 11,
+          "column": 2
+        }
+      },
+      "children": [
+        {
+          "id": 22,
+          "type": "block_identifier",
+          "value": "dependency",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+            "start": {
+              "offset": 110,
+              "line": 9,
+              "column": 1
+            },
+            "end": {
+              "offset": 120,
+              "line": 9,
+              "column": 11
+            }
+          }
+        },
+        {
+          "id": 24,
+          "type": "parameter",
+          "value": "planning_step",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+            "start": {
+              "offset": 121,
+              "line": 9,
+              "column": 12
+            },
+            "end": {
+              "offset": 136,
+              "line": 9,
+              "column": 27
+            }
+          },
+          "children": [
+            {
+              "id": 23,
+              "type": "string_lit",
+              "value": "planning_step",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                "start": {
+                  "offset": 121,
+                  "line": 9,
+                  "column": 12
+                },
+                "end": {
+                  "offset": 136,
+                  "line": 9,
+                  "column": 27
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": 28,
+          "type": "attribute",
+          "value": "config_path",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+            "start": {
+              "offset": 141,
+              "line": 10,
+              "column": 3
+            },
+            "end": {
+              "offset": 169,
+              "line": 11,
+              "column": 1
+            }
+          },
+          "children": [
+            {
+              "id": 25,
+              "type": "attribute_identifier",
+              "value": "config_path",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                "start": {
+                  "offset": 141,
+                  "line": 10,
+                  "column": 3
+                },
+                "end": {
+                  "offset": 152,
+                  "line": 10,
+                  "column": 14
+                }
+              }
+            },
+            {
+              "id": 27,
+              "type": "string_lit",
+              "value": "../planning",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                "start": {
+                  "offset": 155,
+                  "line": 10,
+                  "column": 17
+                },
+                "end": {
+                  "offset": 168,
+                  "line": 10,
+                  "column": 30
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 38,
+      "type": "block",
+      "value": "dependency",
+      "location": {
+        "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+        "start": {
+          "offset": 173,
+          "line": 14,
+          "column": 1
+        },
+        "end": {
+          "offset": 241,
+          "line": 16,
+          "column": 2
+        }
+      },
+      "children": [
+        {
+          "id": 31,
+          "type": "block_identifier",
+          "value": "dependency",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+            "start": {
+              "offset": 173,
+              "line": 14,
+              "column": 1
+            },
+            "end": {
+              "offset": 183,
+              "line": 14,
+              "column": 11
+            }
+          }
+        },
+        {
+          "id": 33,
+          "type": "parameter",
+          "value": "provisioning_step",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+            "start": {
+              "offset": 184,
+              "line": 14,
+              "column": 12
+            },
+            "end": {
+              "offset": 203,
+              "line": 14,
+              "column": 31
+            }
+          },
+          "children": [
+            {
+              "id": 32,
+              "type": "string_lit",
+              "value": "provisioning_step",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                "start": {
+                  "offset": 184,
+                  "line": 14,
+                  "column": 12
+                },
+                "end": {
+                  "offset": 203,
+                  "line": 14,
+                  "column": 31
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": 37,
+          "type": "attribute",
+          "value": "config_path",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+            "start": {
+              "offset": 208,
+              "line": 15,
+              "column": 3
+            },
+            "end": {
+              "offset": 240,
+              "line": 16,
+              "column": 1
+            }
+          },
+          "children": [
+            {
+              "id": 34,
+              "type": "attribute_identifier",
+              "value": "config_path",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                "start": {
+                  "offset": 208,
+                  "line": 15,
+                  "column": 3
+                },
+                "end": {
+                  "offset": 219,
+                  "line": 15,
+                  "column": 14
+                }
+              }
+            },
+            {
+              "id": 36,
+              "type": "string_lit",
+              "value": "../provisioning",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                "start": {
+                  "offset": 222,
+                  "line": 15,
+                  "column": 17
+                },
+                "end": {
+                  "offset": 239,
+                  "line": 15,
+                  "column": 34
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 95,
+      "type": "assignment",
+      "value": "inputs",
+      "location": {
+        "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+        "start": {
+          "offset": 243,
+          "line": 18,
+          "column": 1
+        },
+        "end": {
+          "offset": 491,
+          "line": 22,
+          "column": 2
+        }
+      },
+      "children": [
+        {
+          "id": 39,
+          "type": "root_assignment_identifier",
+          "value": "inputs",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+            "start": {
+              "offset": 243,
+              "line": 18,
+              "column": 1
+            },
+            "end": {
+              "offset": 249,
+              "line": 18,
+              "column": 7
+            }
+          }
+        },
+        {
+          "id": 94,
+          "type": "object",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+            "start": {
+              "offset": 252,
+              "line": 18,
+              "column": 10
+            },
+            "end": {
+              "offset": 491,
+              "line": 22,
+              "column": 2
+            }
+          },
+          "children": [
+            {
+              "id": 57,
+              "type": "attribute",
+              "value": "global_state",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                "start": {
+                  "offset": 256,
+                  "line": 19,
+                  "column": 3
+                },
+                "end": {
+                  "offset": 324,
+                  "line": 20,
+                  "column": 3
+                }
+              },
+              "children": [
+                {
+                  "id": 40,
+                  "type": "attribute_identifier",
+                  "value": "global_state",
+                  "location": {
+                    "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                    "start": {
+                      "offset": 256,
+                      "line": 19,
+                      "column": 3
+                    },
+                    "end": {
+                      "offset": 268,
+                      "line": 19,
+                      "column": 15
+                    }
+                  }
+                },
+                {
+                  "id": 56,
+                  "type": "dependency_reference",
+                  "location": {
+                    "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                    "start": {
+                      "offset": 283,
+                      "line": 19,
+                      "column": 30
+                    },
+                    "end": {
+                      "offset": 321,
+                      "line": 19,
+                      "column": 68
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": 54,
+                      "type": "dependency_name",
+                      "value": "global",
+                      "location": {
+                        "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                        "start": {
+                          "offset": 283,
+                          "line": 19,
+                          "column": 30
+                        },
+                        "end": {
+                          "offset": 321,
+                          "line": 19,
+                          "column": 68
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": 51,
+                          "type": "reference_identifier",
+                          "value": "global",
+                          "location": {
+                            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                            "start": {
+                              "offset": 294,
+                              "line": 19,
+                              "column": 41
+                            },
+                            "end": {
+                              "offset": 300,
+                              "line": 19,
+                              "column": 47
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "id": 55,
+                      "type": "access_chain",
+                      "location": {
+                        "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                        "start": {
+                          "offset": 283,
+                          "line": 19,
+                          "column": 30
+                        },
+                        "end": {
+                          "offset": 321,
+                          "line": 19,
+                          "column": 68
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": 52,
+                          "type": "reference_identifier",
+                          "value": "outputs",
+                          "location": {
+                            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                            "start": {
+                              "offset": 301,
+                              "line": 19,
+                              "column": 48
+                            },
+                            "end": {
+                              "offset": 308,
+                              "line": 19,
+                              "column": 55
+                            }
+                          }
+                        },
+                        {
+                          "id": 53,
+                          "type": "reference_identifier",
+                          "value": "global_state",
+                          "location": {
+                            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                            "start": {
+                              "offset": 309,
+                              "line": 19,
+                              "column": 56
+                            },
+                            "end": {
+                              "offset": 321,
+                              "line": 19,
+                              "column": 68
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": 75,
+              "type": "attribute",
+              "value": "area_file_path",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                "start": {
+                  "offset": 324,
+                  "line": 20,
+                  "column": 3
+                },
+                "end": {
+                  "offset": 401,
+                  "line": 21,
+                  "column": 3
+                }
+              },
+              "children": [
+                {
+                  "id": 58,
+                  "type": "attribute_identifier",
+                  "value": "area_file_path",
+                  "location": {
+                    "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                    "start": {
+                      "offset": 324,
+                      "line": 20,
+                      "column": 3
+                    },
+                    "end": {
+                      "offset": 338,
+                      "line": 20,
+                      "column": 17
+                    }
+                  }
+                },
+                {
+                  "id": 74,
+                  "type": "dependency_reference",
+                  "location": {
+                    "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                    "start": {
+                      "offset": 351,
+                      "line": 20,
+                      "column": 30
+                    },
+                    "end": {
+                      "offset": 398,
+                      "line": 20,
+                      "column": 77
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": 72,
+                      "type": "dependency_name",
+                      "value": "planning_step",
+                      "location": {
+                        "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                        "start": {
+                          "offset": 351,
+                          "line": 20,
+                          "column": 30
+                        },
+                        "end": {
+                          "offset": 398,
+                          "line": 20,
+                          "column": 77
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": 69,
+                          "type": "reference_identifier",
+                          "value": "planning_step",
+                          "location": {
+                            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                            "start": {
+                              "offset": 362,
+                              "line": 20,
+                              "column": 41
+                            },
+                            "end": {
+                              "offset": 375,
+                              "line": 20,
+                              "column": 54
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "id": 73,
+                      "type": "access_chain",
+                      "location": {
+                        "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                        "start": {
+                          "offset": 351,
+                          "line": 20,
+                          "column": 30
+                        },
+                        "end": {
+                          "offset": 398,
+                          "line": 20,
+                          "column": 77
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": 70,
+                          "type": "reference_identifier",
+                          "value": "outputs",
+                          "location": {
+                            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                            "start": {
+                              "offset": 376,
+                              "line": 20,
+                              "column": 55
+                            },
+                            "end": {
+                              "offset": 383,
+                              "line": 20,
+                              "column": 62
+                            }
+                          }
+                        },
+                        {
+                          "id": 71,
+                          "type": "reference_identifier",
+                          "value": "area_file_path",
+                          "location": {
+                            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                            "start": {
+                              "offset": 384,
+                              "line": 20,
+                              "column": 63
+                            },
+                            "end": {
+                              "offset": 398,
+                              "line": 20,
+                              "column": 77
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": 93,
+              "type": "attribute",
+              "value": "inventory_yaml_file_path",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                "start": {
+                  "offset": 401,
+                  "line": 21,
+                  "column": 3
+                },
+                "end": {
+                  "offset": 490,
+                  "line": 22,
+                  "column": 1
+                }
+              },
+              "children": [
+                {
+                  "id": 76,
+                  "type": "attribute_identifier",
+                  "value": "inventory_yaml_file_path",
+                  "location": {
+                    "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                    "start": {
+                      "offset": 401,
+                      "line": 21,
+                      "column": 3
+                    },
+                    "end": {
+                      "offset": 425,
+                      "line": 21,
+                      "column": 27
+                    }
+                  }
+                },
+                {
+                  "id": 92,
+                  "type": "dependency_reference",
+                  "location": {
+                    "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                    "start": {
+                      "offset": 428,
+                      "line": 21,
+                      "column": 30
+                    },
+                    "end": {
+                      "offset": 489,
+                      "line": 21,
+                      "column": 91
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": 90,
+                      "type": "dependency_name",
+                      "value": "provisioning_step",
+                      "location": {
+                        "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                        "start": {
+                          "offset": 428,
+                          "line": 21,
+                          "column": 30
+                        },
+                        "end": {
+                          "offset": 489,
+                          "line": 21,
+                          "column": 91
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": 87,
+                          "type": "reference_identifier",
+                          "value": "provisioning_step",
+                          "location": {
+                            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                            "start": {
+                              "offset": 439,
+                              "line": 21,
+                              "column": 41
+                            },
+                            "end": {
+                              "offset": 456,
+                              "line": 21,
+                              "column": 58
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "id": 91,
+                      "type": "access_chain",
+                      "location": {
+                        "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                        "start": {
+                          "offset": 428,
+                          "line": 21,
+                          "column": 30
+                        },
+                        "end": {
+                          "offset": 489,
+                          "line": 21,
+                          "column": 91
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": 88,
+                          "type": "reference_identifier",
+                          "value": "outputs",
+                          "location": {
+                            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                            "start": {
+                              "offset": 457,
+                              "line": 21,
+                              "column": 59
+                            },
+                            "end": {
+                              "offset": 464,
+                              "line": 21,
+                              "column": 66
+                            }
+                          }
+                        },
+                        {
+                          "id": 89,
+                          "type": "reference_identifier",
+                          "value": "inventory_yaml_file_path",
+                          "location": {
+                            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/orchestration/terragrunt.hcl",
+                            "start": {
+                              "offset": 465,
+                              "line": 21,
+                              "column": 67
+                            },
+                            "end": {
+                              "offset": 489,
+                              "line": 21,
+                              "column": 91
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

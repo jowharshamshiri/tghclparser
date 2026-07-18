@@ -20,7 +20,7 @@ export class FunctionRegistry {
 
     registerFunction(name: string, implementation: FunctionImplementation) {
         if (this.functions.has(name)) {
-            return;
+            throw new Error(`Function "${name}" is registered more than once`);
         }
         
         this.functions.set(name, implementation);
@@ -28,7 +28,7 @@ export class FunctionRegistry {
 
     registerFunctionGroup(group: FunctionGroup) {
         if (this.functionGroups.has(group.namespace)) {
-            return;
+            throw new Error(`Function group "${group.namespace}" is registered more than once`);
         }
 
         this.functionGroups.set(group.namespace, group);

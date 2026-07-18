@@ -53,6 +53,13 @@ async function findParentWithFile(
         }
     }
 }
+
+async function requireRepositoryRoot(context: FunctionContext): Promise<string> {
+	const currentDir = path.dirname(URI.parse(context.document.uri).fsPath);
+	const marker = await findParentWithFile(currentDir, '.git', context, true);
+	if (!marker) throw new Error(`No Git repository contains ${currentDir}`);
+	return path.dirname(marker);
+}
 export const coreFunctionGroup = {
     namespace: 'core',
     functions: {
@@ -137,6 +144,24 @@ export const coreFunctionGroup = {
         ): Promise<RuntimeValue<ValueType>> => {
             return makeStringValue(os.platform());
         },
+		get_repo_root: async (
+			_args: RuntimeValue<ValueType>[],
+			context: FunctionContext
+		): Promise<RuntimeValue<ValueType>> => makeStringValue(await requireRepositoryRoot(context)),
+		get_path_from_repo_root: async (
+			_args: RuntimeValue<ValueType>[],
+			context: FunctionContext
+		): Promise<RuntimeValue<ValueType>> => {
+			const currentDir = path.dirname(URI.parse(context.document.uri).fsPath);
+			return makeStringValue(path.relative(await requireRepositoryRoot(context), currentDir));
+		},
+		get_path_to_repo_root: async (
+			_args: RuntimeValue<ValueType>[],
+			context: FunctionContext
+		): Promise<RuntimeValue<ValueType>> => {
+			const currentDir = path.dirname(URI.parse(context.document.uri).fsPath);
+			return makeStringValue(path.relative(currentDir, await requireRepositoryRoot(context)) || '.');
+		},
 
         get_working_dir: async (
             _args: RuntimeValue<ValueType>[],

@@ -2,6 +2,7 @@
 import blocks from './blocks.json';
 import functionsDefinitionsJson from './functions.json';
 import { awsFunctionGroup } from './functions/aws_functions';
+import { builtinFunctionGroup } from './functions/builtin_functions';
 import { coreFunctionGroup } from './functions/core_functions';
 import { fileFunctionGroup } from './functions/file_functions';
 import { FunctionRegistry } from './FunctionsRegistry';
@@ -28,6 +29,7 @@ export class Schema {
 
 	initializeFunctionRegistry(): void {
 		this.functionRegistry.registerFunctionGroup(awsFunctionGroup);
+		this.functionRegistry.registerFunctionGroup(builtinFunctionGroup);
 		this.functionRegistry.registerFunctionGroup(coreFunctionGroup);
 		this.functionRegistry.registerFunctionGroup(fileFunctionGroup);
 	}
@@ -93,7 +95,11 @@ export class Schema {
 	}
 
 	getAllBlockTemplates(): BlockDefinition[] {
-		return [...schemaDefinitions.blocks];
+		const collect = (blocks: BlockDefinition[]): BlockDefinition[] => blocks.flatMap(block => [
+			block,
+			...collect(block.blocks ?? [])
+		]);
+		return collect(schemaDefinitions.blocks);
 	}
 
 	getAllFunctions(): FunctionDefinition[] {

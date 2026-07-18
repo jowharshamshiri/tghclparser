@@ -1,0 +1,792 @@
+{
+  "id": 69,
+  "type": "root",
+  "location": {
+    "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+    "start": {
+      "offset": 0,
+      "line": 1,
+      "column": 1
+    },
+    "end": {
+      "offset": 356,
+      "line": 18,
+      "column": 1
+    }
+  },
+  "children": [
+    {
+      "id": 11,
+      "type": "block",
+      "value": "include",
+      "location": {
+        "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+        "start": {
+          "offset": 0,
+          "line": 1,
+          "column": 1
+        },
+        "end": {
+          "offset": 52,
+          "line": 3,
+          "column": 2
+        }
+      },
+      "children": [
+        {
+          "id": 2,
+          "type": "block_identifier",
+          "value": "include",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+            "start": {
+              "offset": 0,
+              "line": 1,
+              "column": 1
+            },
+            "end": {
+              "offset": 7,
+              "line": 1,
+              "column": 8
+            }
+          }
+        },
+        {
+          "id": 4,
+          "type": "parameter",
+          "value": "root",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+            "start": {
+              "offset": 8,
+              "line": 1,
+              "column": 9
+            },
+            "end": {
+              "offset": 14,
+              "line": 1,
+              "column": 15
+            }
+          },
+          "children": [
+            {
+              "id": 3,
+              "type": "string_lit",
+              "value": "root",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+                "start": {
+                  "offset": 8,
+                  "line": 1,
+                  "column": 9
+                },
+                "end": {
+                  "offset": 14,
+                  "line": 1,
+                  "column": 15
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": 10,
+          "type": "attribute",
+          "value": "path",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+            "start": {
+              "offset": 19,
+              "line": 2,
+              "column": 3
+            },
+            "end": {
+              "offset": 51,
+              "line": 3,
+              "column": 1
+            }
+          },
+          "children": [
+            {
+              "id": 5,
+              "type": "attribute_identifier",
+              "value": "path",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+                "start": {
+                  "offset": 19,
+                  "line": 2,
+                  "column": 3
+                },
+                "end": {
+                  "offset": 23,
+                  "line": 2,
+                  "column": 7
+                }
+              }
+            },
+            {
+              "id": 9,
+              "type": "function_call",
+              "value": "find_in_parent_folders",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+                "start": {
+                  "offset": 26,
+                  "line": 2,
+                  "column": 10
+                },
+                "end": {
+                  "offset": 50,
+                  "line": 2,
+                  "column": 34
+                }
+              },
+              "children": [
+                {
+                  "id": 8,
+                  "type": "function_identifier",
+                  "value": "find_in_parent_folders",
+                  "location": {
+                    "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+                    "start": {
+                      "offset": 26,
+                      "line": 2,
+                      "column": 10
+                    },
+                    "end": {
+                      "offset": 48,
+                      "line": 2,
+                      "column": 32
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "block",
+      "value": "dependency",
+      "location": {
+        "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+        "start": {
+          "offset": 54,
+          "line": 5,
+          "column": 1
+        },
+        "end": {
+          "offset": 108,
+          "line": 7,
+          "column": 2
+        }
+      },
+      "children": [
+        {
+          "id": 13,
+          "type": "block_identifier",
+          "value": "dependency",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+            "start": {
+              "offset": 54,
+              "line": 5,
+              "column": 1
+            },
+            "end": {
+              "offset": 64,
+              "line": 5,
+              "column": 11
+            }
+          }
+        },
+        {
+          "id": 15,
+          "type": "parameter",
+          "value": "global",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+            "start": {
+              "offset": 65,
+              "line": 5,
+              "column": 12
+            },
+            "end": {
+              "offset": 73,
+              "line": 5,
+              "column": 20
+            }
+          },
+          "children": [
+            {
+              "id": 14,
+              "type": "string_lit",
+              "value": "global",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+                "start": {
+                  "offset": 65,
+                  "line": 5,
+                  "column": 12
+                },
+                "end": {
+                  "offset": 73,
+                  "line": 5,
+                  "column": 20
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": 19,
+          "type": "attribute",
+          "value": "config_path",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+            "start": {
+              "offset": 78,
+              "line": 6,
+              "column": 3
+            },
+            "end": {
+              "offset": 107,
+              "line": 7,
+              "column": 1
+            }
+          },
+          "children": [
+            {
+              "id": 16,
+              "type": "attribute_identifier",
+              "value": "config_path",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+                "start": {
+                  "offset": 78,
+                  "line": 6,
+                  "column": 3
+                },
+                "end": {
+                  "offset": 89,
+                  "line": 6,
+                  "column": 14
+                }
+              }
+            },
+            {
+              "id": 18,
+              "type": "string_lit",
+              "value": "../../global",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+                "start": {
+                  "offset": 92,
+                  "line": 6,
+                  "column": 17
+                },
+                "end": {
+                  "offset": 106,
+                  "line": 6,
+                  "column": 31
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 29,
+      "type": "block",
+      "value": "dependency",
+      "location": {
+        "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+        "start": {
+          "offset": 110,
+          "line": 9,
+          "column": 1
+        },
+        "end": {
+          "offset": 180,
+          "line": 11,
+          "column": 2
+        }
+      },
+      "children": [
+        {
+          "id": 22,
+          "type": "block_identifier",
+          "value": "dependency",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+            "start": {
+              "offset": 110,
+              "line": 9,
+              "column": 1
+            },
+            "end": {
+              "offset": 120,
+              "line": 9,
+              "column": 11
+            }
+          }
+        },
+        {
+          "id": 24,
+          "type": "parameter",
+          "value": "kube_planning_step",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+            "start": {
+              "offset": 121,
+              "line": 9,
+              "column": 12
+            },
+            "end": {
+              "offset": 141,
+              "line": 9,
+              "column": 32
+            }
+          },
+          "children": [
+            {
+              "id": 23,
+              "type": "string_lit",
+              "value": "kube_planning_step",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+                "start": {
+                  "offset": 121,
+                  "line": 9,
+                  "column": 12
+                },
+                "end": {
+                  "offset": 141,
+                  "line": 9,
+                  "column": 32
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": 28,
+          "type": "attribute",
+          "value": "config_path",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+            "start": {
+              "offset": 146,
+              "line": 10,
+              "column": 3
+            },
+            "end": {
+              "offset": 179,
+              "line": 11,
+              "column": 1
+            }
+          },
+          "children": [
+            {
+              "id": 25,
+              "type": "attribute_identifier",
+              "value": "config_path",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+                "start": {
+                  "offset": 146,
+                  "line": 10,
+                  "column": 3
+                },
+                "end": {
+                  "offset": 157,
+                  "line": 10,
+                  "column": 14
+                }
+              }
+            },
+            {
+              "id": 27,
+              "type": "string_lit",
+              "value": "../kube_planning",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+                "start": {
+                  "offset": 160,
+                  "line": 10,
+                  "column": 17
+                },
+                "end": {
+                  "offset": 178,
+                  "line": 10,
+                  "column": 35
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 68,
+      "type": "assignment",
+      "value": "inputs",
+      "location": {
+        "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+        "start": {
+          "offset": 182,
+          "line": 13,
+          "column": 1
+        },
+        "end": {
+          "offset": 354,
+          "line": 16,
+          "column": 2
+        }
+      },
+      "children": [
+        {
+          "id": 30,
+          "type": "root_assignment_identifier",
+          "value": "inputs",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+            "start": {
+              "offset": 182,
+              "line": 13,
+              "column": 1
+            },
+            "end": {
+              "offset": 188,
+              "line": 13,
+              "column": 7
+            }
+          }
+        },
+        {
+          "id": 67,
+          "type": "object",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+            "start": {
+              "offset": 191,
+              "line": 13,
+              "column": 10
+            },
+            "end": {
+              "offset": 354,
+              "line": 16,
+              "column": 2
+            }
+          },
+          "children": [
+            {
+              "id": 48,
+              "type": "attribute",
+              "value": "global_state",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+                "start": {
+                  "offset": 195,
+                  "line": 14,
+                  "column": 3
+                },
+                "end": {
+                  "offset": 263,
+                  "line": 15,
+                  "column": 3
+                }
+              },
+              "children": [
+                {
+                  "id": 31,
+                  "type": "attribute_identifier",
+                  "value": "global_state",
+                  "location": {
+                    "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+                    "start": {
+                      "offset": 195,
+                      "line": 14,
+                      "column": 3
+                    },
+                    "end": {
+                      "offset": 207,
+                      "line": 14,
+                      "column": 15
+                    }
+                  }
+                },
+                {
+                  "id": 47,
+                  "type": "dependency_reference",
+                  "location": {
+                    "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+                    "start": {
+                      "offset": 222,
+                      "line": 14,
+                      "column": 30
+                    },
+                    "end": {
+                      "offset": 260,
+                      "line": 14,
+                      "column": 68
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": 45,
+                      "type": "dependency_name",
+                      "value": "global",
+                      "location": {
+                        "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+                        "start": {
+                          "offset": 222,
+                          "line": 14,
+                          "column": 30
+                        },
+                        "end": {
+                          "offset": 260,
+                          "line": 14,
+                          "column": 68
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": 42,
+                          "type": "reference_identifier",
+                          "value": "global",
+                          "location": {
+                            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+                            "start": {
+                              "offset": 233,
+                              "line": 14,
+                              "column": 41
+                            },
+                            "end": {
+                              "offset": 239,
+                              "line": 14,
+                              "column": 47
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "id": 46,
+                      "type": "access_chain",
+                      "location": {
+                        "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+                        "start": {
+                          "offset": 222,
+                          "line": 14,
+                          "column": 30
+                        },
+                        "end": {
+                          "offset": 260,
+                          "line": 14,
+                          "column": 68
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": 43,
+                          "type": "reference_identifier",
+                          "value": "outputs",
+                          "location": {
+                            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+                            "start": {
+                              "offset": 240,
+                              "line": 14,
+                              "column": 48
+                            },
+                            "end": {
+                              "offset": 247,
+                              "line": 14,
+                              "column": 55
+                            }
+                          }
+                        },
+                        {
+                          "id": 44,
+                          "type": "reference_identifier",
+                          "value": "global_state",
+                          "location": {
+                            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+                            "start": {
+                              "offset": 248,
+                              "line": 14,
+                              "column": 56
+                            },
+                            "end": {
+                              "offset": 260,
+                              "line": 14,
+                              "column": 68
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": 66,
+              "type": "attribute",
+              "value": "kube_inventory_file_path",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+                "start": {
+                  "offset": 263,
+                  "line": 15,
+                  "column": 3
+                },
+                "end": {
+                  "offset": 353,
+                  "line": 16,
+                  "column": 1
+                }
+              },
+              "children": [
+                {
+                  "id": 49,
+                  "type": "attribute_identifier",
+                  "value": "kube_inventory_file_path",
+                  "location": {
+                    "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+                    "start": {
+                      "offset": 263,
+                      "line": 15,
+                      "column": 3
+                    },
+                    "end": {
+                      "offset": 287,
+                      "line": 15,
+                      "column": 27
+                    }
+                  }
+                },
+                {
+                  "id": 65,
+                  "type": "dependency_reference",
+                  "location": {
+                    "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+                    "start": {
+                      "offset": 290,
+                      "line": 15,
+                      "column": 30
+                    },
+                    "end": {
+                      "offset": 352,
+                      "line": 15,
+                      "column": 92
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": 63,
+                      "type": "dependency_name",
+                      "value": "kube_planning_step",
+                      "location": {
+                        "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+                        "start": {
+                          "offset": 290,
+                          "line": 15,
+                          "column": 30
+                        },
+                        "end": {
+                          "offset": 352,
+                          "line": 15,
+                          "column": 92
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": 60,
+                          "type": "reference_identifier",
+                          "value": "kube_planning_step",
+                          "location": {
+                            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+                            "start": {
+                              "offset": 301,
+                              "line": 15,
+                              "column": 41
+                            },
+                            "end": {
+                              "offset": 319,
+                              "line": 15,
+                              "column": 59
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "id": 64,
+                      "type": "access_chain",
+                      "location": {
+                        "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+                        "start": {
+                          "offset": 290,
+                          "line": 15,
+                          "column": 30
+                        },
+                        "end": {
+                          "offset": 352,
+                          "line": 15,
+                          "column": 92
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": 61,
+                          "type": "reference_identifier",
+                          "value": "outputs",
+                          "location": {
+                            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+                            "start": {
+                              "offset": 320,
+                              "line": 15,
+                              "column": 60
+                            },
+                            "end": {
+                              "offset": 327,
+                              "line": 15,
+                              "column": 67
+                            }
+                          }
+                        },
+                        {
+                          "id": 62,
+                          "type": "reference_identifier",
+                          "value": "kube_inventory_file_path",
+                          "location": {
+                            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/kubespray/terragrunt.hcl",
+                            "start": {
+                              "offset": 328,
+                              "line": 15,
+                              "column": 68
+                            },
+                            "end": {
+                              "offset": 352,
+                              "line": 15,
+                              "column": 92
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

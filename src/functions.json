@@ -4090,6 +4090,75 @@
 			"deprecated": false
 		},
 		{
+			"name": "coalescelist",
+			"description": "Returns the first non-empty list from its arguments.",
+			"parameters": [{ "name": "lists", "types": ["array"], "required": true, "variadic": true }],
+			"returnType": { "types": ["array"], "description": "The first non-empty list." }
+		},
+		{
+			"name": "join",
+			"description": "Joins a list of strings using a separator.",
+			"parameters": [
+				{ "name": "separator", "types": ["string"], "required": true },
+				{ "name": "values", "types": ["array"], "required": true }
+			],
+			"returnType": { "types": ["string"], "description": "The joined string." }
+		},
+		{
+			"name": "keys",
+			"description": "Returns the keys of a map in lexicographical order.",
+			"parameters": [{ "name": "map", "types": ["object"], "required": true }],
+			"returnType": { "types": ["array"], "description": "The sorted map keys." }
+		},
+		{
+			"name": "length",
+			"description": "Returns the number of elements in a collection or characters in a string.",
+			"parameters": [{ "name": "value", "types": ["string", "array", "object"], "required": true }],
+			"returnType": { "types": ["number"], "description": "The value length." }
+		},
+		{
+			"name": "md5",
+			"description": "Computes the MD5 hash of a string and returns its hexadecimal digest.",
+			"parameters": [{ "name": "value", "types": ["string"], "required": true }],
+			"returnType": { "types": ["string"], "description": "The hexadecimal MD5 digest." }
+		},
+		{
+			"name": "sha1",
+			"description": "Computes the SHA-1 hash of a string and returns its hexadecimal digest.",
+			"parameters": [{ "name": "value", "types": ["string"], "required": true }],
+			"returnType": { "types": ["string"], "description": "The hexadecimal SHA-1 digest." }
+		},
+		{
+			"name": "sha256",
+			"description": "Computes the SHA-256 hash of a string and returns its hexadecimal digest.",
+			"parameters": [{ "name": "value", "types": ["string"], "required": true }],
+			"returnType": { "types": ["string"], "description": "The hexadecimal SHA-256 digest." }
+		},
+		{
+			"name": "sha512",
+			"description": "Computes the SHA-512 hash of a string and returns its hexadecimal digest.",
+			"parameters": [{ "name": "value", "types": ["string"], "required": true }],
+			"returnType": { "types": ["string"], "description": "The hexadecimal SHA-512 digest." }
+		},
+		{
+			"name": "signum",
+			"description": "Returns -1, 0, or 1 to indicate the sign of a number.",
+			"parameters": [{ "name": "value", "types": ["number"], "required": true }],
+			"returnType": { "types": ["number"], "description": "The sign of the number." }
+		},
+		{
+			"name": "sum",
+			"description": "Returns the sum of the numbers in a list.",
+			"parameters": [{ "name": "values", "types": ["array"], "required": true }],
+			"returnType": { "types": ["number"], "description": "The numeric sum." }
+		},
+		{
+			"name": "title",
+			"description": "Converts the first letter of each word in a string to uppercase.",
+			"parameters": [{ "name": "value", "types": ["string"], "required": true }],
+			"returnType": { "types": ["string"], "description": "The title-cased string." }
+		},
+		{
 			"name": "deep_merge",
 			"description": "Recursively merges maps and objects, with later arguments taking precedence.",
 			"parameters": [{ "name": "values", "types": ["object"], "required": true, "variadic": true }],
@@ -4097,9 +4166,14 @@
 		},
 		{
 			"name": "mark_glob_as_read",
-			"description": "Marks every file matching an absolute glob as read for Terragrunt run queue discovery.",
-			"parameters": [{ "name": "glob", "types": ["string"], "required": true }],
-			"returnType": { "types": ["array"], "description": "Absolute paths matched by the glob." }
+			"description": "Expands a gobwas-compatible glob and marks every matching file as read. Relative patterns resolve from the current working directory. Expansion is confined to the enclosing Git repository unless a leading --terragrunt-boundary argument explicitly changes the boundary.",
+			"parameters": [
+				{ "name": "boundary_or_pattern", "types": ["string"], "required": true },
+				{ "name": "pattern", "types": ["string"], "required": false }
+			],
+			"returnType": { "types": ["array"], "description": "Absolute paths matched by the glob." },
+			"examples": ["locals {\n  configs = mark_glob_as_read(\"${get_terragrunt_dir()}/config/{*.yaml,**/*.yaml}\")\n}"],
+			"deprecated": false
 		},
 		{
 			"name": "constraint_check",

@@ -1,0 +1,566 @@
+{
+  "id": 46,
+  "type": "root",
+  "location": {
+    "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+    "start": {
+      "offset": 0,
+      "line": 1,
+      "column": 1
+    },
+    "end": {
+      "offset": 208,
+      "line": 14,
+      "column": 1
+    }
+  },
+  "children": [
+    {
+      "id": 11,
+      "type": "block",
+      "value": "include",
+      "location": {
+        "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+        "start": {
+          "offset": 0,
+          "line": 1,
+          "column": 1
+        },
+        "end": {
+          "offset": 52,
+          "line": 3,
+          "column": 2
+        }
+      },
+      "children": [
+        {
+          "id": 2,
+          "type": "block_identifier",
+          "value": "include",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+            "start": {
+              "offset": 0,
+              "line": 1,
+              "column": 1
+            },
+            "end": {
+              "offset": 7,
+              "line": 1,
+              "column": 8
+            }
+          }
+        },
+        {
+          "id": 4,
+          "type": "parameter",
+          "value": "root",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+            "start": {
+              "offset": 8,
+              "line": 1,
+              "column": 9
+            },
+            "end": {
+              "offset": 14,
+              "line": 1,
+              "column": 15
+            }
+          },
+          "children": [
+            {
+              "id": 3,
+              "type": "string_lit",
+              "value": "root",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+                "start": {
+                  "offset": 8,
+                  "line": 1,
+                  "column": 9
+                },
+                "end": {
+                  "offset": 14,
+                  "line": 1,
+                  "column": 15
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": 10,
+          "type": "attribute",
+          "value": "path",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+            "start": {
+              "offset": 19,
+              "line": 2,
+              "column": 3
+            },
+            "end": {
+              "offset": 51,
+              "line": 3,
+              "column": 1
+            }
+          },
+          "children": [
+            {
+              "id": 5,
+              "type": "attribute_identifier",
+              "value": "path",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+                "start": {
+                  "offset": 19,
+                  "line": 2,
+                  "column": 3
+                },
+                "end": {
+                  "offset": 23,
+                  "line": 2,
+                  "column": 7
+                }
+              }
+            },
+            {
+              "id": 9,
+              "type": "function_call",
+              "value": "find_in_parent_folders",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+                "start": {
+                  "offset": 26,
+                  "line": 2,
+                  "column": 10
+                },
+                "end": {
+                  "offset": 50,
+                  "line": 2,
+                  "column": 34
+                }
+              },
+              "children": [
+                {
+                  "id": 8,
+                  "type": "function_identifier",
+                  "value": "find_in_parent_folders",
+                  "location": {
+                    "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+                    "start": {
+                      "offset": 26,
+                      "line": 2,
+                      "column": 10
+                    },
+                    "end": {
+                      "offset": 48,
+                      "line": 2,
+                      "column": 32
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "block",
+      "value": "dependency",
+      "location": {
+        "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+        "start": {
+          "offset": 54,
+          "line": 5,
+          "column": 1
+        },
+        "end": {
+          "offset": 108,
+          "line": 7,
+          "column": 2
+        }
+      },
+      "children": [
+        {
+          "id": 13,
+          "type": "block_identifier",
+          "value": "dependency",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+            "start": {
+              "offset": 54,
+              "line": 5,
+              "column": 1
+            },
+            "end": {
+              "offset": 64,
+              "line": 5,
+              "column": 11
+            }
+          }
+        },
+        {
+          "id": 15,
+          "type": "parameter",
+          "value": "global",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+            "start": {
+              "offset": 65,
+              "line": 5,
+              "column": 12
+            },
+            "end": {
+              "offset": 73,
+              "line": 5,
+              "column": 20
+            }
+          },
+          "children": [
+            {
+              "id": 14,
+              "type": "string_lit",
+              "value": "global",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+                "start": {
+                  "offset": 65,
+                  "line": 5,
+                  "column": 12
+                },
+                "end": {
+                  "offset": 73,
+                  "line": 5,
+                  "column": 20
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": 19,
+          "type": "attribute",
+          "value": "config_path",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+            "start": {
+              "offset": 78,
+              "line": 6,
+              "column": 3
+            },
+            "end": {
+              "offset": 107,
+              "line": 7,
+              "column": 1
+            }
+          },
+          "children": [
+            {
+              "id": 16,
+              "type": "attribute_identifier",
+              "value": "config_path",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+                "start": {
+                  "offset": 78,
+                  "line": 6,
+                  "column": 3
+                },
+                "end": {
+                  "offset": 89,
+                  "line": 6,
+                  "column": 14
+                }
+              }
+            },
+            {
+              "id": 18,
+              "type": "string_lit",
+              "value": "../../global",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+                "start": {
+                  "offset": 92,
+                  "line": 6,
+                  "column": 17
+                },
+                "end": {
+                  "offset": 106,
+                  "line": 6,
+                  "column": 31
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 45,
+      "type": "assignment",
+      "value": "inputs",
+      "location": {
+        "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+        "start": {
+          "offset": 110,
+          "line": 9,
+          "column": 1
+        },
+        "end": {
+          "offset": 206,
+          "line": 12,
+          "column": 2
+        }
+      },
+      "children": [
+        {
+          "id": 21,
+          "type": "root_assignment_identifier",
+          "value": "inputs",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+            "start": {
+              "offset": 110,
+              "line": 9,
+              "column": 1
+            },
+            "end": {
+              "offset": 116,
+              "line": 9,
+              "column": 7
+            }
+          }
+        },
+        {
+          "id": 44,
+          "type": "object",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+            "start": {
+              "offset": 119,
+              "line": 9,
+              "column": 10
+            },
+            "end": {
+              "offset": 206,
+              "line": 12,
+              "column": 2
+            }
+          },
+          "children": [
+            {
+              "id": 39,
+              "type": "attribute",
+              "value": "global_state",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+                "start": {
+                  "offset": 123,
+                  "line": 10,
+                  "column": 3
+                },
+                "end": {
+                  "offset": 179,
+                  "line": 11,
+                  "column": 3
+                }
+              },
+              "children": [
+                {
+                  "id": 22,
+                  "type": "attribute_identifier",
+                  "value": "global_state",
+                  "location": {
+                    "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+                    "start": {
+                      "offset": 123,
+                      "line": 10,
+                      "column": 3
+                    },
+                    "end": {
+                      "offset": 135,
+                      "line": 10,
+                      "column": 15
+                    }
+                  }
+                },
+                {
+                  "id": 38,
+                  "type": "dependency_reference",
+                  "location": {
+                    "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+                    "start": {
+                      "offset": 138,
+                      "line": 10,
+                      "column": 18
+                    },
+                    "end": {
+                      "offset": 176,
+                      "line": 10,
+                      "column": 56
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": 36,
+                      "type": "dependency_name",
+                      "value": "global",
+                      "location": {
+                        "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+                        "start": {
+                          "offset": 138,
+                          "line": 10,
+                          "column": 18
+                        },
+                        "end": {
+                          "offset": 176,
+                          "line": 10,
+                          "column": 56
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": 33,
+                          "type": "reference_identifier",
+                          "value": "global",
+                          "location": {
+                            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+                            "start": {
+                              "offset": 149,
+                              "line": 10,
+                              "column": 29
+                            },
+                            "end": {
+                              "offset": 155,
+                              "line": 10,
+                              "column": 35
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "id": 37,
+                      "type": "access_chain",
+                      "location": {
+                        "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+                        "start": {
+                          "offset": 138,
+                          "line": 10,
+                          "column": 18
+                        },
+                        "end": {
+                          "offset": 176,
+                          "line": 10,
+                          "column": 56
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": 34,
+                          "type": "reference_identifier",
+                          "value": "outputs",
+                          "location": {
+                            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+                            "start": {
+                              "offset": 156,
+                              "line": 10,
+                              "column": 36
+                            },
+                            "end": {
+                              "offset": 163,
+                              "line": 10,
+                              "column": 43
+                            }
+                          }
+                        },
+                        {
+                          "id": 35,
+                          "type": "reference_identifier",
+                          "value": "global_state",
+                          "location": {
+                            "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+                            "start": {
+                              "offset": 164,
+                              "line": 10,
+                              "column": 44
+                            },
+                            "end": {
+                              "offset": 176,
+                              "line": 10,
+                              "column": 56
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": 43,
+              "type": "attribute",
+              "value": "zone",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+                "start": {
+                  "offset": 179,
+                  "line": 11,
+                  "column": 3
+                },
+                "end": {
+                  "offset": 205,
+                  "line": 12,
+                  "column": 1
+                }
+              },
+              "children": [
+                {
+                  "id": 40,
+                  "type": "attribute_identifier",
+                  "value": "zone",
+                  "location": {
+                    "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+                    "start": {
+                      "offset": 179,
+                      "line": 11,
+                      "column": 3
+                    },
+                    "end": {
+                      "offset": 183,
+                      "line": 11,
+                      "column": 7
+                    }
+                  }
+                },
+                {
+                  "id": 42,
+                  "type": "string_lit",
+                  "value": "planning",
+                  "location": {
+                    "source": "file:///Users/bahram/ws/prj/machinegenesis/abrcity/envs/prod/steps/planning/terragrunt.hcl",
+                    "start": {
+                      "offset": 194,
+                      "line": 11,
+                      "column": 18
+                    },
+                    "end": {
+                      "offset": 204,
+                      "line": 11,
+                      "column": 28
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

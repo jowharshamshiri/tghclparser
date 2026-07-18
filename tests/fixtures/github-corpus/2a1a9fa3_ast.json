@@ -1,0 +1,655 @@
+{
+  "id": 44,
+  "type": "root",
+  "location": {
+    "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+    "start": {
+      "offset": 0,
+      "line": 1,
+      "column": 1
+    },
+    "end": {
+      "offset": 454,
+      "line": 28,
+      "column": 2
+    }
+  },
+  "children": [
+    {
+      "id": 7,
+      "type": "block",
+      "value": "dependencies",
+      "location": {
+        "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+        "start": {
+          "offset": 57,
+          "line": 5,
+          "column": 1
+        },
+        "end": {
+          "offset": 98,
+          "line": 7,
+          "column": 2
+        }
+      },
+      "children": [
+        {
+          "id": 2,
+          "type": "block_identifier",
+          "value": "dependencies",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+            "start": {
+              "offset": 57,
+              "line": 5,
+              "column": 1
+            },
+            "end": {
+              "offset": 69,
+              "line": 5,
+              "column": 13
+            }
+          }
+        },
+        {
+          "id": 6,
+          "type": "attribute",
+          "value": "paths",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+            "start": {
+              "offset": 74,
+              "line": 6,
+              "column": 3
+            },
+            "end": {
+              "offset": 97,
+              "line": 7,
+              "column": 1
+            }
+          },
+          "children": [
+            {
+              "id": 3,
+              "type": "attribute_identifier",
+              "value": "paths",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                "start": {
+                  "offset": 74,
+                  "line": 6,
+                  "column": 3
+                },
+                "end": {
+                  "offset": 79,
+                  "line": 6,
+                  "column": 8
+                }
+              }
+            },
+            {
+              "id": 5,
+              "type": "array_lit",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                "start": {
+                  "offset": 82,
+                  "line": 6,
+                  "column": 11
+                },
+                "end": {
+                  "offset": 96,
+                  "line": 6,
+                  "column": 25
+                }
+              },
+              "children": [
+                {
+                  "id": 4,
+                  "type": "string_lit",
+                  "value": "modules/s3",
+                  "location": {
+                    "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                    "start": {
+                      "offset": 83,
+                      "line": 6,
+                      "column": 12
+                    },
+                    "end": {
+                      "offset": 95,
+                      "line": 6,
+                      "column": 24
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 43,
+      "type": "block",
+      "value": "terraform",
+      "location": {
+        "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+        "start": {
+          "offset": 100,
+          "line": 9,
+          "column": 1
+        },
+        "end": {
+          "offset": 454,
+          "line": 28,
+          "column": 2
+        }
+      },
+      "children": [
+        {
+          "id": 9,
+          "type": "block_identifier",
+          "value": "terraform",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+            "start": {
+              "offset": 100,
+              "line": 9,
+              "column": 1
+            },
+            "end": {
+              "offset": 109,
+              "line": 9,
+              "column": 10
+            }
+          }
+        },
+        {
+          "id": 42,
+          "type": "block",
+          "value": "extra_arguments",
+          "location": {
+            "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+            "start": {
+              "offset": 115,
+              "line": 11,
+              "column": 3
+            },
+            "end": {
+              "offset": 452,
+              "line": 27,
+              "column": 4
+            }
+          },
+          "children": [
+            {
+              "id": 11,
+              "type": "block_identifier",
+              "value": "extra_arguments",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                "start": {
+                  "offset": 115,
+                  "line": 11,
+                  "column": 3
+                },
+                "end": {
+                  "offset": 130,
+                  "line": 11,
+                  "column": 18
+                }
+              }
+            },
+            {
+              "id": 41,
+              "type": "parameter",
+              "value": "custom_vars",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                "start": {
+                  "offset": 131,
+                  "line": 11,
+                  "column": 19
+                },
+                "end": {
+                  "offset": 144,
+                  "line": 11,
+                  "column": 32
+                }
+              },
+              "children": [
+                {
+                  "id": 12,
+                  "type": "string_lit",
+                  "value": "custom_vars",
+                  "location": {
+                    "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                    "start": {
+                      "offset": 131,
+                      "line": 11,
+                      "column": 19
+                    },
+                    "end": {
+                      "offset": 144,
+                      "line": 11,
+                      "column": 32
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "id": 20,
+              "type": "attribute",
+              "value": "commands",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                "start": {
+                  "offset": 151,
+                  "line": 12,
+                  "column": 5
+                },
+                "end": {
+                  "offset": 336,
+                  "line": 24,
+                  "column": 5
+                }
+              },
+              "children": [
+                {
+                  "id": 13,
+                  "type": "attribute_identifier",
+                  "value": "commands",
+                  "location": {
+                    "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                    "start": {
+                      "offset": 151,
+                      "line": 12,
+                      "column": 5
+                    },
+                    "end": {
+                      "offset": 159,
+                      "line": 12,
+                      "column": 13
+                    }
+                  }
+                },
+                {
+                  "id": 19,
+                  "type": "array_lit",
+                  "location": {
+                    "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                    "start": {
+                      "offset": 162,
+                      "line": 12,
+                      "column": 16
+                    },
+                    "end": {
+                      "offset": 244,
+                      "line": 18,
+                      "column": 6
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": 14,
+                      "type": "string_lit",
+                      "value": "apply",
+                      "location": {
+                        "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                        "start": {
+                          "offset": 170,
+                          "line": 13,
+                          "column": 7
+                        },
+                        "end": {
+                          "offset": 177,
+                          "line": 13,
+                          "column": 14
+                        }
+                      }
+                    },
+                    {
+                      "id": 15,
+                      "type": "string_lit",
+                      "value": "plan",
+                      "location": {
+                        "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                        "start": {
+                          "offset": 185,
+                          "line": 14,
+                          "column": 7
+                        },
+                        "end": {
+                          "offset": 191,
+                          "line": 14,
+                          "column": 13
+                        }
+                      }
+                    },
+                    {
+                      "id": 16,
+                      "type": "string_lit",
+                      "value": "import",
+                      "location": {
+                        "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                        "start": {
+                          "offset": 199,
+                          "line": 15,
+                          "column": 7
+                        },
+                        "end": {
+                          "offset": 207,
+                          "line": 15,
+                          "column": 15
+                        }
+                      }
+                    },
+                    {
+                      "id": 17,
+                      "type": "string_lit",
+                      "value": "push",
+                      "location": {
+                        "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                        "start": {
+                          "offset": 215,
+                          "line": 16,
+                          "column": 7
+                        },
+                        "end": {
+                          "offset": 221,
+                          "line": 16,
+                          "column": 13
+                        }
+                      }
+                    },
+                    {
+                      "id": 18,
+                      "type": "string_lit",
+                      "value": "refresh",
+                      "location": {
+                        "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                        "start": {
+                          "offset": 229,
+                          "line": 17,
+                          "column": 7
+                        },
+                        "end": {
+                          "offset": 238,
+                          "line": 17,
+                          "column": 16
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": 40,
+              "type": "attribute",
+              "value": "optional_var_files",
+              "location": {
+                "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                "start": {
+                  "offset": 336,
+                  "line": 24,
+                  "column": 5
+                },
+                "end": {
+                  "offset": 451,
+                  "line": 27,
+                  "column": 3
+                }
+              },
+              "children": [
+                {
+                  "id": 21,
+                  "type": "attribute_identifier",
+                  "value": "optional_var_files",
+                  "location": {
+                    "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                    "start": {
+                      "offset": 336,
+                      "line": 24,
+                      "column": 5
+                    },
+                    "end": {
+                      "offset": 354,
+                      "line": 24,
+                      "column": 23
+                    }
+                  }
+                },
+                {
+                  "id": 39,
+                  "type": "array_lit",
+                  "location": {
+                    "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                    "start": {
+                      "offset": 357,
+                      "line": 24,
+                      "column": 26
+                    },
+                    "end": {
+                      "offset": 448,
+                      "line": 26,
+                      "column": 6
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": 38,
+                      "type": "interpolated_string",
+                      "location": {
+                        "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                        "start": {
+                          "offset": 365,
+                          "line": 25,
+                          "column": 7
+                        },
+                        "end": {
+                          "offset": 442,
+                          "line": 25,
+                          "column": 84
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": 26,
+                          "type": "legacy_interpolation",
+                          "location": {
+                            "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                            "start": {
+                              "offset": 366,
+                              "line": 25,
+                              "column": 8
+                            },
+                            "end": {
+                              "offset": 389,
+                              "line": 25,
+                              "column": 31
+                            }
+                          },
+                          "children": [
+                            {
+                              "id": 25,
+                              "type": "function_call",
+                              "value": "get_terragrunt_dir",
+                              "location": {
+                                "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                                "start": {
+                                  "offset": 368,
+                                  "line": 25,
+                                  "column": 10
+                                },
+                                "end": {
+                                  "offset": 388,
+                                  "line": 25,
+                                  "column": 30
+                                }
+                              },
+                              "children": [
+                                {
+                                  "id": 24,
+                                  "type": "function_identifier",
+                                  "value": "get_terragrunt_dir",
+                                  "location": {
+                                    "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                                    "start": {
+                                      "offset": 368,
+                                      "line": 25,
+                                      "column": 10
+                                    },
+                                    "end": {
+                                      "offset": 386,
+                                      "line": 25,
+                                      "column": 28
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "id": 36,
+                          "type": "string_lit",
+                          "value": "/environments/",
+                          "location": {
+                            "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                            "start": {
+                              "offset": 365,
+                              "line": 25,
+                              "column": 7
+                            },
+                            "end": {
+                              "offset": 442,
+                              "line": 25,
+                              "column": 84
+                            }
+                          }
+                        },
+                        {
+                          "id": 35,
+                          "type": "legacy_interpolation",
+                          "location": {
+                            "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                            "start": {
+                              "offset": 403,
+                              "line": 25,
+                              "column": 45
+                            },
+                            "end": {
+                              "offset": 434,
+                              "line": 25,
+                              "column": 76
+                            }
+                          },
+                          "children": [
+                            {
+                              "id": 34,
+                              "type": "function_call",
+                              "value": "get_env",
+                              "location": {
+                                "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                                "start": {
+                                  "offset": 405,
+                                  "line": 25,
+                                  "column": 47
+                                },
+                                "end": {
+                                  "offset": 433,
+                                  "line": 25,
+                                  "column": 75
+                                }
+                              },
+                              "children": [
+                                {
+                                  "id": 31,
+                                  "type": "function_identifier",
+                                  "value": "get_env",
+                                  "location": {
+                                    "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                                    "start": {
+                                      "offset": 405,
+                                      "line": 25,
+                                      "column": 47
+                                    },
+                                    "end": {
+                                      "offset": 412,
+                                      "line": 25,
+                                      "column": 54
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": 32,
+                                  "type": "string_lit",
+                                  "value": "TF_VAR_env",
+                                  "location": {
+                                    "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                                    "start": {
+                                      "offset": 413,
+                                      "line": 25,
+                                      "column": 55
+                                    },
+                                    "end": {
+                                      "offset": 425,
+                                      "line": 25,
+                                      "column": 67
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": 33,
+                                  "type": "string_lit",
+                                  "value": "dev",
+                                  "location": {
+                                    "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                                    "start": {
+                                      "offset": 427,
+                                      "line": 25,
+                                      "column": 69
+                                    },
+                                    "end": {
+                                      "offset": 432,
+                                      "line": 25,
+                                      "column": 74
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "id": 37,
+                          "type": "string_lit",
+                          "value": ".tfvars",
+                          "location": {
+                            "source": "file:///Users/bahram/ws/prj/tghclparser_testenv/nocommit/samples/ok/10.hcl",
+                            "start": {
+                              "offset": 365,
+                              "line": 25,
+                              "column": 7
+                            },
+                            "end": {
+                              "offset": 442,
+                              "line": 25,
+                              "column": 84
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

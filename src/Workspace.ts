@@ -7,6 +7,7 @@ import type { FunctionContext, TerragruntConfig, Token } from './model';
 import { createDependencyConfig, createIncludeConfig, TreeNode } from './model';
 import { ParsedDocument } from './ParsedDocument';
 import { Schema } from './Schema';
+import { expandTerragruntGlob } from './functions/terragrunt_glob';
 
 export class Workspace {
 	private documents: Map<string, ParsedDocument>;
@@ -37,7 +38,11 @@ export class Workspace {
 				content: doc.getContent(),
 				includes: [],
 				dependencies: [],
+				reads: [],
 				referencedBy: [],
+				includedBy: [],
+				dependedOnBy: [],
+				readBy: [],
 				sourcePath: URI.parse(uri).fsPath,
 				targetPath: URI.parse(uri).fsPath,
 				block: undefined,
@@ -47,10 +52,13 @@ export class Workspace {
 			this.configMap.set(uri, currentConfig);
 		}
 		currentConfig.content = doc.getContent();
-		for (const previousTarget of [...currentConfig.includes, ...currentConfig.dependencies]) {
+		for (const previousTarget of [...currentConfig.includes, ...currentConfig.dependencies, ...currentConfig.reads]) {
 			const target = this.configMap.get(previousTarget);
 			if (!target) continue;
 			target.referencedBy = target.referencedBy.filter(reference => reference !== uri);
+			target.includedBy = target.includedBy.filter(reference => reference !== uri);
+			target.dependedOnBy = target.dependedOnBy.filter(reference => reference !== uri);
+			target.readBy = target.readBy.filter(reference => reference !== uri);
 			if (target.dependencyType === 'unit' || target.dependencyType === 'stack') {
 				for (const childUri of target.dependencies) {
 					const child = this.configMap.get(childUri);
@@ -64,6 +72,7 @@ export class Workspace {
 		}
 		currentConfig.includes = [];
 		currentConfig.dependencies = [];
+		currentConfig.reads = [];
 
 		// Process includes
 		const includes = doc.findIncludeBlocks(ast);
@@ -93,6 +102,7 @@ export class Workspace {
 			if (!includedConfig.referencedBy.includes(uri)) {
 				includedConfig.referencedBy.push(uri);
 			}
+			if (!includedConfig.includedBy.includes(uri)) includedConfig.includedBy.push(uri);
 
 			return resolvedPath;
 		}));
@@ -115,7 +125,11 @@ export class Workspace {
 						content: source,
 						includes: [],
 						dependencies: [],
+						reads: [],
 						referencedBy: [uri],
+						includedBy: [],
+						dependedOnBy: [uri],
+						readBy: [],
 						sourcePath: source,
 						targetPath: URI.parse(targetUri).fsPath,
 						block,
@@ -166,7 +180,33 @@ export class Workspace {
 			if (!ownerConfig) throw new Error(`Dependency owner is missing from workspace graph: ${ownerUri}`);
 			if (!ownerConfig.dependencies.includes(resolvedPath)) ownerConfig.dependencies.push(resolvedPath);
 			if (!depConfig.referencedBy.includes(ownerUri)) depConfig.referencedBy.push(ownerUri);
+			if (!depConfig.dependedOnBy.includes(ownerUri)) depConfig.dependedOnBy.push(ownerUri);
 			if (ownerUri === uri) dependencyPaths.push(resolvedPath);
+		}
+
+		const readPaths = await this.resolveReadPaths(doc);
+		for (const readUri of readPaths) {
+			let readConfig = this.configMap.get(readUri);
+			if (!readConfig) {
+				readConfig = {
+					uri: readUri,
+					content: await fs.readFile(URI.parse(readUri).fsPath, 'utf8'),
+					includes: [],
+					dependencies: [],
+					reads: [],
+					referencedBy: [uri],
+					includedBy: [],
+					dependedOnBy: [],
+					readBy: [uri],
+					sourcePath: URI.parse(uri).fsPath,
+					targetPath: URI.parse(readUri).fsPath,
+					dependencyType: 'read'
+				};
+				this.configMap.set(readUri, readConfig);
+			} else {
+				if (!readConfig.referencedBy.includes(uri)) readConfig.referencedBy.push(uri);
+				if (!readConfig.readBy.includes(uri)) readConfig.readBy.push(uri);
+			}
 		}
 
 		// Update current config
@@ -175,10 +215,13 @@ export class Workspace {
 			...dependencyPaths.filter((path): path is string => path !== undefined),
 			...componentPaths
 		];
+		currentConfig.reads = readPaths;
 		this.configMap.set(uri, currentConfig);
 
-		// Recursively process includes and dependencies
-		for (const refUri of [...includePaths, ...dependencyPaths]) {
+		// HCL files consumed with read_terragrunt_config can themselves include or
+		// read other files. Preserve that transitive lineage instead of flattening it.
+		const readableHclPaths = readPaths.filter(readUri => path.extname(URI.parse(readUri).fsPath) === '.hcl');
+		for (const refUri of [...includePaths, ...dependencyPaths, ...readableHclPaths]) {
 			if (refUri && !processedPaths.has(refUri)) {
 				const refDoc = await this.getParsedDocument(refUri);
 				if (refDoc) {
@@ -345,19 +388,82 @@ export class Workspace {
 			fs: { access: async filePath => fs.access(filePath) }
 		};
 
-		// Get function arguments
-		const args = token.children
-			.filter(c => c.type !== 'function_identifier')
-			.map(arg => ({
+		const args = await Promise.all(token.children
+			.filter(child => child.type !== 'function_identifier')
+			.map(async argument => ({
 				type: 'string' as const,
-				value: arg.value?.toString() || ''
-			}));
+				value: await this.evaluateReadPath(argument, sourceDir, sourceUri)
+			})));
 
 		const result = await this.schema.getFunctionRegistry().evaluateFunction(funcName, args, context);
 		if (!result || result.type !== 'string' || typeof result.value !== 'string') {
 			throw new Error(`Path function ${funcName} did not return a string`);
 		}
 		return result.value;
+	}
+
+	private async resolveReadPaths(document: ParsedDocument): Promise<string[]> {
+		const trackedFunctions = new Set([
+			'mark_as_read',
+			'mark_glob_as_read',
+			'read_terragrunt_config',
+			'read_tfvars_file',
+			'sops_decrypt_file'
+		]);
+		const calls: Token[] = [];
+		const isInsideLocals = (token: Token): boolean => {
+			let ancestor = token.parent;
+			while (ancestor) {
+				if (ancestor.type === 'block' && ancestor.value === 'locals') return true;
+				ancestor = ancestor.parent;
+			}
+			return false;
+		};
+		const visit = (token: Token): void => {
+			const name = token.value?.toString() ?? '';
+			const queueMarker = name === 'mark_as_read' || name === 'mark_glob_as_read';
+			if (token.type === 'function_call' && trackedFunctions.has(name) && (!queueMarker || isInsideLocals(token))) calls.push(token);
+			for (const child of token.children) visit(child);
+		};
+		for (const token of document.getTokens()) visit(token);
+
+		const sourceUri = document.getUri();
+		const sourceDir = path.dirname(URI.parse(sourceUri).fsPath);
+		const reads = new Set<string>();
+		for (const call of calls) {
+			const arguments_ = call.children.filter(child => child.type !== 'function_identifier');
+			const argument = arguments_[0];
+			if (!argument) throw new Error(`${call.value} requires a file path argument`);
+			if (call.value === 'mark_glob_as_read') {
+				const values = await Promise.all(arguments_.map(value => this.evaluateReadPath(value, sourceDir, sourceUri)));
+				for (const match of await expandTerragruntGlob(values, sourceDir)) reads.add(URI.file(match).toString());
+				continue;
+			}
+			const configuredPath = await this.evaluateReadPath(argument, sourceDir, sourceUri);
+			if (call.value === 'mark_as_read' && !path.isAbsolute(configuredPath)) {
+				throw new Error(`mark_as_read requires an absolute path, got ${configuredPath}`);
+			}
+			const resolvedPath = path.isAbsolute(configuredPath) ? configuredPath : path.resolve(sourceDir, configuredPath);
+			if (!await this.fileExists(resolvedPath)) throw new Error(`${call.value} target not found: ${resolvedPath}`);
+			reads.add(URI.file(resolvedPath).toString());
+		}
+		return [...reads].sort();
+	}
+
+	private async evaluateReadPath(token: Token, sourceDir: string, sourceUri: string): Promise<string> {
+		if (token.type === 'string_lit') return String(token.value);
+		if (token.type === 'function_call') return this.evaluatePathFunction(token, sourceDir, sourceUri);
+		if (token.type === 'interpolated_string') {
+			const parts = await Promise.all(token.children.map(async child => {
+				if (child.type === 'string_lit') return String(child.value);
+				if (child.type === 'interpolation' && child.children[0]) {
+					return this.evaluateReadPath(child.children[0], sourceDir, sourceUri);
+				}
+				throw new Error(`Unsupported read path segment: ${child.type}`);
+			}));
+			return parts.join('');
+		}
+		throw new Error(`Unsupported read path expression: ${token.type}`);
 	}
 
 	private async buildDependencyTree(): Promise<void> {
@@ -376,11 +482,15 @@ export class Workspace {
 
 		// Second pass: verify that the graph is closed over every authored edge.
 		for (const [uri, config] of this.configMap.entries()) {
-			for (const depUri of [...config.includes, ...config.dependencies]) {
+			for (const depUri of [...config.includes, ...config.dependencies, ...config.reads]) {
 				if (!this.configMap.has(depUri)) {
 					throw new Error(`Missing configuration ${depUri} referenced from ${uri}`);
 				}
 			}
+		}
+		for (const config of this.configMap.values()) {
+			config.reading = this.collectReading(config.uri, new Set());
+			config.external = this.isExternal(config.uri);
 		}
 
 		const rootUri = this.workspaceRoot;
@@ -389,7 +499,13 @@ export class Workspace {
 			content: '',
 			includes: [],
 			dependencies: [],
+			reads: [],
 			referencedBy: [],
+			includedBy: [],
+			dependedOnBy: [],
+			readBy: [],
+			reading: [],
+			external: false,
 			sourcePath: URI.parse(rootUri).fsPath,
 			targetPath: URI.parse(rootUri).fsPath,
 			dependencyType: 'root'
@@ -403,6 +519,27 @@ export class Workspace {
 			const node = this.configTreeRoot.addChild(config, this.formatPath(config.uri), config.dependencyType);
 			await this.traverseConfigTree(node, new Set());
 		}
+	}
+
+	private collectReading(uri: string, ancestry: Set<string>): string[] {
+		if (ancestry.has(uri)) throw new Error(`Reading cycle detected at ${uri}`);
+		const config = this.configMap.get(uri);
+		if (!config) throw new Error(`Cannot collect reading lineage for missing configuration ${uri}`);
+		const nextAncestry = new Set(ancestry);
+		nextAncestry.add(uri);
+		const reading = new Set(config.reads);
+		for (const readUri of config.reads) {
+			const readConfig = this.configMap.get(readUri);
+			if (!readConfig) throw new Error(`Reading lineage references missing file ${readUri}`);
+			for (const transitiveUri of this.collectReading(readUri, nextAncestry)) reading.add(transitiveUri);
+		}
+		return [...reading].sort();
+	}
+
+	private isExternal(uri: string): boolean {
+		if (!this.workspaceRoot) throw new Error('Cannot classify an external configuration without a workspace root');
+		const relative = path.relative(URI.parse(this.workspaceRoot).fsPath, URI.parse(uri).fsPath);
+		return relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
 	}
 
 	private async traverseConfigTree(startNode: TreeNode<TerragruntConfig>, ancestry: Set<string>): Promise<void> {
@@ -466,7 +603,7 @@ export class Workspace {
 
 			// Follow dependencies away from each entrypoint so the visual direction
 			// matches the authored relationship (consumer/stack -> dependency/component).
-			for (const refUri of [...config.includes, ...config.dependencies]) {
+			for (const refUri of [...config.includes, ...config.dependencies, ...config.reads]) {
 				const refConfig = this.configMap.get(refUri);
 				if (!refConfig) {
 					throw new Error(`Configuration graph references an unloaded document: ${refUri}`);
@@ -477,6 +614,8 @@ export class Workspace {
 				if (!existingChild) {
 					const relationshipType = config.includes.includes(refUri)
 						? 'include'
+						: config.reads.includes(refUri)
+							? 'read'
 						: refConfig.dependencyType === 'unit' || refConfig.dependencyType === 'stack'
 							? refConfig.dependencyType
 							: 'dependency';
@@ -503,6 +642,14 @@ export class Workspace {
 	async findTerragruntConfigs(rootDir: string): Promise<string[]> {
 		const configs: string[] = [];
 		const fsRootDir = URI.parse(rootDir).fsPath;  // Convert URI to filesystem path
+		const ignoredDirectories = new Set([
+			'.git',
+			'.scrap',
+			'.terraform',
+			'.terragrunt-cache',
+			'.trash',
+			'node_modules'
+		]);
 
 		const scan = async (dir: string) => {
 			const entries = await fs.readdir(dir, { withFileTypes: true });
@@ -510,7 +657,7 @@ export class Workspace {
 			for (const entry of entries) {
 				const fullPath = path.join(dir, entry.name);
 
-				if (entry.isDirectory() && !entry.name.startsWith('.')) {
+				if (entry.isDirectory() && !ignoredDirectories.has(entry.name)) {
 					await scan(fullPath);
 				} else if (entry.isFile() && (entry.name === 'terragrunt.hcl' || entry.name === 'terragrunt.stack.hcl')) {
 					configs.push(URI.file(fullPath).toString());
@@ -521,7 +668,7 @@ export class Workspace {
 		await fs.access(fsRootDir);
 		await scan(fsRootDir);
 
-		return configs;
+		return configs.sort();
 	}
 
 	setWorkspaceRoot(root: string) {
@@ -581,9 +728,14 @@ export class Workspace {
 	removeDocument(uri: string) {
 		const config = this.configMap.get(uri);
 		if (config) {
-			for (const targetUri of [...config.includes, ...config.dependencies]) {
+			for (const targetUri of [...config.includes, ...config.dependencies, ...config.reads]) {
 				const target = this.configMap.get(targetUri);
-				if (target) target.referencedBy = target.referencedBy.filter(reference => reference !== uri);
+				if (target) {
+					target.referencedBy = target.referencedBy.filter(reference => reference !== uri);
+					target.includedBy = target.includedBy.filter(reference => reference !== uri);
+					target.dependedOnBy = target.dependedOnBy.filter(reference => reference !== uri);
+					target.readBy = target.readBy.filter(reference => reference !== uri);
+				}
 			}
 		}
 		this.documents.delete(uri);

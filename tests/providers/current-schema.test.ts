@@ -92,4 +92,17 @@ unit "app" {
 		expect(schema.getFunctionDefinition('get_terraform_commands_that_need_retry')).to.equal(undefined);
 		expect(schema.getFunctionDefinition('path.join')).to.equal(undefined);
 	});
+
+	it('retains broad current function and block metadata', () => {
+		const schema = Schema.getInstance();
+		expect(schema.getAllFunctions()).to.have.length.greaterThan(150);
+		expect(schema.getAllBlockTemplates().map(block => block.type)).to.include.members([
+			'unit', 'stack', 'autoinclude', 'catalog', 'engine', 'feature', 'exclude', 'errors', 'dependency', 'generate'
+		]);
+		for (const name of ['coalescelist', 'join', 'keys', 'length', 'mark_glob_as_read', 'md5', 'sha1', 'sha256', 'sha512', 'signum', 'sum', 'title']) {
+			const definition = schema.getFunctionDefinition(name);
+			expect(definition, `${name} metadata`).not.to.equal(undefined);
+			expect(definition?.description, `${name} description`).not.to.equal('');
+		}
+	});
 });

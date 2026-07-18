@@ -392,7 +392,12 @@ export interface TerragruntConfig {
 	// Relationship tracking
 	includes: string[];           // URIs of included configs
 	dependencies: string[];       // URIs of explicit dependencies
+	reads: string[];              // URIs of files consumed while evaluating the config
+	reading?: string[];           // Complete transitive set reported by current Terragrunt discovery
 	referencedBy: string[];      // URIs of configs that include/depend on this one
+	includedBy: string[];         // URIs of configs that include this config
+	dependedOnBy: string[];       // URIs of configs that depend on this config
+	readBy: string[];             // URIs of configs that read this file
 
 	// Relationship source and target metadata
 	sourcePath: string;          // Path of the config file containing the dependency reference
@@ -400,8 +405,9 @@ export interface TerragruntConfig {
 	block?: Token;              // Token containing the dependency or include block
 
 	// Additional metadata
-	dependencyType: 'root' | 'include' | 'dependency' | 'stack' | 'unit';
+	dependencyType: 'root' | 'include' | 'dependency' | 'read' | 'stack' | 'unit';
 	parameterValue?: string;    // For dependencies, the name parameter value
+	external?: boolean;         // Whether this node resolves outside the workspace root
 
 	outputs?: Map<string, RuntimeValue<ValueType>>;
 }
@@ -420,7 +426,11 @@ export const createDependencyConfig = (
 	content,
 	includes: [],
 	dependencies: [],
+	reads: [],
 	referencedBy: [],
+	includedBy: [],
+	dependedOnBy: [],
+	readBy: [],
 	sourcePath,
 	targetPath,
 	block,
@@ -441,7 +451,11 @@ export const createIncludeConfig = (
 	content,
 	includes: [],
 	dependencies: [],
+	reads: [],
 	referencedBy: [],
+	includedBy: [],
+	dependedOnBy: [],
+	readBy: [],
 	sourcePath,
 	targetPath,
 	block,

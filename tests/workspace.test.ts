@@ -136,4 +136,101 @@ unit "app" {
 
 		expect(message).to.match(/no roots|cycle/i);
 	});
+
+	it('discovers hidden units and preserves distinct include, dependency, and reading lineage', async () => {
+		const appDirectory = path.join(directory, '.platform', 'app');
+		const networkDirectory = path.join(directory, 'network');
+		await fs.mkdir(appDirectory, { recursive: true });
+		await fs.mkdir(path.join(appDirectory, 'config', 'nested'), { recursive: true });
+		await fs.mkdir(networkDirectory, { recursive: true });
+		await fs.writeFile(path.join(directory, 'root.hcl'), 'locals { environment = "production" }');
+		await fs.writeFile(path.join(directory, 'account-policy.json'), '{"owner":"platform"}');
+		await fs.writeFile(path.join(directory, 'account.hcl'), `locals {
+  account_id = "123456789012"
+  policy     = mark_as_read("\${get_terragrunt_dir()}/account-policy.json")
+}`);
+		await fs.writeFile(path.join(appDirectory, 'policy.yaml'), 'approvals: 2');
+		await fs.writeFile(path.join(appDirectory, 'config', 'direct.yaml'), 'enabled: true');
+		await fs.writeFile(path.join(appDirectory, 'config', 'nested', 'service.yaml'), 'replicas: 2');
+		await fs.writeFile(path.join(networkDirectory, 'terragrunt.hcl'), 'inputs = {}');
+		await fs.writeFile(path.join(appDirectory, 'terragrunt.hcl'), `include "root" {
+  path = find_in_parent_folders("root.hcl")
+}
+locals {
+  account = read_terragrunt_config(find_in_parent_folders("account.hcl"))
+  policy  = mark_as_read("\${get_terragrunt_dir()}/policy.yaml")
+  configs = mark_glob_as_read("\${get_terragrunt_dir()}/config/{*.yaml,**/*.yaml}")
+}
+dependency "network" {
+  config_path = "../../network"
+}`);
+
+		const workspace = new Workspace();
+		workspace.setWorkspaceRoot(URI.file(directory).toString());
+		const discovered = await workspace.findTerragruntConfigs(URI.file(directory).toString());
+		const graph = await workspace.refreshDependencyTree();
+		const app = graph?.children.find(node => node.name.endsWith(path.join('.platform', 'app', 'terragrunt.hcl')));
+		if (!app) throw new Error('Hidden application unit is missing from the workspace graph');
+		if (!app.data.reading) throw new Error('Hidden application unit has no complete reading metadata');
+		const account = app.children.find(node => node.name.endsWith('account.hcl'));
+		if (!account) throw new Error('Parent-discovered account configuration is missing from reading lineage');
+
+		expect(discovered.map(uri => URI.parse(uri).fsPath)).to.include(path.join(appDirectory, 'terragrunt.hcl'));
+		expect(app.children.map(node => [node.type, path.basename(node.name)])).to.deep.include.members([
+			['include', 'root.hcl'],
+			['dependency', 'terragrunt.hcl'],
+			['read', 'account.hcl'],
+			['read', 'policy.yaml']
+		]);
+		expect(account.data.readBy).to.deep.equal([URI.file(path.join(appDirectory, 'terragrunt.hcl')).toString()]);
+		expect(app.data.reading).to.deep.equal([...app.data.reading].sort());
+		expect(app.data.reading.map(uri => path.basename(URI.parse(uri).fsPath)).sort()).to.deep.equal([
+			'account-policy.json',
+			'account.hcl',
+			'direct.yaml',
+			'policy.yaml',
+			'service.yaml'
+		]);
+		expect(account.children.map(node => [node.type, path.basename(node.name)])).to.deep.equal([
+			['read', 'account-policy.json']
+		]);
+	});
+
+	it('fails when an authored read target does not exist', async () => {
+		const unitPath = path.join(directory, 'terragrunt.hcl');
+		await fs.writeFile(unitPath, 'locals { policy = mark_as_read("${get_terragrunt_dir()}/required-policy.yaml") }');
+		const workspace = new Workspace();
+		workspace.setWorkspaceRoot(URI.file(directory).toString());
+
+		const message = await rejectionMessage(workspace.refreshDependencyTree());
+		expect(message).to.include('mark_as_read target not found');
+	});
+
+	it('enforces an explicit mark_glob_as_read boundary before walking', async () => {
+		const unitPath = path.join(directory, 'terragrunt.hcl');
+		await fs.writeFile(unitPath, `locals {
+  files = mark_glob_as_read("--terragrunt-boundary=.", "../*.yaml")
+}`);
+		const workspace = new Workspace();
+		workspace.setWorkspaceRoot(URI.file(directory).toString());
+
+		const message = await rejectionMessage(workspace.refreshDependencyTree());
+		expect(message).to.include('starts outside Terragrunt boundary');
+	});
+
+	it('resolves repository path functions in reading expressions', async () => {
+		const unitDirectory = path.join(directory, 'live', 'app');
+		await fs.mkdir(path.join(directory, '.git'));
+		await fs.mkdir(unitDirectory, { recursive: true });
+		await fs.writeFile(path.join(directory, 'shared.yaml'), 'owner: platform');
+		await fs.writeFile(path.join(unitDirectory, 'terragrunt.hcl'), `locals {
+  shared = mark_as_read("\${get_repo_root()}/shared.yaml")
+}`);
+		const workspace = new Workspace();
+		workspace.setWorkspaceRoot(URI.file(directory).toString());
+
+		const graph = await workspace.refreshDependencyTree();
+		const app = graph?.children.find(node => node.name.endsWith(path.join('live', 'app', 'terragrunt.hcl')));
+		expect(app?.children.map(node => [node.type, path.basename(node.name)])).to.deep.equal([['read', 'shared.yaml']]);
+	});
 });
