@@ -113,7 +113,8 @@ export class Workspace {
 		if (this.schema.getFileKind(uri) === 'stack') {
 			const rootToken = doc.getTokens()[0];
 			for (const block of rootToken?.children.filter(child => child.type === 'block' && (child.value === 'unit' || child.value === 'stack')) ?? []) {
-				const targetUri = this.stackComponentTarget(block, uri);
+				const targetUri = await this.stackComponentTarget(block, uri);
+				if (!targetUri) continue;
 				const sourceAttribute = block.children.find(child => child.type === 'attribute' && child.value === 'source');
 				const sourceValue = sourceAttribute?.children.find(child => child.type !== 'attribute_identifier');
 				if (!sourceValue) throw new Error(`${block.value} "${this.getDependencyName(block) ?? ''}" requires source`);
@@ -174,7 +175,7 @@ export class Workspace {
 			let ownerUri = uri;
 			if (this.schema.getFileKind(uri) === 'stack' && dep.owner) {
 				if (dep.owner.value === 'stack') throw new Error('Nested stacks cannot declare dependencies through autoinclude');
-				ownerUri = this.stackComponentTarget(dep.owner, uri);
+				ownerUri = await this.stackComponentTarget(dep.owner, uri) ?? uri;
 			}
 			const ownerConfig = this.configMap.get(ownerUri);
 			if (!ownerConfig) throw new Error(`Dependency owner is missing from workspace graph: ${ownerUri}`);
@@ -231,20 +232,47 @@ export class Workspace {
 		}
 	}
 
-	private stackComponentTarget(block: Token, stackUri: string): string {
+	private async stackComponentTarget(block: Token, stackUri: string): Promise<string | null> {
 		if (block.type !== 'block' || (block.value !== 'unit' && block.value !== 'stack')) {
 			throw new Error(`Expected a unit or stack component block, got ${block.type}:${block.value}`);
 		}
 		const pathAttribute = block.children.find(child => child.type === 'attribute' && child.value === 'path');
 		const pathValue = pathAttribute?.children.find(child => child.type !== 'attribute_identifier');
-		if (pathValue?.type !== 'string_lit' || typeof pathValue.value !== 'string') {
-			throw new Error(`${block.value} "${this.getDependencyName(block) ?? ''}" requires a literal path for workspace graph resolution`);
+		if (!pathValue) {
+			return null;
 		}
+		const baseDir = path.dirname(URI.parse(stackUri).fsPath);
+		const configPath = await this.resolvePathToken(pathValue, baseDir, stackUri);
 		const noStackAttribute = block.children.find(child => child.type === 'attribute' && child.value === 'no_dot_terragrunt_stack');
 		const noStack = noStackAttribute?.children.some(child => child.type === 'boolean_lit' && child.value === true) === true;
-		const baseDir = path.dirname(URI.parse(stackUri).fsPath);
-		const targetDir = path.resolve(noStack ? baseDir : path.join(baseDir, '.terragrunt-stack'), pathValue.value);
+		const targetDir = path.resolve(noStack ? baseDir : path.join(baseDir, '.terragrunt-stack'), configPath);
 		return URI.file(path.join(targetDir, block.value === 'unit' ? 'terragrunt.hcl' : 'terragrunt.stack.hcl')).toString();
+	}
+
+	private async resolvePathToken(pathToken: Token, sourceDir: string, sourceUri: string): Promise<string> {
+		switch (pathToken.type) {
+			case 'string_lit': {
+				return String(pathToken.value);
+			}
+			case 'interpolated_string': {
+				const parts = await Promise.all(
+					pathToken.children.map(async child => {
+						if (child.type === 'interpolation') {
+							const innerToken = child.children[0];
+							if (!innerToken) throw new Error('Empty path interpolation');
+							return this.evaluatePathExpression(innerToken, sourceDir, sourceUri);
+						}
+						if (child.type === 'string_lit') return String(child.value);
+						throw new Error(`Unsupported path segment: ${child.type}`);
+					})
+				);
+				return parts.join('');
+			}
+			case 'function_call': {
+				return this.evaluatePathFunction(pathToken, sourceDir, sourceUri);
+			}
+			default: throw new Error(`Unsupported path expression for workspace graph resolution: ${pathToken.type}`);
+		}
 	}
 
 	private async fileExists(filePath: string): Promise<boolean> {
@@ -264,45 +292,23 @@ export class Workspace {
 
 		let configPath: string;
 
-		switch (pathToken.type) {
-			case 'string_lit': {
-				configPath = pathToken.value as string;
-				break;
+		if (pathToken.type === 'reference') {
+			const namespace = pathToken.children.find(child => child.type === 'namespace')?.value;
+			const access = pathToken.children.find(child => child.type === 'access_chain')?.children.map(child => child.value);
+			if ((namespace !== 'unit' && namespace !== 'stack') || access?.length !== 2 || access[1] !== 'path' || typeof access[0] !== 'string') {
+				throw new Error(`Dependency paths only support unit.<name>.path or stack.<name>.path references, got ${pathToken.getDisplayText()}`);
 			}
-			case 'interpolated_string': {
-				const parts = await Promise.all(
-					pathToken.children.map(async child => {
-						if (child.type === 'interpolation') {
-							const innerToken = child.children[0];
-							if (!innerToken) throw new Error('Empty dependency path interpolation');
-							return this.evaluatePathExpression(innerToken, sourceDir, sourceUri);
-						}
-						if (child.type === 'string_lit') return String(child.value);
-						throw new Error(`Unsupported dependency path segment: ${child.type}`);
-					})
-				);
-				configPath = parts.join('');
-				break;
-			}
-			case 'function_call': {
-				configPath = await this.evaluatePathFunction(pathToken, sourceDir, sourceUri);
-				break;
-			}
-			case 'reference': {
-				const namespace = pathToken.children.find(child => child.type === 'namespace')?.value;
-				const access = pathToken.children.find(child => child.type === 'access_chain')?.children.map(child => child.value);
-				if ((namespace !== 'unit' && namespace !== 'stack') || access?.length !== 2 || access[1] !== 'path' || typeof access[0] !== 'string') {
-					throw new Error(`Dependency paths only support unit.<name>.path or stack.<name>.path references, got ${pathToken.getDisplayText()}`);
-				}
-				const sourceDocument = await this.getParsedDocument(sourceUri);
-				const component = sourceDocument?.getTokens()[0]?.children.find(child =>
-					child.type === 'block' && child.value === namespace && this.getDependencyName(child) === access[0]
-				);
-				if (!component) throw new Error(`Unknown ${namespace} component referenced by dependency path: ${access[0]}`);
-				return this.stackComponentTarget(component, sourceUri);
-			}
-			default: throw new Error(`Unsupported dependency path expression: ${pathToken.type}`);
+			const sourceDocument = await this.getParsedDocument(sourceUri);
+			const component = sourceDocument?.getTokens()[0]?.children.find(child =>
+				child.type === 'block' && child.value === namespace && this.getDependencyName(child) === access[0]
+			);
+			if (!component) throw new Error(`Unknown ${namespace} component referenced by dependency path: ${access[0]}`);
+			const target = await this.stackComponentTarget(component, sourceUri);
+			if (!target) throw new Error(`Referenced ${namespace} "${access[0]}" has no path attribute`);
+			return target;
 		}
+
+		configPath = await this.resolvePathToken(pathToken, sourceDir, sourceUri);
 
 		// Resolve the final path
 		const resolvedPath = path.isAbsolute(configPath) ?

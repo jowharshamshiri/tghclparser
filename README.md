@@ -21,35 +21,6 @@ The schema includes current unit configuration, `unit` and `stack` declarations,
 - Dependency output discovery from state
 - Hover and document-link providers
 
-## Installation
-
-```sh
-npm install tghclparser
-```
-
-## Usage
-
-```ts
-import { ParsedDocument, Workspace } from 'tghclparser';
-
-const workspace = new Workspace();
-workspace.setWorkspaceRoot(workspaceUri);
-
-const document = new ParsedDocument(workspace, documentUri, source);
-await workspace.addDocument(document);
-
-const diagnostics = document.getDiagnostics();
-const completions = await document.getCompletionsAtPosition({ line: 4, character: 12 });
-const graph = await workspace.refreshDependencyTree();
-```
-
-`find_in_parent_folders` requires an explicit filename. A current root include is:
-
-```hcl
-include "root" {
-  path = find_in_parent_folders("root.hcl")
-}
-```
 
 ## Development
 

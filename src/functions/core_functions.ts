@@ -76,10 +76,10 @@ export const coreFunctionGroup = {
             args: RuntimeValue<ValueType>[],
             context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
-			if (args[0]?.type !== 'string' || !args[0].value) {
+			if (args.length > 0 && (args[0]?.type !== 'string' || !args[0].value)) {
 				throw new Error('find_in_parent_folders requires an explicit filename');
 			}
-			const fileToFind = String(args[0].value);
+			const fileToFind = args.length > 0 ? String(args[0].value) : 'terragrunt.hcl';
             const fallback = args[1]?.type === 'string' ? String(args[1].value) : undefined;
             
 			const currentDir = path.dirname(URI.parse(context.document.uri).fsPath);
