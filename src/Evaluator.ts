@@ -31,6 +31,7 @@ export interface ConfigEvaluatorOptions {
 	environmentVariables: Record<string, string>;
 	terraformCommand?: string;
 	terraformCliArgs?: string[];
+	workspaceTrusted?: boolean;
 	resolveDependency?: (configPath: string, name: string) => Promise<RuntimeValue<ValueType> | undefined>;
 }
 
@@ -61,6 +62,7 @@ interface Scope {
 	content: string;
 	ast: TNode;
 	dir: string;
+	workspaceRoot: string;
 	locals: Map<string, TNode>;
 	localCache: Map<string, RuntimeValue<ValueType> | 'pending'>;
 	includes: Map<string, IncludeRef>;
@@ -86,8 +88,34 @@ export class ConfigEvaluator {
 		this.options = options;
 	}
 
+	setWorkspaceTrusted(trusted: boolean): void {
+		this.options.workspaceTrusted = trusted;
+	}
+
+	private assertTrusted(operation: string): void {
+		if (this.options.workspaceTrusted !== true) {
+			throw new Error(`${operation} is disabled until the workspace is trusted`);
+		}
+	}
+
+	private async assertPathAllowed(target: string, workspaceRoot: string): Promise<void> {
+		this.assertTrusted('Workspace file access');
+		const root = await fs.realpath(workspaceRoot);
+		let resolved: string;
+		try {
+			resolved = await fs.realpath(target);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+			resolved = path.join(await fs.realpath(path.dirname(target)), path.basename(target));
+		}
+		if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
+			throw new Error(`Workspace file access outside ${root} is blocked: ${target}`);
+		}
+	}
+
 	async evaluateUnit(configPath: string, content: string, workDir: string): Promise<ConfigEvaluationResult> {
 		try {
+			this.assertTrusted('Semantic evaluation');
 			const result = await this.evaluateFile(configPath, content, workDir);
 			if (result.inputs === null) return { valid: true, inputs: null };
 			return { valid: true, inputs: makeObjectValue(result.inputs) };
@@ -106,6 +134,7 @@ export class ConfigEvaluator {
 		workDir: string,
 		position: { line: number; character: number }
 	): Promise<RuntimeValue<ValueType> | undefined> {
+		this.assertTrusted('Semantic evaluation');
 		const result = await this.evaluateFile(configPath, content, workDir);
 		const lines = content.split('\n');
 		if (position.line < 0 || position.line >= lines.length || position.character < 0) return undefined;
@@ -167,6 +196,7 @@ export class ConfigEvaluator {
 			content,
 			ast,
 			dir,
+			workspaceRoot: path.resolve(workDir),
 			locals: new Map(),
 			localCache: new Map(),
 			includes: new Map(),
@@ -229,6 +259,8 @@ export class ConfigEvaluator {
 			const includePath = path.isAbsolute(String(pathValue.value))
 				? String(pathValue.value)
 				: path.resolve(dir, String(pathValue.value));
+			this.assertTrusted('Included configuration evaluation');
+			await this.assertPathAllowed(includePath, scope.workspaceRoot);
 			const includeContent = await fs.readFile(includePath, 'utf8');
 			const includeResult = await this.evaluateFile(includePath, includeContent, workDir);
 			scope.includes.set(name, { expose, mergeStrategy, dir: path.dirname(includePath), result: includeResult });
@@ -237,6 +269,8 @@ export class ConfigEvaluator {
 		if (!AUTOINCLUDE_FILES.has(baseName)) {
 			const autoPath = path.join(dir, 'terragrunt.autoinclude.hcl');
 			if (await pathExists(autoPath)) {
+				this.assertTrusted('Autoinclude evaluation');
+				await this.assertPathAllowed(autoPath, scope.workspaceRoot);
 				const autoContent = await fs.readFile(autoPath, 'utf8');
 				scope.autoinclude = await this.evaluateFile(autoPath, autoContent, workDir);
 			}
@@ -292,31 +326,46 @@ export class ConfigEvaluator {
 			},
 			terraformCommand: this.options.terraformCommand,
 			terraformCliArgs: this.options.terraformCliArgs,
+			workspaceTrusted: this.options.workspaceTrusted === true,
+			workspaceRoot: scope.workspaceRoot,
+			assertPathAllowed: target => this.assertPathAllowed(target, scope.workspaceRoot),
+			assertTrusted: operation => this.assertTrusted(operation),
 			fs: {
-				access: (target: string) => fs.access(target)
+				access: async (target: string) => {
+					await this.assertPathAllowed(target, scope.workspaceRoot);
+					await fs.access(target);
+				}
 			},
 			terragruntDir: scope.dir,
 			originalTerragruntDir: scope.dir,
 			includeDir: scope.includes.size > 0 ? [...scope.includes.values()][0].dir : undefined,
 			repoRoot,
 			readTerragruntConfig: async (relativePath: string) => {
+				this.assertTrusted('read_terragrunt_config');
 				const target = path.isAbsolute(relativePath) ? relativePath : path.resolve(scope.dir, relativePath);
+				await this.assertPathAllowed(target, scope.workspaceRoot);
 				if (!(await pathExists(target))) return undefined;
 				const fileContent = await fs.readFile(target, 'utf8');
 					const result = await this.evaluateFile(target, fileContent, scope.dir);
 					return this.readConfigObject(result);
 			},
 			readTFVarsFile: async (relativePath: string) => {
+				this.assertTrusted('read_tfvars_file');
 				const target = path.isAbsolute(relativePath) ? relativePath : path.resolve(scope.dir, relativePath);
+				await this.assertPathAllowed(target, scope.workspaceRoot);
 				if (!(await pathExists(target))) return undefined;
 				const fileContent = await fs.readFile(target, 'utf8');
 					return this.readTFVars(target, fileContent);
 			},
 			runCommand: async (program: string, args: string[]) => {
+				this.assertTrusted('run_cmd');
 				const output = execFileSync(program, args, {
 					cwd: scope.dir,
 					encoding: 'utf8',
-					stdio: ['ignore', 'pipe', 'pipe']
+					stdio: ['ignore', 'pipe', 'pipe'],
+					timeout: 10_000,
+					maxBuffer: 1024 * 1024,
+					 windowsHide: true
 				});
 				return output.endsWith('\n') ? output.slice(0, -1) : output;
 			},
@@ -797,6 +846,7 @@ function makeRootScope(filePath: string, content: string): Scope {
 		content,
 		ast,
 		dir: path.dirname(filePath),
+		workspaceRoot: path.dirname(filePath),
 		locals: new Map(),
 		localCache: new Map(),
 		includes: new Map(),

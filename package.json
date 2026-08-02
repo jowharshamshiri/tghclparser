@@ -1,7 +1,7 @@
 {
 	"name": "tghclparser",
 	"type": "module",
-	"version": "1.115.824",
+	"version": "1.116.826",
 	"description": "Parser for .hcl files developed to be used as a vscode language server.",
 	"author": {
 		"name": "Bahram Shamshiri",
@@ -56,7 +56,7 @@
 		"@aws-sdk/types": "^3.x",
 		"js-yaml": "^4.1.0",
 		"pegjs-backtrace": "^0.2.1",
-		"vscode-languageserver": "^9.0.1",
+		"vscode-languageserver": "^10.1.0",
 		"vscode-languageserver-types": "^3.17.5",
 		"vscode-uri": "^3.1.0"
 	},

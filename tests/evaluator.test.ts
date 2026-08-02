@@ -6,7 +6,8 @@ describe('semantic configuration evaluation', () => {
 	const evaluator = new ConfigEvaluator({
 		environmentVariables: {},
 		terraformCommand: '',
-		terraformCliArgs: []
+		terraformCliArgs: [],
+		workspaceTrusted: true
 	});
 	const configPath = `${process.cwd()}/tests/evaluator-fixture.hcl`;
 
@@ -39,5 +40,20 @@ describe('semantic configuration evaluation', () => {
 		);
 		assert.equal(result.valid, false);
 		assert.match(result.error ?? '', /Unknown function/);
+	});
+
+	it('denies semantic evaluation until the caller establishes workspace trust', async () => {
+		const evaluator = new ConfigEvaluator({
+			environmentVariables: { SECRET_VALUE: 'must-not-be-exposed' },
+			terraformCommand: '',
+			terraformCliArgs: []
+		});
+		const result = await evaluator.evaluateUnit(
+			configPath,
+			'inputs = { value = run_cmd("echo", "untrusted") }',
+			process.cwd()
+		);
+		assert.equal(result.valid, false);
+		assert.match(result.error ?? '', /disabled until the workspace is trusted/);
 	});
 });

@@ -19,7 +19,9 @@ export const fileFunctionGroup = {
             args: RuntimeValue<ValueType>[], 
             context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
+            assertTrusted(context, 'file');
             const filePath = resolveFilePath(stringArgument(args, 0, 'file'), context);
+            await assertPathAllowed(context, filePath);
             try {
                 const content = await fs.readFile(filePath, 'utf8');
                 return makeStringValue(content);
@@ -31,7 +33,9 @@ export const fileFunctionGroup = {
             args: RuntimeValue<ValueType>[],
             context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
+            assertTrusted(context, 'fileexists');
             const filePath = resolveFilePath(stringArgument(args, 0, 'fileexists'), context);
+            await assertPathAllowed(context, filePath);
             try {
                 await fs.access(filePath);
                 return makeBooleanValue(true);
@@ -43,7 +47,9 @@ export const fileFunctionGroup = {
             args: RuntimeValue<ValueType>[],
             context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
+            assertTrusted(context, 'filebase64');
             const filePath = resolveFilePath(stringArgument(args, 0, 'filebase64'), context);
+            await assertPathAllowed(context, filePath);
             try {
                 const content = await fs.readFile(filePath);
                 return makeStringValue(content.toString('base64'));
@@ -79,6 +85,7 @@ export const fileFunctionGroup = {
             args: RuntimeValue<ValueType>[],
             context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
+            assertTrusted(context, 'read_terragrunt_config');
             const configPath = stringArgument(args, 0, 'read_terragrunt_config');
             if (!context.readTerragruntConfig) {
                 throw new Error('read_terragrunt_config requires a config reader');
@@ -92,6 +99,7 @@ export const fileFunctionGroup = {
             args: RuntimeValue<ValueType>[],
             context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
+            assertTrusted(context, 'read_tfvars_file');
             const tfvarsPath = stringArgument(args, 0, 'read_tfvars_file');
             if (!context.readTFVarsFile) {
                 throw new Error('read_tfvars_file requires a tfvars reader');
@@ -104,12 +112,14 @@ export const fileFunctionGroup = {
             args: RuntimeValue<ValueType>[],
             context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
+            assertTrusted(context, 'templatefile');
             const templatePath = stringArgument(args, 0, 'templatefile');
             const vars = args[1];
             if (!vars || vars.type !== 'object') {
                 throw new Error('templatefile requires an object of template variables');
             }
             const filePath = resolveFilePath(templatePath, context);
+            await assertPathAllowed(context, filePath);
             const content = await fs.readFile(filePath, 'utf8');
             return makeStringValue(await renderTemplate(content, vars, context));
         },
@@ -146,7 +156,9 @@ async function fileHexDigest(
 	args: RuntimeValue<ValueType>[],
 	context: FunctionContext
 ): Promise<RuntimeValue<ValueType>> {
+    assertTrusted(context, name);
 	const filePath = resolveFilePath(stringArgument(args, 0, name), context);
+	await assertPathAllowed(context, filePath);
 	const content = await fs.readFile(filePath);
 	return makeStringValue(createHash(name).update(content).digest('hex'));
 }
@@ -156,9 +168,27 @@ async function fileBase64Digest(
 	args: RuntimeValue<ValueType>[],
 	context: FunctionContext
 ): Promise<RuntimeValue<ValueType>> {
+    assertTrusted(context, name);
 	const filePath = resolveFilePath(stringArgument(args, 0, name), context);
+	await assertPathAllowed(context, filePath);
 	const content = await fs.readFile(filePath);
 	return makeStringValue(createHash(name).update(content).digest('base64'));
+}
+
+function assertTrusted(context: FunctionContext, operation: string): void {
+	if (context.assertTrusted) {
+		context.assertTrusted(`${operation}() file access`);
+		return;
+	}
+	if (context.workspaceTrusted !== true) {
+		throw new Error(`${operation}() file access is disabled until the workspace is trusted`);
+	}
+}
+
+async function assertPathAllowed(context: FunctionContext, target: string): Promise<void> {
+	if (context.assertPathAllowed) {
+		await context.assertPathAllowed(target);
+	}
 }
 
 function resolveFilePath(filePath: string, context: FunctionContext): string {

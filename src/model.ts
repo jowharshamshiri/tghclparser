@@ -374,6 +374,10 @@ export interface FunctionContext {
 	};
 	terraformCommand?: string;
 	terraformCliArgs?: string[];
+	workspaceTrusted?: boolean;
+	workspaceRoot?: string;
+	assertTrusted?: (operation: string) => void;
+	assertPathAllowed?: (target: string) => Promise<void>;
 	fs?: {
 		access: (path: string) => Promise<void>;
 	};
