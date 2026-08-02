@@ -4,7 +4,40 @@ import path from 'node:path';
 import { URI } from 'vscode-uri';
 
 import type { FunctionContext, RuntimeValue, ValueType } from '../model';
-import { makeArrayValue, makeStringValue } from './utils';
+import { makeArrayValue, makeBooleanValue, makeStringValue } from './utils';
+
+const defaultRetryableErrors = [
+	'(?s).*Failed to load state.*tcp.*timeout.*',
+	'(?s).*Failed to load backend.*TLS handshake timeout.*',
+	'(?s).*Creating metric alarm failed.*request to update this alarm is in progress.*',
+	'(?s).*Error installing provider.*TLS handshake timeout.*',
+	'(?s).*Error configuring the backend.*TLS handshake timeout.*',
+	'(?s).*Error installing provider.*tcp.*timeout.*',
+	'(?s).*Error installing provider.*tcp.*connection reset by peer.*',
+	'NoSuchBucket: The specified bucket does not exist',
+	'(?s).*Error creating SSM parameter: TooManyUpdates:.*',
+	'(?s).*app.terraform.io.*: 429 Too Many Requests.*',
+	'(?s).*ssh_exchange_identification.*Connection closed by remote host.*',
+	'(?s).*Client\\.Timeout exceeded while awaiting headers.*',
+	'(?s).*Could not download module.*The requested URL returned error: 429.*',
+	'(?s).*net/http: TLS.*handshake timeout.*',
+	'(?s).*could not query provider registry.*context deadline exceeded.*',
+	'(?s).*provider.*TLS handshake timeout.*',
+	'(?s).*provider.*tcp.*timeout.*',
+	'(?s).*provider.*tcp.*connection reset by peer.*',
+	'(?s).*provider.*context deadline exceeded.*',
+	'(?s).*registry.*context deadline exceeded.*',
+	'(?s).*Failed to resolve provider.*timeout.*',
+	'(?s).*Failed to resolve provider.*connection reset by peer.*',
+	'(?s).*Failed to resolve provider.*context deadline exceeded.*',
+	'(?s).*could not connect to registry.*timeout.*',
+	'(?s).*could not connect to registry.*connection reset by peer.*',
+	'(?s).*could not connect to registry.*context deadline exceeded.*',
+	'(?s).*failed to request discovery document.*context deadline exceeded.*',
+	'(?s).*Failed to query available provider packages.*timeout.*',
+	'(?s).*Failed to query available provider packages.*connection reset by peer.*',
+	'(?s).*Failed to query available provider packages.*context deadline exceeded.*'
+];
 
 // Constants from original terragrunt
 const TerraformCommandsNeedVars = [
@@ -254,7 +287,40 @@ export const coreFunctionGroup = {
 			const envValue = context.environmentVariables[envName];
 			if (envValue !== undefined) return makeStringValue(envValue);
 			if (defaultValue !== undefined) return makeStringValue(defaultValue);
-			throw new Error(`Required environment variable ${envName} is not set`);
+            throw new Error(`Required environment variable ${envName} is not set`);
+        },
+        get_default_retryable_errors: async () => makeArrayValue(defaultRetryableErrors.map(makeStringValue)),
+        constraint_check: async (args: RuntimeValue<ValueType>[]) => {
+            const version = String(args[0]?.value ?? '');
+            const constraint = String(args[1]?.value ?? '');
+            const actual = version.split('.').map(part => Number.parseInt(part, 10));
+            if (actual.length !== 3 || actual.some(Number.isNaN)) throw new Error(`Invalid version ${version}`);
+            const terms = constraint.split(',').flatMap(part => part.trim().split(/\s+(?=(?:>=|<=|>|<|=|~>)\s*\d)/u)).filter(Boolean);
+            if (terms.length === 0) throw new Error(`Invalid version constraint ${constraint}`);
+            for (const term of terms) {
+                const match = term.match(/^(>=|<=|>|<|=|~>)?\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?$/u);
+                if (!match) throw new Error(`Invalid version constraint ${constraint}`);
+                const target = [Number(match[2]), Number(match[3] ?? 0), Number(match[4] ?? 0)];
+                const compare = actual[0] - target[0] || actual[1] - target[1] || actual[2] - target[2];
+                const operator = match[1] ?? '=';
+                let satisfied: boolean;
+                switch (operator) {
+                    case '>=': satisfied = compare >= 0; break;
+                    case '<=': satisfied = compare <= 0; break;
+                    case '>': satisfied = compare > 0; break;
+                    case '<': satisfied = compare < 0; break;
+                    case '~>': {
+                        const hasPatch = match[4] !== undefined;
+                        const upper = hasPatch ? [target[0], target[1] + 1, 0] : [target[0] + 1, 0, 0];
+                        const upperCompare = actual[0] - upper[0] || actual[1] - upper[1] || actual[2] - upper[2];
+                        satisfied = compare >= 0 && upperCompare < 0;
+                        break;
+                    }
+                    default: satisfied = compare === 0;
+                }
+                if (!satisfied) return makeBooleanValue(false);
+            }
+            return makeBooleanValue(true);
         }
     }
 };

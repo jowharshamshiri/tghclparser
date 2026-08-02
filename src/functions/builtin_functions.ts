@@ -256,6 +256,32 @@ function csvDecode(content: string): RuntimeValue<'array'> {
 	return arrayValue(records);
 }
 
+function yamlEncode(value: RuntimeValue<ValueType>, indent = ''): string {
+	const current = value;
+	if (current.type === 'string') return JSON.stringify(String(current.value));
+	if (current.type === 'number' || current.type === 'boolean') return String(current.value);
+	if (current.type === 'null') return 'null';
+	if (current.type === 'array') {
+		const items = current.value as RuntimeValue<ValueType>[];
+		if (items.length === 0) return '[]';
+		return items.map(item => {
+			const rendered = yamlEncode(item, `${indent}  `);
+			if (item.type === 'object' || item.type === 'block' || item.type === 'array') return `${indent}-\n${rendered}`;
+			return `${indent}- ${rendered}`;
+		}).join('\n');
+	}
+	if (current.type === 'object' || current.type === 'block') {
+		const entries = [...(current.value as Map<string, RuntimeValue<ValueType>>).entries()].sort(([left], [right]) => left.localeCompare(right));
+		if (entries.length === 0) return '{}';
+		return entries.map(([key, item]) => {
+			const rendered = yamlEncode(item, `${indent}  `);
+			if (rendered.includes('\n')) return `${indent}${JSON.stringify(key)}:\n${rendered}`;
+			return `${indent}${JSON.stringify(key)}: ${rendered}`;
+		}).join('\n');
+	}
+	throw new Error(`yamlencode cannot encode ${current.type}`);
+}
+
 function parseCsvRow(row: string): string[] {
 	const cells: string[] = [];
 	let current = '';
@@ -291,6 +317,16 @@ export const builtinFunctionGroup = {
 	functions: {
 		abspath: async (args: RuntimeValue<ValueType>[], context: FunctionContext) => stringValue(path.resolve(context.workingDirectory, stringArgument(args, 0, 'abspath'))),
 		abs: async (args: RuntimeValue<ValueType>[]) => numberValue(Math.abs(numberArgument(args, 0, 'abs'))),
+		alltrue: async (args: RuntimeValue<ValueType>[]) => booleanValue(arrayArgument(args, 0, 'alltrue').every(item => {
+			if (item.type === 'boolean') return Boolean(item.value);
+			if (item.type === 'string' && (item.value === 'true' || item.value === 'false')) return item.value === 'true';
+			throw new Error('alltrue list elements must be booleans');
+		})),
+		anytrue: async (args: RuntimeValue<ValueType>[]) => booleanValue(arrayArgument(args, 0, 'anytrue').some(item => {
+			if (item.type === 'boolean') return Boolean(item.value);
+			if (item.type === 'string' && (item.value === 'true' || item.value === 'false')) return item.value === 'true';
+			throw new Error('anytrue list elements must be booleans');
+		})),
 		basename: async (args: RuntimeValue<ValueType>[]) => stringValue(path.basename(stringArgument(args, 0, 'basename'))),
 		base64decode: async (args: RuntimeValue<ValueType>[]) => stringValue(Buffer.from(stringArgument(args, 0, 'base64decode'), 'base64').toString('utf8')),
 		base64encode: async (args: RuntimeValue<ValueType>[]) => stringValue(Buffer.from(stringArgument(args, 0, 'base64encode'), 'utf8').toString('base64')),
@@ -370,6 +406,12 @@ export const builtinFunctionGroup = {
 		contains: async (args: RuntimeValue<ValueType>[]) => booleanValue(arrayArgument(args, 0, 'contains').some(item => valueEquals(item, requireArgument(args, 1, 'contains')))),
 		csvdecode: async (args: RuntimeValue<ValueType>[]) => csvDecode(stringArgument(args, 0, 'csvdecode')),
 		dirname: async (args: RuntimeValue<ValueType>[]) => stringValue(path.dirname(stringArgument(args, 0, 'dirname'))),
+		fileset: async (args: RuntimeValue<ValueType>[], context: FunctionContext) => {
+			const base = stringArgument(args, 0, 'fileset');
+			const pattern = stringArgument(args, 1, 'fileset');
+			const matches = await expandTerragruntGlob([path.join(base, pattern)], context.workingDirectory);
+			return arrayValue(matches.map(match => stringValue(path.relative(context.workingDirectory, match).split(path.sep).join('/'))));
+		},
 		distinct: async (args: RuntimeValue<ValueType>[]) => {
 			const items = arrayArgument(args, 0, 'distinct');
 			const distinct: RuntimeValue<ValueType>[] = [];
@@ -688,6 +730,13 @@ export const builtinFunctionGroup = {
 			const map = objectArgument(args, 0, 'values');
 			return arrayValue([...map.keys()].sort().map(key => map.get(key)!));
 		},
+		toset: async (args: RuntimeValue<ValueType>[]) => {
+			const items = arrayArgument(args, 0, 'toset');
+			const distinct: RuntimeValue<ValueType>[] = [];
+			for (const item of items) if (!distinct.some(existing => valueEquals(existing, item))) distinct.push(item);
+			return arrayValue(sortRuntimeList(distinct));
+		},
+		yamlencode: async (args: RuntimeValue<ValueType>[]) => stringValue(`${yamlEncode(requireArgument(args, 0, 'yamlencode'))}\n`),
 		formatdate: async (args: RuntimeValue<ValueType>[]) => stringValue(formatDate(stringArgument(args, 0, 'formatdate'), stringArgument(args, 1, 'formatdate'))),
 		timeadd: async (args: RuntimeValue<ValueType>[]) => {
 			const time = stringArgument(args, 0, 'timeadd');
