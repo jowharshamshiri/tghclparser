@@ -21,17 +21,23 @@ interface TNode {
 	type: string;
 	value?: string | number | boolean | null;
 	children?: TNode[];
+	location?: {
+		start: { offset: number };
+		end: { offset: number };
+	};
 }
 
 export interface ConfigEvaluatorOptions {
 	environmentVariables: Record<string, string>;
 	terraformCommand?: string;
 	terraformCliArgs?: string[];
+	resolveDependency?: (configPath: string, name: string) => Promise<RuntimeValue<ValueType> | undefined>;
 }
 
 export interface ConfigEvaluationResult {
 	valid: boolean;
 	inputs: RuntimeValue<ValueType> | null;
+	error?: string;
 }
 
 interface IncludeRef {
@@ -53,6 +59,7 @@ interface FileResult {
 interface Scope {
 	filePath: string;
 	content: string;
+	ast: TNode;
 	dir: string;
 	locals: Map<string, TNode>;
 	localCache: Map<string, RuntimeValue<ValueType> | 'pending'>;
@@ -84,9 +91,63 @@ export class ConfigEvaluator {
 			const result = await this.evaluateFile(configPath, content, workDir);
 			if (result.inputs === null) return { valid: true, inputs: null };
 			return { valid: true, inputs: makeObjectValue(result.inputs) };
-		} catch {
-			return { valid: false, inputs: null };
+		} catch (error) {
+			return {
+				valid: false,
+				inputs: null,
+				error: error instanceof Error ? error.message : String(error)
+			};
 		}
+	}
+
+	async evaluateAtPosition(
+		configPath: string,
+		content: string,
+		workDir: string,
+		position: { line: number; character: number }
+	): Promise<RuntimeValue<ValueType> | undefined> {
+		const result = await this.evaluateFile(configPath, content, workDir);
+		const lines = content.split('\n');
+		if (position.line < 0 || position.line >= lines.length || position.character < 0) return undefined;
+		const offset = lines.slice(0, position.line).reduce((total, line) => total + line.length + 1, 0) + position.character;
+		const candidates: TNode[] = [];
+		const visit = (node: TNode): void => {
+			const location = node.location;
+			if (node.type === 'function_call') {
+				const identifier = node.children?.find(child => child.type === 'function_identifier');
+				if (identifier?.location && identifier.location.start.offset <= offset && offset <= identifier.location.end.offset) {
+					candidates.push(node);
+				}
+			}
+			if (node.type === 'attribute') {
+				const identifier = node.children?.find(child => child.type === 'attribute_identifier');
+				const value = node.children?.find(child => child.type !== 'attribute_identifier');
+				if (identifier?.location && value && identifier.location.start.offset <= offset && offset <= identifier.location.end.offset) {
+					candidates.push(value);
+				}
+			}
+			if (location && location.start.offset <= offset && offset <= location.end.offset) {
+				if (!['root', 'assignment', 'block', 'attribute', 'attribute_identifier', 'root_assignment_identifier', 'block_identifier', 'parameter', 'function_identifier', 'access_chain', 'namespace'].includes(node.type)) {
+					candidates.push(node);
+				}
+			}
+			for (const child of node.children ?? []) visit(child);
+		};
+		visit(result.scope.ast);
+		candidates.sort((left, right) => this.nodeWidth(left) - this.nodeWidth(right));
+		for (const candidate of candidates) {
+			try {
+				return await this.evalNode(candidate, result.scope);
+			} catch {
+				continue;
+			}
+		}
+		return undefined;
+	}
+
+	private nodeWidth(node: TNode): number {
+		if (!node.location) return Number.MAX_SAFE_INTEGER;
+		return node.location.end.offset - node.location.start.offset;
 	}
 
 	private async evaluateFile(filePath: string, content: string, workDir: string): Promise<FileResult> {
@@ -104,6 +165,7 @@ export class ConfigEvaluator {
 		const scope: Scope = {
 			filePath,
 			content,
+			ast,
 			dir,
 			locals: new Map(),
 			localCache: new Map(),
@@ -301,7 +363,7 @@ export class ConfigEvaluator {
 			}
 		}
 		const plain: Record<string, unknown> = {};
-		for (const key of [...values.keys()].sort()) plain[key] = plainValue(values.get(key)!);
+		for (const key of [...values.keys()].sort()) plain[key] = runtimeValueToPlain(values.get(key)!);
 		return makeStringValue(JSON.stringify(plain));
 	}
 
@@ -346,7 +408,10 @@ export class ConfigEvaluator {
 		}
 
 		if (namespace === 'dependency') {
-			throw new Error('dependency references are not supported during input evaluation');
+			if (parts.length < 2) throw new Error('dependency reference requires a name');
+			const dependency = await this.options.resolveDependency?.(scope.filePath, parts[1]);
+			if (!dependency) throw new Error(`Dependency "${parts[1]}" has no evaluated outputs`);
+			return this.traverse(dependency, parts.slice(2), parts[1]);
 		}
 
 		if (parts.length === 1) {
@@ -541,6 +606,15 @@ export class ConfigEvaluator {
 	}
 
 	private referenceParts(node: TNode): string[] {
+		if (node.type === 'dependency_reference') {
+			const dependencyName = node.children?.find(child => child.type === 'dependency_name')?.value;
+			const chain = node.children?.find(child => child.type === 'access_chain');
+			return [
+				'dependency',
+				String(dependencyName ?? ''),
+				...(chain?.children ?? []).map(segment => String(segment.value ?? ''))
+			];
+		}
 		const parts: string[] = [];
 		let hasNamespace = false;
 		for (const child of node.children ?? []) {
@@ -717,9 +791,11 @@ export class ConfigEvaluator {
 }
 
 function makeRootScope(filePath: string, content: string): Scope {
+	const ast = parse(content, { grammarSource: filePath, tracer: { trace() {} } });
 	return {
 		filePath,
 		content,
+		ast,
 		dir: path.dirname(filePath),
 		locals: new Map(),
 		localCache: new Map(),
@@ -776,7 +852,7 @@ function isObjectValue(value: RuntimeValue<ValueType>): boolean {
 	return value.type === 'object' || value.type === 'block';
 }
 
-function plainValue(value: RuntimeValue<ValueType>): unknown {
+export function runtimeValueToPlain(value: RuntimeValue<ValueType>): unknown {
 	switch (value.type) {
 		case 'string':
 		case 'number':
@@ -785,12 +861,12 @@ function plainValue(value: RuntimeValue<ValueType>): unknown {
 		case 'null':
 			return null;
 		case 'array':
-			return (value.value as RuntimeValue<ValueType>[]).map(plainValue);
+			return (value.value as RuntimeValue<ValueType>[]).map(runtimeValueToPlain);
 		case 'object':
 		case 'block': {
 			const out: Record<string, unknown> = {};
 			for (const [key, entry] of (value.value as Map<string, RuntimeValue<ValueType>>).entries()) {
-				out[key] = plainValue(entry);
+				out[key] = runtimeValueToPlain(entry);
 			}
 			return out;
 		}

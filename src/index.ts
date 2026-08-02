@@ -1,6 +1,7 @@
-export type {TerragruntConfig,TreeNode} from './model';
+export type {RuntimeValue, TerragruntConfig, TreeNode, ValueType} from './model';
 export {Token} from './model';
 export {ConfigEvaluator} from './Evaluator';
+export {runtimeValueToPlain} from './Evaluator';
 export {ParsedDocument} from './ParsedDocument';
 export {CompletionsProvider} from './providers/CompletionsProvider';
 export {DiagnosticsProvider} from './providers/DiagnosticsProvider';
