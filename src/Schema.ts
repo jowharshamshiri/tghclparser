@@ -11,6 +11,19 @@ import type { AttributeDefinition, BlockDefinition, FunctionDefinition, Terragru
 const functionDefinitions = functionsDefinitionsJson as { functions: FunctionDefinition[] };
 const schemaDefinitions = blocks as unknown as { blocks: BlockDefinition[]; globalAttributes: AttributeDefinition[] };
 
+// These names belong to language runtimes newer than the configuration runtime
+// supported by the current Terragrunt regime. Keeping them in the source JSON
+// would expose completions and diagnostics for functions the runtime rejects.
+const unsupportedRuntimeFunctions = new Set([
+	'base64gunzip', 'cidrcontains', 'issensitive',
+	'plantimestamp', 'regex_replace', 'templatestring',
+	'type', 'urldecode'
+]);
+
+const currentFunctionDefinitions = functionDefinitions.functions.filter(
+	definition => !unsupportedRuntimeFunctions.has(definition.name)
+);
+
 export class Schema {
 	private static instance: Schema;
 	private functionRegistry: FunctionRegistry;
@@ -103,11 +116,11 @@ export class Schema {
 	}
 
 	getAllFunctions(): FunctionDefinition[] {
-		return functionDefinitions.functions;
+		return currentFunctionDefinitions;
 	}
 
 	getFunctionDefinition(name: string): FunctionDefinition | undefined {
-		return functionDefinitions.functions.find(f => f.name === name);
+		return currentFunctionDefinitions.find(f => f.name === name);
 	}
 
 	getFunctionSignature(func: FunctionDefinition): string {

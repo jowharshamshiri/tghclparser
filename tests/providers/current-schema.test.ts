@@ -95,7 +95,7 @@ unit "app" {
 
 	it('retains broad current function and block metadata', () => {
 		const schema = Schema.getInstance();
-		expect(schema.getAllFunctions()).to.have.length.greaterThan(150);
+		expect(schema.getAllFunctions()).to.have.length.greaterThan(130);
 		expect(schema.getAllBlockTemplates().map(block => block.type)).to.include.members([
 			'unit', 'stack', 'autoinclude', 'catalog', 'engine', 'feature', 'exclude', 'errors', 'dependency', 'generate'
 		]);
@@ -122,6 +122,16 @@ unit "app" {
 			'constraint_check', 'deep_merge', 'startswith', 'endswith', 'strcontains', 'timecmp'
 		]) {
 			expect(registry.hasFunction(name), `${name} evaluator`).to.equal(true);
+		}
+	});
+
+	it('does not expose functions rejected by the current runtime', () => {
+		const schema = Schema.getInstance();
+		for (const name of ['base64gunzip', 'cidrcontains', 'issensitive', 'plantimestamp', 'regex_replace', 'templatestring', 'type', 'urldecode']) {
+			expect(schema.getFunctionDefinition(name), `${name} metadata`).to.equal(undefined);
+		}
+		for (const name of ['base64gzip', 'bcrypt', 'rsadecrypt', 'timestamp']) {
+			expect(schema.getFunctionDefinition(name), `${name} metadata`).not.to.equal(undefined);
 		}
 	});
 });

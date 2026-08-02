@@ -1,5 +1,7 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { constants, createHash, privateDecrypt, randomUUID } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 import path from 'node:path';
+import bcrypt from 'bcryptjs';
 
 import type { FunctionContext, RuntimeValue, ValueType } from '../model';
 import { expandTerragruntGlob } from './terragrunt_glob';
@@ -330,6 +332,7 @@ export const builtinFunctionGroup = {
 		basename: async (args: RuntimeValue<ValueType>[]) => stringValue(path.basename(stringArgument(args, 0, 'basename'))),
 		base64decode: async (args: RuntimeValue<ValueType>[]) => stringValue(Buffer.from(stringArgument(args, 0, 'base64decode'), 'base64').toString('utf8')),
 		base64encode: async (args: RuntimeValue<ValueType>[]) => stringValue(Buffer.from(stringArgument(args, 0, 'base64encode'), 'utf8').toString('base64')),
+		base64gzip: async (args: RuntimeValue<ValueType>[]) => stringValue(gzipSync(Buffer.from(stringArgument(args, 0, 'base64gzip'))).toString('base64')),
 		base64sha256: async (args: RuntimeValue<ValueType>[]) => stringValue(createHash('sha256').update(stringArgument(args, 0, 'base64sha256'), 'utf8').digest('base64')),
 		base64sha512: async (args: RuntimeValue<ValueType>[]) => stringValue(createHash('sha512').update(stringArgument(args, 0, 'base64sha512'), 'utf8').digest('base64')),
 		ceil: async (args: RuntimeValue<ValueType>[]) => numberValue(Math.ceil(numberArgument(args, 0, 'ceil'))),
@@ -567,6 +570,27 @@ export const builtinFunctionGroup = {
 		replace: async (args: RuntimeValue<ValueType>[]) => stringValue(stringArgument(args, 0, 'replace').split(stringArgument(args, 1, 'replace')).join(stringArgument(args, 2, 'replace'))),
 		reverse: async (args: RuntimeValue<ValueType>[]) => arrayValue([...arrayArgument(args, 0, 'reverse')].reverse()),
 		sensitive: async (args: RuntimeValue<ValueType>[]) => makeSensitiveValue(requireArgument(args, 0, 'sensitive')),
+		bcrypt: async (args: RuntimeValue<ValueType>[]) => {
+			const password = stringArgument(args, 0, 'bcrypt');
+			const cost = args[1] ? numberArgument(args, 1, 'bcrypt') : 10;
+			if (!Number.isInteger(cost) || cost < 4 || cost > 31) throw new Error('bcrypt cost must be an integer between 4 and 31');
+			return stringValue(bcrypt.hashSync(password, cost));
+		},
+		rsadecrypt: async (args: RuntimeValue<ValueType>[]) => {
+			const ciphertext = stringArgument(args, 0, 'rsadecrypt');
+			const privateKey = stringArgument(args, 1, 'rsadecrypt');
+			try {
+				const plaintext = privateDecrypt({
+					key: privateKey,
+					padding: constants.RSA_PKCS1_OAEP_PADDING,
+					oaepHash: 'sha1'
+				}, Buffer.from(ciphertext, 'base64'));
+				return stringValue(plaintext.toString('utf8'));
+			} catch (error) {
+				throw new Error(`rsadecrypt failed: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		},
+		timestamp: async () => stringValue(new Date().toISOString().replace(/\.\d{3}Z$/u, 'Z')),
 		setintersection: async (args: RuntimeValue<ValueType>[]) => {
 			const sets = args.map((_, index) => arrayArgument(args, index, 'setintersection'));
 			if (sets.length === 0) return arrayValue([]);
