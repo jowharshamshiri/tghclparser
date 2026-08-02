@@ -4,7 +4,7 @@ import path from 'node:path';
 import { URI } from 'vscode-uri';
 
 import type { FunctionContext, RuntimeValue, ValueType } from '../model';
-import { makeArrayValue, makeBooleanValue, makeStringValue } from './utils';
+import { makeArrayValue, makeBooleanValue, makeObjectValue, makeStringValue } from './utils';
 
 const defaultRetryableErrors = [
 	'(?s).*Failed to load state.*tcp.*timeout.*',
@@ -321,6 +321,48 @@ export const coreFunctionGroup = {
                 if (!satisfied) return makeBooleanValue(false);
             }
             return makeBooleanValue(true);
+        },
+        deep_merge: async (
+            args: RuntimeValue<ValueType>[],
+            context: FunctionContext
+        ): Promise<RuntimeValue<ValueType>> => {
+            if (!context.experiments?.includes('deep-merge')) {
+                throw new Error('deep_merge requires the deep-merge experiment to be enabled');
+            }
+            const merged = new Map<string, RuntimeValue<ValueType>>();
+            for (const argument of args) {
+                if (argument.type === 'null') continue;
+                if (argument.type !== 'object' && argument.type !== 'block') {
+                    throw new Error(`deep_merge expects map or object arguments, got ${argument.type}`);
+                }
+                mergeRuntimeMaps(merged, argument.value as Map<string, RuntimeValue<ValueType>>);
+            }
+            return makeObjectValue(merged);
         }
     }
 };
+
+function mergeRuntimeMaps(
+    target: Map<string, RuntimeValue<ValueType>>,
+    source: Map<string, RuntimeValue<ValueType>>
+): void {
+    for (const [key, sourceValue] of source) {
+        const targetValue = target.get(key);
+        if (targetValue && isRuntimeObject(targetValue) && isRuntimeObject(sourceValue)) {
+            const nested = new Map(targetValue.value as Map<string, RuntimeValue<ValueType>>);
+            mergeRuntimeMaps(nested, sourceValue.value as Map<string, RuntimeValue<ValueType>>);
+            target.set(key, makeObjectValue(nested));
+        } else if (targetValue?.type === 'array' && sourceValue.type === 'array') {
+            target.set(key, makeArrayValue([
+                ...(targetValue.value as RuntimeValue<ValueType>[]),
+                ...(sourceValue.value as RuntimeValue<ValueType>[])
+            ]));
+        } else {
+            target.set(key, sourceValue);
+        }
+    }
+}
+
+function isRuntimeObject(value: RuntimeValue<ValueType>): boolean {
+    return value.type === 'object' || value.type === 'block';
+}

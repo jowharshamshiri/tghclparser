@@ -105,4 +105,23 @@ unit "app" {
 			expect(definition?.description, `${name} description`).not.to.equal('');
 		}
 	});
+
+	it('has an evaluator for every Terragrunt-specific function', () => {
+		const registry = Schema.getInstance().getFunctionRegistry();
+		for (const name of [
+			'find_in_parent_folders', 'path_relative_to_include', 'path_relative_from_include',
+			'get_env', 'run_cmd', 'read_terragrunt_config', 'get_platform', 'get_repo_root',
+			'get_path_from_repo_root', 'get_path_to_repo_root', 'get_terragrunt_dir',
+			'get_original_terragrunt_dir', 'get_terraform_command', 'get_terraform_cli_args',
+			'get_parent_terragrunt_dir', 'get_aws_account_alias', 'get_aws_account_id',
+			'get_aws_caller_identity_arn', 'get_aws_caller_identity_user_id',
+			'get_terraform_commands_that_need_vars', 'get_terraform_commands_that_need_locking',
+			'get_terraform_commands_that_need_input', 'get_terraform_commands_that_need_parallelism',
+			'sops_decrypt_file', 'get_terragrunt_source_cli_flag', 'get_default_retryable_errors',
+			'read_tfvars_file', 'get_working_dir', 'mark_as_read', 'mark_glob_as_read',
+			'constraint_check', 'deep_merge', 'startswith', 'endswith', 'strcontains', 'timecmp'
+		]) {
+			expect(registry.hasFunction(name), `${name} evaluator`).to.equal(true);
+		}
+	});
 });

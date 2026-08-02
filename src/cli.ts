@@ -10,6 +10,8 @@ import { Workspace } from './Workspace';
 
 interface CLIOptions {
 	json: boolean;
+	showConfigPath: boolean;
+	experiments: string[];
 	workingDir: string;
 	paths: string[];
 }
@@ -35,6 +37,20 @@ const fileNames = new Set([
 	'terragrunt.autoinclude.stack.hcl'
 ]);
 
+function validateJSONShape(value: unknown, fileName: string): void {
+	if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+		throw new Error('JSON configuration must be an object');
+	}
+	if (fileName === 'terragrunt.values.hcl.json') return;
+	const stack = fileName === 'terragrunt.stack.hcl.json';
+	const allowed = stack
+		? new Set(['unit', 'stack', 'include', 'locals', 'feature', 'exclude', 'errors', 'autoinclude'])
+		: new Set(['inputs', 'terraform', 'remote_state', 'generate', 'locals', 'dependency', 'dependencies', 'include', 'catalog', 'engine', 'feature', 'exclude', 'errors', 'download_dir', 'prevent_destroy', 'iam_role', 'iam_assume_role_duration', 'iam_assume_role_session_name', 'iam_web_identity_token', 'terraform_binary', 'terraform_version_constraint', 'terragrunt_version_constraint']);
+	for (const key of Object.keys(value)) {
+		if (!allowed.has(key)) throw new Error(`Unsupported JSON configuration attribute "${key}"`);
+	}
+}
+
 function usage(): string {
 	return [
 		'Usage: tghclp hcl validate [options] [directory|file ...]',
@@ -42,22 +58,29 @@ function usage(): string {
 		'Options:',
 		'  --json                  Write diagnostics as JSON',
 		'  --working-dir <path>   Validate from a working directory',
+		'  --show-config-path     List invalid configuration paths',
+		'  --experiment <name>   Enable a named experiment',
 		'  --help                 Show this help'
 	].join('\n');
 }
 
 function parseArgs(argv: string[]): CLIOptions | 'help' {
-	const options: CLIOptions = { json: false, workingDir: process.cwd(), paths: [] };
+	const options: CLIOptions = { json: false, showConfigPath: false, experiments: [], workingDir: process.cwd(), paths: [] };
 	for (let index = 0; index < argv.length; index++) {
 		const argument = argv[index];
 		switch (argument) {
 			case '--json': options.json = true; break;
+			case '--show-config-path': options.showConfigPath = true; break;
 			case '--no-color':
 			case '--no-tips':
 			case '--non-interactive':
-			case '--strict':
-			case '--inputs':
 				break;
+			case '--experiment': {
+				const value = argv[++index];
+				if (!value) throw new Error('--experiment requires a name');
+				options.experiments.push(value);
+				break;
+			}
 			case '--working-dir': {
 				const value = argv[++index];
 				if (!value) throw new Error('--working-dir requires a path');
@@ -113,10 +136,10 @@ function diagnostic(filename: string, content: string, item: any): DiagnosticOut
 	};
 }
 
-async function validateFile(filePath: string, workDir: string): Promise<DiagnosticOutput[]> {
+async function validateFile(filePath: string, workDir: string, experiments: string[]): Promise<DiagnosticOutput[]> {
 	const content = await fs.readFile(filePath, 'utf8');
 	if (filePath.endsWith('.json')) {
-		try { JSON.parse(content); return []; }
+		try { validateJSONShape(JSON.parse(content), path.basename(filePath)); return []; }
 		catch (error) {
 			return [{
 				range: { filename: filePath, start: { line: 1, column: 1, byte: 0 }, end: { line: 1, column: 1, byte: 0 } },
@@ -132,6 +155,7 @@ async function validateFile(filePath: string, workDir: string): Promise<Diagnost
 		environmentVariables: process.env as Record<string, string>,
 		terraformCommand: '',
 		terraformCliArgs: [],
+		experiments,
 		workspaceTrusted: true
 	});
 	const result = await evaluator.evaluateUnit(filePath, content, workDir);
@@ -151,8 +175,14 @@ async function main(argv: string[]): Promise<number> {
 	const roots = parsed.paths.length > 0 ? parsed.paths.map(target => path.resolve(parsed.workingDir, target)) : [parsed.workingDir];
 	const files = (await Promise.all(roots.map(collectFiles))).flat().sort();
 	if (files.length === 0) throw new Error(`No Terragrunt HCL files found under ${parsed.workingDir}`);
-	const diagnostics = (await Promise.all(files.map(file => validateFile(file, parsed.workingDir)))).flat();
-	if (parsed.json) {
+	const diagnostics = (await Promise.all(files.map(file => validateFile(file, parsed.workingDir, parsed.experiments)))).flat();
+	if (parsed.showConfigPath) {
+		if (diagnostics.length > 0) {
+			const paths = [...new Set(diagnostics.map(item => item.range.filename))];
+			if (parsed.json) process.stdout.write(`${JSON.stringify(paths)}\n`);
+			else for (const file of paths) process.stdout.write(`${file}\n`);
+		}
+	} else if (parsed.json) {
 		if (diagnostics.length > 0) process.stdout.write(`${JSON.stringify(diagnostics)}\n`);
 	} else if (diagnostics.length > 0) {
 		for (const item of diagnostics) process.stderr.write(`${item.range.filename}: ${item.summary}: ${item.detail}\n`);

@@ -31,7 +31,9 @@ The package provides the `tghclp` executable. Its validation command follows the
 tghclp hcl validate --json --working-dir ./infrastructure
 ```
 
-It recursively validates Terragrunt HCL files, returns a non-zero status when diagnostics are found, and supports JSON diagnostics for automation.
+It recursively validates Terragrunt HCL files, returns a non-zero status when diagnostics are found, and supports JSON diagnostics for automation. Add `--show-config-path` to emit the invalid configuration paths instead of diagnostic objects.
+
+Experiment-gated language features must be enabled explicitly, for example `--experiment deep-merge`; the command fails when such a feature is used without its explicit switch.
 
 ## Development
 

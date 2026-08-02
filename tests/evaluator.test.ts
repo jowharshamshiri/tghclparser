@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 
-import { ConfigEvaluator } from '../src/Evaluator';
+import { ConfigEvaluator, runtimeValueToPlain } from '../src/Evaluator';
 
 describe('semantic configuration evaluation', () => {
 	const evaluator = new ConfigEvaluator({
@@ -55,5 +55,32 @@ describe('semantic configuration evaluation', () => {
 		);
 		assert.equal(result.valid, false);
 		assert.match(result.error ?? '', /disabled until the workspace is trusted/);
+	});
+
+	it('requires and evaluates the deep-merge experiment explicitly', async () => {
+		const content = [
+			'inputs = {',
+			'  merged = deep_merge({ service = { retries = 1, mode = "safe" }, values = [1] }, { service = { retries = 3 }, values = [2] })',
+			'}'
+		].join('\n');
+		const disabled = await evaluator.evaluateUnit(configPath, content, process.cwd());
+		assert.equal(disabled.valid, false);
+		assert.match(disabled.error ?? '', /deep-merge experiment/);
+
+		const enabledEvaluator = new ConfigEvaluator({
+			environmentVariables: {},
+			terraformCommand: '',
+			terraformCliArgs: [],
+			experiments: ['deep-merge'],
+			workspaceTrusted: true
+		});
+		const enabled = await enabledEvaluator.evaluateUnit(configPath, content, process.cwd());
+		assert.equal(enabled.valid, true);
+		assert.deepEqual(enabled.inputs ? runtimeValueToPlain(enabled.inputs) : undefined, {
+			merged: {
+				service: { retries: 3, mode: 'safe' },
+				values: [1, 2]
+			}
+		});
 	});
 });

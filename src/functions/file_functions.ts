@@ -106,8 +106,19 @@ export const fileFunctionGroup = {
             }
             const value = await context.readTFVarsFile(tfvarsPath);
             if (value === undefined) throw new Error(`Could not read tfvars file ${tfvarsPath}`);
-            return value;
-        },
+			return value;
+		},
+		sops_decrypt_file: async (
+			args: RuntimeValue<ValueType>[],
+			context: FunctionContext
+		): Promise<RuntimeValue<ValueType>> => {
+			assertTrusted(context, 'sops_decrypt_file');
+			const source = stringArgument(args, 0, 'sops_decrypt_file');
+			const filePath = resolveFilePath(source, context);
+			await assertPathAllowed(context, filePath);
+			if (!context.runCommand) throw new Error('sops_decrypt_file requires a command runner');
+			return makeStringValue(await context.runCommand('sops', ['--decrypt', filePath]));
+		},
 		templatefile: async (
             args: RuntimeValue<ValueType>[],
             context: FunctionContext

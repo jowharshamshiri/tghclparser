@@ -31,6 +31,7 @@ export interface ConfigEvaluatorOptions {
 	environmentVariables: Record<string, string>;
 	terraformCommand?: string;
 	terraformCliArgs?: string[];
+	experiments?: string[];
 	workspaceTrusted?: boolean;
 	resolveDependency?: (configPath: string, name: string) => Promise<RuntimeValue<ValueType> | undefined>;
 }
@@ -326,6 +327,7 @@ export class ConfigEvaluator {
 			},
 			terraformCommand: this.options.terraformCommand,
 			terraformCliArgs: this.options.terraformCliArgs,
+			experiments: this.options.experiments,
 			workspaceTrusted: this.options.workspaceTrusted === true,
 			workspaceRoot: scope.workspaceRoot,
 			assertPathAllowed: target => this.assertPathAllowed(target, scope.workspaceRoot),
@@ -827,6 +829,9 @@ export class ConfigEvaluator {
 		}
 
 		if (!this.schema.getFunctionDefinition(name)) throw new Error(`Unknown function "${name}"`);
+		if (name === 'deep_merge' && !this.options.experiments?.includes('deep-merge')) {
+			throw new Error('deep_merge requires the deep-merge experiment to be enabled');
+		}
 		if (!this.schema.getFunctionRegistry().hasFunction(name)) {
 			throw new Error(`Function "${name}" has no evaluator`);
 		}

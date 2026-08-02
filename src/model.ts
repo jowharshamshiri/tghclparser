@@ -374,6 +374,7 @@ export interface FunctionContext {
 	};
 	terraformCommand?: string;
 	terraformCliArgs?: string[];
+	experiments?: string[];
 	workspaceTrusted?: boolean;
 	workspaceRoot?: string;
 	assertTrusted?: (operation: string) => void;
