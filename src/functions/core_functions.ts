@@ -36,8 +36,12 @@ async function findParentWithFile(
     if (!includeStart) {
         currentDir = path.dirname(currentDir);
     }
+	const workspaceRoot = context.workspaceRoot ? path.resolve(context.workspaceRoot) : undefined;
 
     while (true) {
+		if (workspaceRoot && currentDir !== workspaceRoot && !currentDir.startsWith(`${workspaceRoot}${path.sep}`)) {
+			return null;
+		}
         try {
             const filePath = path.join(currentDir, filename);
             await context.fs.access(filePath);
