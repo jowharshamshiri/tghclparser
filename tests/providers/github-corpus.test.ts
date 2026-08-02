@@ -56,9 +56,9 @@ describe('GitHub-derived Terragrunt corpus', () => {
 	const contents = fs.readdirSync(corpusDirectory).filter(file => file.endsWith('_content.hcl')).sort();
 
 	it('retains the complete representative fixture set', () => {
-		expect(contents).to.have.length(29);
+		expect(contents).to.have.length(30);
 		const lines = contents.reduce((count, file) => count + fs.readFileSync(path.join(corpusDirectory, file), 'utf8').split('\n').length, 0);
-		expect(lines).to.equal(1_491);
+		expect(lines).to.equal(1_529);
 	});
 
 	for (const contentFile of contents) {

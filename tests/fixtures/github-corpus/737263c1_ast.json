@@ -1,0 +1,1553 @@
+{
+  "id": 91,
+  "type": "root",
+  "location": {
+    "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+    "start": {
+      "offset": 0,
+      "line": 1,
+      "column": 1
+    },
+    "end": {
+      "offset": 766,
+      "line": 38,
+      "column": 1
+    }
+  },
+  "children": [
+    {
+      "id": 54,
+      "type": "block",
+      "value": "locals",
+      "location": {
+        "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+        "start": {
+          "offset": 0,
+          "line": 1,
+          "column": 1
+        },
+        "end": {
+          "offset": 483,
+          "line": 25,
+          "column": 2
+        }
+      },
+      "children": [
+        {
+          "id": 2,
+          "type": "block_identifier",
+          "value": "locals",
+          "location": {
+            "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+            "start": {
+              "offset": 0,
+              "line": 1,
+              "column": 1
+            },
+            "end": {
+              "offset": 6,
+              "line": 1,
+              "column": 7
+            }
+          }
+        },
+        {
+          "id": 5,
+          "type": "attribute",
+          "value": "use_gcs",
+          "location": {
+            "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+            "start": {
+              "offset": 11,
+              "line": 2,
+              "column": 3
+            },
+            "end": {
+              "offset": 33,
+              "line": 3,
+              "column": 3
+            }
+          },
+          "children": [
+            {
+              "id": 3,
+              "type": "attribute_identifier",
+              "value": "use_gcs",
+              "location": {
+                "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                "start": {
+                  "offset": 11,
+                  "line": 2,
+                  "column": 3
+                },
+                "end": {
+                  "offset": 18,
+                  "line": 2,
+                  "column": 10
+                }
+              }
+            },
+            {
+              "id": 4,
+              "type": "boolean_lit",
+              "value": true,
+              "location": {
+                "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                "start": {
+                  "offset": 26,
+                  "line": 2,
+                  "column": 18
+                },
+                "end": {
+                  "offset": 30,
+                  "line": 2,
+                  "column": 22
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": 8,
+          "type": "attribute",
+          "value": "state_bucket",
+          "location": {
+            "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+            "start": {
+              "offset": 33,
+              "line": 3,
+              "column": 3
+            },
+            "end": {
+              "offset": 131,
+              "line": 6,
+              "column": 3
+            }
+          },
+          "children": [
+            {
+              "id": 6,
+              "type": "attribute_identifier",
+              "value": "state_bucket",
+              "location": {
+                "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                "start": {
+                  "offset": 33,
+                  "line": 3,
+                  "column": 3
+                },
+                "end": {
+                  "offset": 45,
+                  "line": 3,
+                  "column": 15
+                }
+              }
+            },
+            {
+              "id": 7,
+              "type": "string_lit",
+              "value": "example-terraform-state",
+              "location": {
+                "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                "start": {
+                  "offset": 48,
+                  "line": 3,
+                  "column": 18
+                },
+                "end": {
+                  "offset": 73,
+                  "line": 3,
+                  "column": 43
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": 21,
+          "type": "attribute",
+          "value": "selected_labels",
+          "location": {
+            "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+            "start": {
+              "offset": 131,
+              "line": 6,
+              "column": 3
+            },
+            "end": {
+              "offset": 282,
+              "line": 14,
+              "column": 3
+            }
+          },
+          "children": [
+            {
+              "id": 9,
+              "type": "attribute_identifier",
+              "value": "selected_labels",
+              "location": {
+                "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                "start": {
+                  "offset": 131,
+                  "line": 6,
+                  "column": 3
+                },
+                "end": {
+                  "offset": 146,
+                  "line": 6,
+                  "column": 18
+                }
+              }
+            },
+            {
+              "id": 20,
+              "type": "ternary_expression",
+              "location": {
+                "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                "start": {
+                  "offset": 149,
+                  "line": 6,
+                  "column": 21
+                },
+                "end": {
+                  "offset": 216,
+                  "line": 11,
+                  "column": 4
+                }
+              },
+              "children": [
+                {
+                  "id": 14,
+                  "type": "local_reference",
+                  "location": {
+                    "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                    "start": {
+                      "offset": 149,
+                      "line": 6,
+                      "column": 21
+                    },
+                    "end": {
+                      "offset": 162,
+                      "line": 6,
+                      "column": 34
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": 12,
+                      "type": "namespace",
+                      "value": "local",
+                      "location": {
+                        "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                        "start": {
+                          "offset": 149,
+                          "line": 6,
+                          "column": 21
+                        },
+                        "end": {
+                          "offset": 162,
+                          "line": 6,
+                          "column": 34
+                        }
+                      }
+                    },
+                    {
+                      "id": 13,
+                      "type": "access_chain",
+                      "location": {
+                        "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                        "start": {
+                          "offset": 149,
+                          "line": 6,
+                          "column": 21
+                        },
+                        "end": {
+                          "offset": 162,
+                          "line": 6,
+                          "column": 34
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": 11,
+                          "type": "reference_identifier",
+                          "value": "use_gcs",
+                          "location": {
+                            "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                            "start": {
+                              "offset": 155,
+                              "line": 6,
+                              "column": 27
+                            },
+                            "end": {
+                              "offset": 162,
+                              "line": 6,
+                              "column": 34
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": 17,
+                  "type": "array_lit",
+                  "location": {
+                    "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                    "start": {
+                      "offset": 165,
+                      "line": 6,
+                      "column": 37
+                    },
+                    "end": {
+                      "offset": 195,
+                      "line": 9,
+                      "column": 4
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": 15,
+                      "type": "string_lit",
+                      "value": "remote",
+                      "location": {
+                        "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                        "start": {
+                          "offset": 171,
+                          "line": 7,
+                          "column": 5
+                        },
+                        "end": {
+                          "offset": 179,
+                          "line": 7,
+                          "column": 13
+                        }
+                      }
+                    },
+                    {
+                      "id": 16,
+                      "type": "string_lit",
+                      "value": "gcs",
+                      "location": {
+                        "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                        "start": {
+                          "offset": 185,
+                          "line": 8,
+                          "column": 5
+                        },
+                        "end": {
+                          "offset": 190,
+                          "line": 8,
+                          "column": 10
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "id": 19,
+                  "type": "array_lit",
+                  "location": {
+                    "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                    "start": {
+                      "offset": 198,
+                      "line": 9,
+                      "column": 7
+                    },
+                    "end": {
+                      "offset": 216,
+                      "line": 11,
+                      "column": 4
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": 18,
+                      "type": "string_lit",
+                      "value": "local",
+                      "location": {
+                        "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                        "start": {
+                          "offset": 204,
+                          "line": 10,
+                          "column": 5
+                        },
+                        "end": {
+                          "offset": 211,
+                          "line": 10,
+                          "column": 12
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": 53,
+          "type": "attribute",
+          "value": "nested_value",
+          "location": {
+            "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+            "start": {
+              "offset": 282,
+              "line": 14,
+              "column": 3
+            },
+            "end": {
+              "offset": 482,
+              "line": 25,
+              "column": 1
+            }
+          },
+          "children": [
+            {
+              "id": 22,
+              "type": "attribute_identifier",
+              "value": "nested_value",
+              "location": {
+                "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                "start": {
+                  "offset": 282,
+                  "line": 14,
+                  "column": 3
+                },
+                "end": {
+                  "offset": 294,
+                  "line": 14,
+                  "column": 15
+                }
+              }
+            },
+            {
+              "id": 52,
+              "type": "ternary_expression",
+              "location": {
+                "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                "start": {
+                  "offset": 297,
+                  "line": 14,
+                  "column": 18
+                },
+                "end": {
+                  "offset": 481,
+                  "line": 24,
+                  "column": 4
+                }
+              },
+              "children": [
+                {
+                  "id": 27,
+                  "type": "local_reference",
+                  "location": {
+                    "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                    "start": {
+                      "offset": 297,
+                      "line": 14,
+                      "column": 18
+                    },
+                    "end": {
+                      "offset": 310,
+                      "line": 14,
+                      "column": 31
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": 25,
+                      "type": "namespace",
+                      "value": "local",
+                      "location": {
+                        "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                        "start": {
+                          "offset": 297,
+                          "line": 14,
+                          "column": 18
+                        },
+                        "end": {
+                          "offset": 310,
+                          "line": 14,
+                          "column": 31
+                        }
+                      }
+                    },
+                    {
+                      "id": 26,
+                      "type": "access_chain",
+                      "location": {
+                        "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                        "start": {
+                          "offset": 297,
+                          "line": 14,
+                          "column": 18
+                        },
+                        "end": {
+                          "offset": 310,
+                          "line": 14,
+                          "column": 31
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": 24,
+                          "type": "reference_identifier",
+                          "value": "use_gcs",
+                          "location": {
+                            "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                            "start": {
+                              "offset": 303,
+                              "line": 14,
+                              "column": 24
+                            },
+                            "end": {
+                              "offset": 310,
+                              "line": 14,
+                              "column": 31
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": 41,
+                  "type": "object",
+                  "location": {
+                    "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                    "start": {
+                      "offset": 313,
+                      "line": 14,
+                      "column": 34
+                    },
+                    "end": {
+                      "offset": 395,
+                      "line": 19,
+                      "column": 4
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": 40,
+                      "type": "attribute",
+                      "value": "storage",
+                      "location": {
+                        "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                        "start": {
+                          "offset": 319,
+                          "line": 15,
+                          "column": 5
+                        },
+                        "end": {
+                          "offset": 394,
+                          "line": 19,
+                          "column": 3
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": 28,
+                          "type": "attribute_identifier",
+                          "value": "storage",
+                          "location": {
+                            "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                            "start": {
+                              "offset": 319,
+                              "line": 15,
+                              "column": 5
+                            },
+                            "end": {
+                              "offset": 326,
+                              "line": 15,
+                              "column": 12
+                            }
+                          }
+                        },
+                        {
+                          "id": 39,
+                          "type": "object",
+                          "location": {
+                            "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                            "start": {
+                              "offset": 329,
+                              "line": 15,
+                              "column": 15
+                            },
+                            "end": {
+                              "offset": 391,
+                              "line": 18,
+                              "column": 6
+                            }
+                          },
+                          "children": [
+                            {
+                              "id": 31,
+                              "type": "attribute",
+                              "value": "kind",
+                              "location": {
+                                "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                                "start": {
+                                  "offset": 337,
+                                  "line": 16,
+                                  "column": 7
+                                },
+                                "end": {
+                                  "offset": 358,
+                                  "line": 17,
+                                  "column": 7
+                                }
+                              },
+                              "children": [
+                                {
+                                  "id": 29,
+                                  "type": "attribute_identifier",
+                                  "value": "kind",
+                                  "location": {
+                                    "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                                    "start": {
+                                      "offset": 337,
+                                      "line": 16,
+                                      "column": 7
+                                    },
+                                    "end": {
+                                      "offset": 341,
+                                      "line": 16,
+                                      "column": 11
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": 30,
+                                  "type": "string_lit",
+                                  "value": "gcs",
+                                  "location": {
+                                    "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                                    "start": {
+                                      "offset": 346,
+                                      "line": 16,
+                                      "column": 16
+                                    },
+                                    "end": {
+                                      "offset": 351,
+                                      "line": 16,
+                                      "column": 21
+                                    }
+                                  }
+                                }
+                              ]
+                            },
+                            {
+                              "id": 38,
+                              "type": "attribute",
+                              "value": "bucket",
+                              "location": {
+                                "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                                "start": {
+                                  "offset": 358,
+                                  "line": 17,
+                                  "column": 7
+                                },
+                                "end": {
+                                  "offset": 390,
+                                  "line": 18,
+                                  "column": 5
+                                }
+                              },
+                              "children": [
+                                {
+                                  "id": 32,
+                                  "type": "attribute_identifier",
+                                  "value": "bucket",
+                                  "location": {
+                                    "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                                    "start": {
+                                      "offset": 358,
+                                      "line": 17,
+                                      "column": 7
+                                    },
+                                    "end": {
+                                      "offset": 364,
+                                      "line": 17,
+                                      "column": 13
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": 37,
+                                  "type": "local_reference",
+                                  "location": {
+                                    "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                                    "start": {
+                                      "offset": 367,
+                                      "line": 17,
+                                      "column": 16
+                                    },
+                                    "end": {
+                                      "offset": 385,
+                                      "line": 17,
+                                      "column": 34
+                                    }
+                                  },
+                                  "children": [
+                                    {
+                                      "id": 35,
+                                      "type": "namespace",
+                                      "value": "local",
+                                      "location": {
+                                        "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                                        "start": {
+                                          "offset": 367,
+                                          "line": 17,
+                                          "column": 16
+                                        },
+                                        "end": {
+                                          "offset": 385,
+                                          "line": 17,
+                                          "column": 34
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "id": 36,
+                                      "type": "access_chain",
+                                      "location": {
+                                        "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                                        "start": {
+                                          "offset": 367,
+                                          "line": 17,
+                                          "column": 16
+                                        },
+                                        "end": {
+                                          "offset": 385,
+                                          "line": 17,
+                                          "column": 34
+                                        }
+                                      },
+                                      "children": [
+                                        {
+                                          "id": 34,
+                                          "type": "reference_identifier",
+                                          "value": "state_bucket",
+                                          "location": {
+                                            "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                                            "start": {
+                                              "offset": 373,
+                                              "line": 17,
+                                              "column": 22
+                                            },
+                                            "end": {
+                                              "offset": 385,
+                                              "line": 17,
+                                              "column": 34
+                                            }
+                                          }
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": 51,
+                  "type": "object",
+                  "location": {
+                    "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                    "start": {
+                      "offset": 398,
+                      "line": 19,
+                      "column": 7
+                    },
+                    "end": {
+                      "offset": 481,
+                      "line": 24,
+                      "column": 4
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": 50,
+                      "type": "attribute",
+                      "value": "storage",
+                      "location": {
+                        "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                        "start": {
+                          "offset": 404,
+                          "line": 20,
+                          "column": 5
+                        },
+                        "end": {
+                          "offset": 480,
+                          "line": 24,
+                          "column": 3
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": 42,
+                          "type": "attribute_identifier",
+                          "value": "storage",
+                          "location": {
+                            "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                            "start": {
+                              "offset": 404,
+                              "line": 20,
+                              "column": 5
+                            },
+                            "end": {
+                              "offset": 411,
+                              "line": 20,
+                              "column": 12
+                            }
+                          }
+                        },
+                        {
+                          "id": 49,
+                          "type": "object",
+                          "location": {
+                            "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                            "start": {
+                              "offset": 414,
+                              "line": 20,
+                              "column": 15
+                            },
+                            "end": {
+                              "offset": 477,
+                              "line": 23,
+                              "column": 6
+                            }
+                          },
+                          "children": [
+                            {
+                              "id": 45,
+                              "type": "attribute",
+                              "value": "kind",
+                              "location": {
+                                "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                                "start": {
+                                  "offset": 422,
+                                  "line": 21,
+                                  "column": 7
+                                },
+                                "end": {
+                                  "offset": 443,
+                                  "line": 22,
+                                  "column": 7
+                                }
+                              },
+                              "children": [
+                                {
+                                  "id": 43,
+                                  "type": "attribute_identifier",
+                                  "value": "kind",
+                                  "location": {
+                                    "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                                    "start": {
+                                      "offset": 422,
+                                      "line": 21,
+                                      "column": 7
+                                    },
+                                    "end": {
+                                      "offset": 426,
+                                      "line": 21,
+                                      "column": 11
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": 44,
+                                  "type": "string_lit",
+                                  "value": "local",
+                                  "location": {
+                                    "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                                    "start": {
+                                      "offset": 429,
+                                      "line": 21,
+                                      "column": 14
+                                    },
+                                    "end": {
+                                      "offset": 436,
+                                      "line": 21,
+                                      "column": 21
+                                    }
+                                  }
+                                }
+                              ]
+                            },
+                            {
+                              "id": 48,
+                              "type": "attribute",
+                              "value": "path",
+                              "location": {
+                                "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                                "start": {
+                                  "offset": 443,
+                                  "line": 22,
+                                  "column": 7
+                                },
+                                "end": {
+                                  "offset": 476,
+                                  "line": 23,
+                                  "column": 5
+                                }
+                              },
+                              "children": [
+                                {
+                                  "id": 46,
+                                  "type": "attribute_identifier",
+                                  "value": "path",
+                                  "location": {
+                                    "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                                    "start": {
+                                      "offset": 443,
+                                      "line": 22,
+                                      "column": 7
+                                    },
+                                    "end": {
+                                      "offset": 447,
+                                      "line": 22,
+                                      "column": 11
+                                    }
+                                  }
+                                },
+                                {
+                                  "id": 47,
+                                  "type": "string_lit",
+                                  "value": "./terraform.tfstate",
+                                  "location": {
+                                    "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                                    "start": {
+                                      "offset": 450,
+                                      "line": 22,
+                                      "column": 14
+                                    },
+                                    "end": {
+                                      "offset": 471,
+                                      "line": 22,
+                                      "column": 35
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 90,
+      "type": "block",
+      "value": "remote_state",
+      "location": {
+        "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+        "start": {
+          "offset": 485,
+          "line": 27,
+          "column": 1
+        },
+        "end": {
+          "offset": 765,
+          "line": 37,
+          "column": 2
+        }
+      },
+      "children": [
+        {
+          "id": 56,
+          "type": "block_identifier",
+          "value": "remote_state",
+          "location": {
+            "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+            "start": {
+              "offset": 485,
+              "line": 27,
+              "column": 1
+            },
+            "end": {
+              "offset": 497,
+              "line": 27,
+              "column": 13
+            }
+          }
+        },
+        {
+          "id": 66,
+          "type": "attribute",
+          "value": "backend",
+          "location": {
+            "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+            "start": {
+              "offset": 502,
+              "line": 28,
+              "column": 3
+            },
+            "end": {
+              "offset": 624,
+              "line": 31,
+              "column": 3
+            }
+          },
+          "children": [
+            {
+              "id": 57,
+              "type": "attribute_identifier",
+              "value": "backend",
+              "location": {
+                "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                "start": {
+                  "offset": 502,
+                  "line": 28,
+                  "column": 3
+                },
+                "end": {
+                  "offset": 509,
+                  "line": 28,
+                  "column": 10
+                }
+              }
+            },
+            {
+              "id": 65,
+              "type": "ternary_expression",
+              "location": {
+                "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                "start": {
+                  "offset": 512,
+                  "line": 28,
+                  "column": 13
+                },
+                "end": {
+                  "offset": 543,
+                  "line": 28,
+                  "column": 44
+                }
+              },
+              "children": [
+                {
+                  "id": 62,
+                  "type": "local_reference",
+                  "location": {
+                    "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                    "start": {
+                      "offset": 512,
+                      "line": 28,
+                      "column": 13
+                    },
+                    "end": {
+                      "offset": 525,
+                      "line": 28,
+                      "column": 26
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": 60,
+                      "type": "namespace",
+                      "value": "local",
+                      "location": {
+                        "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                        "start": {
+                          "offset": 512,
+                          "line": 28,
+                          "column": 13
+                        },
+                        "end": {
+                          "offset": 525,
+                          "line": 28,
+                          "column": 26
+                        }
+                      }
+                    },
+                    {
+                      "id": 61,
+                      "type": "access_chain",
+                      "location": {
+                        "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                        "start": {
+                          "offset": 512,
+                          "line": 28,
+                          "column": 13
+                        },
+                        "end": {
+                          "offset": 525,
+                          "line": 28,
+                          "column": 26
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": 59,
+                          "type": "reference_identifier",
+                          "value": "use_gcs",
+                          "location": {
+                            "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                            "start": {
+                              "offset": 518,
+                              "line": 28,
+                              "column": 19
+                            },
+                            "end": {
+                              "offset": 525,
+                              "line": 28,
+                              "column": 26
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": 63,
+                  "type": "string_lit",
+                  "value": "gcs",
+                  "location": {
+                    "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                    "start": {
+                      "offset": 528,
+                      "line": 28,
+                      "column": 29
+                    },
+                    "end": {
+                      "offset": 533,
+                      "line": 28,
+                      "column": 34
+                    }
+                  }
+                },
+                {
+                  "id": 64,
+                  "type": "string_lit",
+                  "value": "local",
+                  "location": {
+                    "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                    "start": {
+                      "offset": 536,
+                      "line": 28,
+                      "column": 37
+                    },
+                    "end": {
+                      "offset": 543,
+                      "line": 28,
+                      "column": 44
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": 89,
+          "type": "attribute",
+          "value": "config",
+          "location": {
+            "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+            "start": {
+              "offset": 624,
+              "line": 31,
+              "column": 3
+            },
+            "end": {
+              "offset": 764,
+              "line": 37,
+              "column": 1
+            }
+          },
+          "children": [
+            {
+              "id": 67,
+              "type": "attribute_identifier",
+              "value": "config",
+              "location": {
+                "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                "start": {
+                  "offset": 624,
+                  "line": 31,
+                  "column": 3
+                },
+                "end": {
+                  "offset": 630,
+                  "line": 31,
+                  "column": 9
+                }
+              }
+            },
+            {
+              "id": 88,
+              "type": "ternary_expression",
+              "location": {
+                "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                "start": {
+                  "offset": 633,
+                  "line": 31,
+                  "column": 12
+                },
+                "end": {
+                  "offset": 763,
+                  "line": 36,
+                  "column": 4
+                }
+              },
+              "children": [
+                {
+                  "id": 72,
+                  "type": "local_reference",
+                  "location": {
+                    "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                    "start": {
+                      "offset": 633,
+                      "line": 31,
+                      "column": 12
+                    },
+                    "end": {
+                      "offset": 646,
+                      "line": 31,
+                      "column": 25
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": 70,
+                      "type": "namespace",
+                      "value": "local",
+                      "location": {
+                        "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                        "start": {
+                          "offset": 633,
+                          "line": 31,
+                          "column": 12
+                        },
+                        "end": {
+                          "offset": 646,
+                          "line": 31,
+                          "column": 25
+                        }
+                      }
+                    },
+                    {
+                      "id": 71,
+                      "type": "access_chain",
+                      "location": {
+                        "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                        "start": {
+                          "offset": 633,
+                          "line": 31,
+                          "column": 12
+                        },
+                        "end": {
+                          "offset": 646,
+                          "line": 31,
+                          "column": 25
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": 69,
+                          "type": "reference_identifier",
+                          "value": "use_gcs",
+                          "location": {
+                            "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                            "start": {
+                              "offset": 639,
+                              "line": 31,
+                              "column": 18
+                            },
+                            "end": {
+                              "offset": 646,
+                              "line": 31,
+                              "column": 25
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": 83,
+                  "type": "object",
+                  "location": {
+                    "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                    "start": {
+                      "offset": 649,
+                      "line": 31,
+                      "column": 28
+                    },
+                    "end": {
+                      "offset": 722,
+                      "line": 34,
+                      "column": 4
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": 79,
+                      "type": "attribute",
+                      "value": "bucket",
+                      "location": {
+                        "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                        "start": {
+                          "offset": 655,
+                          "line": 32,
+                          "column": 5
+                        },
+                        "end": {
+                          "offset": 687,
+                          "line": 33,
+                          "column": 5
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": 73,
+                          "type": "attribute_identifier",
+                          "value": "bucket",
+                          "location": {
+                            "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                            "start": {
+                              "offset": 655,
+                              "line": 32,
+                              "column": 5
+                            },
+                            "end": {
+                              "offset": 661,
+                              "line": 32,
+                              "column": 11
+                            }
+                          }
+                        },
+                        {
+                          "id": 78,
+                          "type": "local_reference",
+                          "location": {
+                            "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                            "start": {
+                              "offset": 664,
+                              "line": 32,
+                              "column": 14
+                            },
+                            "end": {
+                              "offset": 682,
+                              "line": 32,
+                              "column": 32
+                            }
+                          },
+                          "children": [
+                            {
+                              "id": 76,
+                              "type": "namespace",
+                              "value": "local",
+                              "location": {
+                                "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                                "start": {
+                                  "offset": 664,
+                                  "line": 32,
+                                  "column": 14
+                                },
+                                "end": {
+                                  "offset": 682,
+                                  "line": 32,
+                                  "column": 32
+                                }
+                              }
+                            },
+                            {
+                              "id": 77,
+                              "type": "access_chain",
+                              "location": {
+                                "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                                "start": {
+                                  "offset": 664,
+                                  "line": 32,
+                                  "column": 14
+                                },
+                                "end": {
+                                  "offset": 682,
+                                  "line": 32,
+                                  "column": 32
+                                }
+                              },
+                              "children": [
+                                {
+                                  "id": 75,
+                                  "type": "reference_identifier",
+                                  "value": "state_bucket",
+                                  "location": {
+                                    "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                                    "start": {
+                                      "offset": 670,
+                                      "line": 32,
+                                      "column": 20
+                                    },
+                                    "end": {
+                                      "offset": 682,
+                                      "line": 32,
+                                      "column": 32
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "id": 82,
+                      "type": "attribute",
+                      "value": "prefix",
+                      "location": {
+                        "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                        "start": {
+                          "offset": 687,
+                          "line": 33,
+                          "column": 5
+                        },
+                        "end": {
+                          "offset": 721,
+                          "line": 34,
+                          "column": 3
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": 80,
+                          "type": "attribute_identifier",
+                          "value": "prefix",
+                          "location": {
+                            "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                            "start": {
+                              "offset": 687,
+                              "line": 33,
+                              "column": 5
+                            },
+                            "end": {
+                              "offset": 693,
+                              "line": 33,
+                              "column": 11
+                            }
+                          }
+                        },
+                        {
+                          "id": 81,
+                          "type": "string_lit",
+                          "value": "services/example/dev",
+                          "location": {
+                            "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                            "start": {
+                              "offset": 696,
+                              "line": 33,
+                              "column": 14
+                            },
+                            "end": {
+                              "offset": 718,
+                              "line": 33,
+                              "column": 36
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": 87,
+                  "type": "object",
+                  "location": {
+                    "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                    "start": {
+                      "offset": 725,
+                      "line": 34,
+                      "column": 7
+                    },
+                    "end": {
+                      "offset": 763,
+                      "line": 36,
+                      "column": 4
+                    }
+                  },
+                  "children": [
+                    {
+                      "id": 86,
+                      "type": "attribute",
+                      "value": "path",
+                      "location": {
+                        "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                        "start": {
+                          "offset": 731,
+                          "line": 35,
+                          "column": 5
+                        },
+                        "end": {
+                          "offset": 762,
+                          "line": 36,
+                          "column": 3
+                        }
+                      },
+                      "children": [
+                        {
+                          "id": 84,
+                          "type": "attribute_identifier",
+                          "value": "path",
+                          "location": {
+                            "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                            "start": {
+                              "offset": 731,
+                              "line": 35,
+                              "column": 5
+                            },
+                            "end": {
+                              "offset": 735,
+                              "line": 35,
+                              "column": 9
+                            }
+                          }
+                        },
+                        {
+                          "id": 85,
+                          "type": "string_lit",
+                          "value": "./terraform.tfstate",
+                          "location": {
+                            "source": "file:///github-corpus/737263c1/terragrunt.hcl",
+                            "start": {
+                              "offset": 738,
+                              "line": 35,
+                              "column": 12
+                            },
+                            "end": {
+                              "offset": 759,
+                              "line": 35,
+                              "column": 33
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
