@@ -207,8 +207,13 @@ PrimaryExpression =
   Object /
   FunctionCall /
   Reference /
+  TraversalIdentifier /
   "(" _ expr:Expression _ ")" { return expr; } /
   SimpleExpression
+
+TraversalIdentifier = name:$([a-zA-Z_][a-zA-Z0-9_\-]*) {
+  return makeNode('traversal_reference', name, location());
+}
 
 Value = val:(
   Expression /
@@ -481,7 +486,17 @@ DoubleStringChar =
   [^"\\]
 
 EscapeSequence = "\\" . { return text(); }
-EscapedChar = "\\" . { return text(); }
+EscapedChar = "\\" escaped:. {
+  switch (escaped) {
+    case "n": return "\n";
+    case "r": return "\r";
+    case "t": return "\t";
+    case "\"": return "\"";
+    case "\\": return "\\";
+    case "/": return "/";
+    default: return escaped;
+  }
+}
 InterpolatedExpr = (
   DirectiveInterpolation /
   TemplateInterpolation
@@ -626,8 +641,8 @@ MapComprehension = "{" _
   "for" _ item:Identifier _ 
   "in" _ collection:PipeableExpression _
   OptionalCondition? _
-  "=>" _ key:PipeableExpression _ 
-  ":" _ value:PipeableExpression _
+  ":" _ key:PipeableExpression _ 
+  "=>" _ value:PipeableExpression _
 "}" {
   return makeNode('map_comprehension', null, location(), [
     makeIdentifierNode(item, location()),

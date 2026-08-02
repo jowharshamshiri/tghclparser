@@ -67,9 +67,74 @@ export const coreFunctionGroup = {
             _args: RuntimeValue<ValueType>[],
             context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
+            if (context.terragruntDir) return makeStringValue(context.terragruntDir);
             const {fsPath} = URI.parse(context.document.uri);
-            const dirPath = path.dirname(fsPath);
-            return makeStringValue(dirPath);
+            return makeStringValue(path.dirname(fsPath));
+        },
+        get_original_terragrunt_dir: async (
+            _args: RuntimeValue<ValueType>[],
+            context: FunctionContext
+        ): Promise<RuntimeValue<ValueType>> => {
+            if (context.originalTerragruntDir) return makeStringValue(context.originalTerragruntDir);
+            if (context.terragruntDir) return makeStringValue(context.terragruntDir);
+            const {fsPath} = URI.parse(context.document.uri);
+            return makeStringValue(path.dirname(fsPath));
+        },
+        get_parent_terragrunt_dir: async (
+            _args: RuntimeValue<ValueType>[],
+            context: FunctionContext
+        ): Promise<RuntimeValue<ValueType>> => {
+            if (!context.includeDir) throw new Error('get_parent_terragrunt_dir requires an included config');
+            return makeStringValue(context.includeDir);
+        },
+        path_relative_to_include: async (
+            _args: RuntimeValue<ValueType>[],
+            context: FunctionContext
+        ): Promise<RuntimeValue<ValueType>> => {
+            if (!context.includeDir || !context.terragruntDir) {
+                throw new Error('path_relative_to_include requires an included config');
+            }
+            return makeStringValue(path.relative(context.includeDir, context.terragruntDir) || '.');
+        },
+        path_relative_from_include: async (
+            _args: RuntimeValue<ValueType>[],
+            context: FunctionContext
+        ): Promise<RuntimeValue<ValueType>> => {
+            if (!context.includeDir || !context.terragruntDir) {
+                throw new Error('path_relative_from_include requires an included config');
+            }
+            return makeStringValue(path.relative(context.terragruntDir, context.includeDir) || '.');
+        },
+        get_terragrunt_source_cli_flag: async (
+            _args: RuntimeValue<ValueType>[],
+            context: FunctionContext
+        ): Promise<RuntimeValue<ValueType>> => {
+            const cliArgs = context.terraformCliArgs ?? [];
+            const index = cliArgs.findIndex(argument => argument === '--terragrunt-source');
+            if (index !== -1 && index + 1 < cliArgs.length) {
+                return makeStringValue(cliArgs[index + 1]);
+            }
+            return makeStringValue('');
+        },
+        run_cmd: async (
+            args: RuntimeValue<ValueType>[],
+            context: FunctionContext
+        ): Promise<RuntimeValue<ValueType>> => {
+            const raw = args.map((_, index) => {
+                const argument = args[index];
+                if (!argument || argument.type !== 'string') {
+                    throw new Error(`run_cmd argument ${index + 1} must be a string`);
+                }
+                return String(argument.value);
+            });
+            if (raw.length === 0) throw new Error('run_cmd requires a program');
+            let programIndex = 0;
+            while (programIndex < raw.length && raw[programIndex].startsWith('--terragrunt-')) programIndex++;
+            if (programIndex >= raw.length) throw new Error('run_cmd requires a program');
+            const program = raw[programIndex];
+            const programArgs = raw.slice(programIndex + 1);
+            if (!context.runCommand) throw new Error('run_cmd requires a command runner');
+            return makeStringValue(await context.runCommand(program, programArgs));
         },
 
         find_in_parent_folders: async (
@@ -82,7 +147,7 @@ export const coreFunctionGroup = {
 			const fileToFind = args.length > 0 ? String(args[0].value) : 'terragrunt.hcl';
             const fallback = args[1]?.type === 'string' ? String(args[1].value) : undefined;
             
-			const currentDir = path.dirname(URI.parse(context.document.uri).fsPath);
+			const currentDir = context.terragruntDir ?? path.dirname(URI.parse(context.document.uri).fsPath);
 			const foundDir = await findParentWithFile(currentDir, fileToFind, context, true);
                 
 			if (!foundDir) {
@@ -147,20 +212,22 @@ export const coreFunctionGroup = {
 		get_repo_root: async (
 			_args: RuntimeValue<ValueType>[],
 			context: FunctionContext
-		): Promise<RuntimeValue<ValueType>> => makeStringValue(await requireRepositoryRoot(context)),
+		): Promise<RuntimeValue<ValueType>> => makeStringValue(context.repoRoot ?? await requireRepositoryRoot(context)),
 		get_path_from_repo_root: async (
 			_args: RuntimeValue<ValueType>[],
 			context: FunctionContext
 		): Promise<RuntimeValue<ValueType>> => {
-			const currentDir = path.dirname(URI.parse(context.document.uri).fsPath);
-			return makeStringValue(path.relative(await requireRepositoryRoot(context), currentDir));
+			const currentDir = context.terragruntDir ?? path.dirname(URI.parse(context.document.uri).fsPath);
+			const repoRoot = context.repoRoot ?? await requireRepositoryRoot(context);
+			return makeStringValue(path.relative(repoRoot, currentDir) || '.');
 		},
 		get_path_to_repo_root: async (
 			_args: RuntimeValue<ValueType>[],
 			context: FunctionContext
 		): Promise<RuntimeValue<ValueType>> => {
-			const currentDir = path.dirname(URI.parse(context.document.uri).fsPath);
-			return makeStringValue(path.relative(currentDir, await requireRepositoryRoot(context)) || '.');
+			const currentDir = context.terragruntDir ?? path.dirname(URI.parse(context.document.uri).fsPath);
+			const repoRoot = context.repoRoot ?? await requireRepositoryRoot(context);
+			return makeStringValue(path.relative(currentDir, repoRoot) || '.');
 		},
 
         get_working_dir: async (

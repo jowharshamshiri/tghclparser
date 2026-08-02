@@ -247,7 +247,7 @@
         { "name": "update_source_with_cas", "description": "Updates the source using the content-addressable store.", "required": false, "types": ["boolean"] },
         { "name": "mutable", "description": "Makes CAS materialized source content writable.", "required": false, "types": ["boolean"] }
       ],
-      "blocks": [{ "type": "autoinclude", "description": "Injects unit or stack declarations into the nested stack.", "blocks": [] }]
+      "blocks": [{ "type": "autoinclude", "description": "Injects unit or stack declarations into the nested stack.", "arbitraryAttributes": true }]
     }
   ],
   "globalAttributes": [

@@ -3267,6 +3267,12 @@
 					"validation": {
 						"pattern": "^[A-Za-z0-9+/]*={0,2}$"
 					}
+				},
+				{
+					"name": "encoding",
+					"types": ["string"],
+					"required": false,
+					"description": "Character encoding; UTF-8 is the supported encoding."
 				}
 			],
 			"returnType": {
@@ -3291,6 +3297,12 @@
 					],
 					"required": true,
 					"description": "UTF-8 text to encode"
+				},
+				{
+					"name": "encoding",
+					"types": ["string"],
+					"required": false,
+					"description": "Character encoding; UTF-8 is the supported encoding."
 				}
 			],
 			"returnType": {

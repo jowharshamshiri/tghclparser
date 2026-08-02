@@ -377,6 +377,17 @@ export interface FunctionContext {
 	fs?: {
 		access: (path: string) => Promise<void>;
 	};
+	// Config-evaluation hooks supplied by the semantic evaluator. Every optional
+	// field is a real callable; absence means the surrounding evaluator did not
+	// provide it, which is a hard error for functions that require it.
+	terragruntDir?: string;
+	originalTerragruntDir?: string;
+	includeDir?: string;
+	repoRoot?: string;
+	readTerragruntConfig?: (relativePath: string) => Promise<RuntimeValue<ValueType> | undefined>;
+	readTFVarsFile?: (relativePath: string) => Promise<RuntimeValue<ValueType> | undefined>;
+	runCommand?: (program: string, args: string[]) => Promise<string>;
+	evaluateFunction?: (name: string, args: RuntimeValue<ValueType>[]) => Promise<RuntimeValue<ValueType>>;
 }
 
 export interface FunctionGroup {
