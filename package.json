@@ -1,7 +1,7 @@
 {
 	"name": "tghclparser",
 	"type": "module",
-	"version": "1.102.765",
+	"version": "1.105.777",
 	"description": "Parser for .hcl files developed to be used as a vscode language server.",
 	"author": {
 		"name": "Bahram Shamshiri",
