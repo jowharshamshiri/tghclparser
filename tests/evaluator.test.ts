@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { generateKeyPairSync, publicEncrypt, constants } from 'node:crypto';
+import { gunzipSync } from 'node:zlib';
 
 import { ConfigEvaluator, runtimeValueToPlain } from '../src/Evaluator';
 
@@ -82,5 +84,25 @@ describe('semantic configuration evaluation', () => {
 				values: [1, 2]
 			}
 		});
+	});
+
+	it('matches the accepted gzip, bcrypt, timestamp, and RSA function contracts', async () => {
+		const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 1024 });
+		const ciphertext = publicEncrypt({ key: publicKey, padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha1' }, Buffer.from('secret')).toString('base64');
+		const privatePem = privateKey.export({ type: 'pkcs1', format: 'pem' }).toString();
+		const content = `inputs = {
+  compressed = base64gzip("hello")
+  password_hash = bcrypt("hello")
+  generated_at = timestamp()
+  decrypted = rsadecrypt(${JSON.stringify(ciphertext)}, ${JSON.stringify(privatePem)})
+}`;
+		const result = await evaluator.evaluateUnit(configPath, content, process.cwd());
+		assert.equal(result.valid, true);
+		const plain = result.inputs ? runtimeValueToPlain(result.inputs) as Record<string, unknown> : {};
+		assert.equal(typeof plain.compressed, 'string');
+		assert.equal(gunzipSync(Buffer.from(String(plain.compressed), 'base64')).toString(), 'hello');
+		assert.match(String(plain.password_hash), /^\$2[aby]\$10\$/u);
+		assert.match(String(plain.generated_at), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/u);
+		assert.equal(plain.decrypted, 'secret');
 	});
 });
