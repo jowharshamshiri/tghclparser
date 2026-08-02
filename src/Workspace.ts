@@ -290,8 +290,6 @@ export class Workspace {
 		const sourcePath = URI.parse(sourceUri).fsPath;
 		const sourceDir = path.dirname(sourcePath);
 
-		let configPath: string;
-
 		if (pathToken.type === 'reference') {
 			const namespace = pathToken.children.find(child => child.type === 'namespace')?.value;
 			const access = pathToken.children.find(child => child.type === 'access_chain')?.children.map(child => child.value);
@@ -308,7 +306,7 @@ export class Workspace {
 			return target;
 		}
 
-		configPath = await this.resolvePathToken(pathToken, sourceDir, sourceUri);
+		const configPath = await this.resolvePathToken(pathToken, sourceDir, sourceUri);
 
 		// Resolve the final path
 		const resolvedPath = path.isAbsolute(configPath) ?

@@ -129,7 +129,6 @@ export class CompletionsProvider {
 		let inLineComment = false;
 		let inBlockComment = false;
 		let escaped = false;
-		let identifier = '';
 		let linePrefix = '';
 
 		for (let index = 0; index < beforeCursor.length; index++) {
@@ -154,16 +153,13 @@ export class CompletionsProvider {
 			if (char !== '\\') escaped = false;
 			if (inString) continue;
 
-			if (char === '\n') { linePrefix = ''; identifier = ''; continue; }
+			if (char === '\n') { linePrefix = ''; continue; }
 			linePrefix += char;
-			if (/[\w-]/.test(char)) identifier += char;
-			else if (!/\s/.test(char) && char !== '"') identifier = '';
 
 			if (char === '{' && beforeCursor[index - 1] !== '$') {
 				const header = linePrefix.slice(0, -1).match(/^\s*([\w-]+)(?:\s+"([^"]+)")?\s*$/);
 				if (header) blocks.push({ type: header[1], label: header[2] });
 				else blocks.push({ type: '<expression>' });
-				identifier = '';
 			}
 			if (char === '}' && blocks.length > 0) blocks.pop();
 		}

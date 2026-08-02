@@ -211,7 +211,7 @@ export class ParsedDocument {
 	/**
 	 * Resolves an output reference from terraform.tfstate
 	 */
-	public async resolveOutputReference(parts: string[], node: Token): Promise<ResolvedReference | undefined> {
+	public async resolveOutputReference(parts: string[], _node: Token): Promise<ResolvedReference | undefined> {
 		const outputName = parts[0];
 		const value = await this.getOutput(outputName);
 
