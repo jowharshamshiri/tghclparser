@@ -23,6 +23,16 @@ The schema covers unit configuration, `unit` and `stack` declarations, component
 - Dependency output discovery from state
 - Hover and document-link providers
 
+## Command line
+
+The package provides the `tghclp` executable. Its validation command follows the Terragrunt command shape:
+
+```sh
+tghclp hcl validate --json --working-dir ./infrastructure
+```
+
+It recursively validates Terragrunt HCL files, returns a non-zero status when diagnostics are found, and supports JSON diagnostics for automation.
+
 ## Development
 
 Install dependencies in this directory. The grammar source is `grammar.peggy`; `src/parser.js` is the checked-in generated parser used by consumers. The test suite contains behavior assertions for includes, completions, file-kind validation, stack references, autoincludes, and workspace graph construction.

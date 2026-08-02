@@ -34,11 +34,14 @@
 	"main": "./dist/index.cjs",
 	"module": "./dist/index.js",
 	"types": "./dist/index.d.ts",
+	"bin": {
+		"tghclp": "./dist/cli.js"
+	},
 	"files": [
 		"dist"
 	],
 	"scripts": {
-		"build": "tsup src/index.ts --format cjs,esm --dts --external vscode-languageserver-types --external vscode-languageserver",
+		"build": "tsup src/index.ts src/cli.ts --format cjs,esm --dts --external vscode-languageserver-types --external vscode-languageserver",
 		"format": "prettier --write \"src/**/*.ts\"",
 		"lint": "eslint --fix",
 		"parser": "peggy --cache --trace --format 'es' --dts --dependency \"{Schema}:./Schema.ts\" --output src/parser.js grammar.peggy",
