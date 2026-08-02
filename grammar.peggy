@@ -203,6 +203,8 @@ PrimaryExpression =
   Number /
   Boolean /
   Null /
+  Array /
+  Object /
   FunctionCall /
   Reference /
   "(" _ expr:Expression _ ")" { return expr; } /
