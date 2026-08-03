@@ -9,3 +9,5 @@ export {HoverProvider} from './providers/HoverProvider';
 export {LinkProvider} from './providers/LinkProvider';
 export {Schema} from './Schema';
 export {Workspace} from './Workspace';
+export {FunctionRegistry} from './FunctionsRegistry';
+export {FunctionOperation, invokeFunctionOperation} from './function-ops';

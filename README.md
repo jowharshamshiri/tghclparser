@@ -52,6 +52,8 @@ Experiment-gated language features must be enabled explicitly, for example `--ex
 
 Install dependencies in this directory. The grammar source is `grammar.peggy`; `src/parser.js` is the checked-in generated parser used by consumers. The test suite contains behavior assertions for includes, completions, file-kind validation, stack references, autoincludes, and workspace graph construction.
 
+Function evaluation is implemented as named operations using `@jowharshamshiri/ops-ts`. Each operation receives serialized arguments through a dry context and the live evaluator services through a wet context, so built-in and future custom functions share the same invocation boundary.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

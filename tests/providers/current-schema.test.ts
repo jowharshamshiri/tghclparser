@@ -130,6 +130,7 @@ unit "app" {
 		const registry = schema.getFunctionRegistry();
 		for (const definition of schema.getAllFunctions()) {
 			expect(registry.hasFunction(definition.name), `${definition.name} runtime entry`).to.equal(true);
+			expect(registry.getFunctionOperation(definition.name)?.metadata().name, `${definition.name} operation`).to.equal(`tghclp.function.${definition.name}`);
 		}
 		expect(registry.getFunctionNames().sort()).to.deep.equal(schema.getAllFunctions().map(definition => definition.name).sort());
 	});
