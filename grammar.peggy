@@ -706,7 +706,7 @@ BinaryLogicalExpression = left:Value _ operator:("&&" / "||") _ right:Value {
 }
 
 TernaryExpression =
-  condition:ComparisonExpression _
+  condition:LogicalExpression _
   "?" _ trueExpr:Expression _
   ":" _ falseExpr:Expression {
     return makeNode('ternary_expression', null, location(), [condition, trueExpr, falseExpr]);
