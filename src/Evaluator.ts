@@ -115,10 +115,30 @@ export class ConfigEvaluator {
 		}
 	}
 
+	private async resolveWorkspaceRoot(configuredRoot: string): Promise<string> {
+		let current = path.resolve(configuredRoot);
+		try {
+			if ((await fs.stat(current)).isFile()) current = path.dirname(current);
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+		}
+
+		while (true) {
+			if (await pathExists(path.join(current, 'root.hcl'))) return current;
+			const parent = path.dirname(current);
+			if (parent === current) break;
+			current = parent;
+		}
+
+		return path.resolve(configuredRoot);
+	}
+
 	async evaluateUnit(configPath: string, content: string, workDir: string): Promise<ConfigEvaluationResult> {
 		try {
 			this.assertTrusted('Semantic evaluation');
-			const result = await this.evaluateFile(configPath, content, workDir);
+			const workspaceRoot = await this.resolveWorkspaceRoot(workDir);
+			const result = await this.evaluateFile(configPath, content, workspaceRoot);
 			if (result.inputs === null) return { valid: true, inputs: null };
 			return { valid: true, inputs: makeObjectValue(result.inputs) };
 		} catch (error) {
@@ -132,7 +152,8 @@ export class ConfigEvaluator {
 
 	async evaluateRenderedConfig(configPath: string, content: string, workDir: string): Promise<RuntimeValue<ValueType>> {
 		this.assertTrusted('Rendered configuration evaluation');
-		const result = await this.evaluateFile(configPath, content, workDir);
+		const workspaceRoot = await this.resolveWorkspaceRoot(workDir);
+		const result = await this.evaluateFile(configPath, content, workspaceRoot);
 		return this.readConfigObject(result);
 	}
 
@@ -143,7 +164,8 @@ export class ConfigEvaluator {
 		position: { line: number; character: number }
 	): Promise<RuntimeValue<ValueType> | undefined> {
 		this.assertTrusted('Semantic evaluation');
-		const result = await this.evaluateFile(configPath, content, workDir);
+		const workspaceRoot = await this.resolveWorkspaceRoot(workDir);
+		const result = await this.evaluateFile(configPath, content, workspaceRoot);
 		const lines = content.split('\n');
 		if (position.line < 0 || position.line >= lines.length || position.character < 0) return undefined;
 		const offset = lines.slice(0, position.line).reduce((total, line) => total + line.length + 1, 0) + position.character;
@@ -359,7 +381,7 @@ export class ConfigEvaluator {
 				await this.assertPathAllowed(target, scope.workspaceRoot);
 				if (!(await pathExists(target))) return undefined;
 				const fileContent = await fs.readFile(target, 'utf8');
-					const result = await this.evaluateFile(target, fileContent, scope.dir);
+					const result = await this.evaluateFile(target, fileContent, scope.workspaceRoot);
 					return this.readConfigObject(result);
 			},
 			readTFVarsFile: async (relativePath: string) => {
@@ -500,7 +522,7 @@ export class ConfigEvaluator {
 			if (child.type === 'assignment') {
 				const name = String(child.value);
 				const valueNode = child.children?.find(c => c.type !== 'root_assignment_identifier');
-				if (valueNode) values.set(name, await this.evalNode(valueNode, makeRootScope(target, content)));
+				if (valueNode) values.set(name, await this.evalNode(valueNode, makeRootScope(target, content, path.dirname(target))));
 			}
 		}
 		const plain: Record<string, unknown> = {};
@@ -937,14 +959,14 @@ export class ConfigEvaluator {
 	}
 }
 
-function makeRootScope(filePath: string, content: string): Scope {
+function makeRootScope(filePath: string, content: string, workspaceRoot = path.dirname(filePath)): Scope {
 	const ast = parse(content, { grammarSource: filePath, tracer: { trace() {} } });
 	return {
 		filePath,
 		content,
 		ast,
 		dir: path.dirname(filePath),
-		workspaceRoot: path.dirname(filePath),
+		workspaceRoot,
 		locals: new Map(),
 		localCache: new Map(),
 		includes: new Map(),

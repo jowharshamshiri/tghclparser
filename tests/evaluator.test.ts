@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, publicEncrypt, constants } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
+import path from 'node:path';
 
 import { ConfigEvaluator, runtimeValueToPlain } from '../src/Evaluator';
 
@@ -57,6 +58,20 @@ describe('semantic configuration evaluation', () => {
 		);
 		assert.equal(result.valid, false);
 		assert.match(result.error ?? '', /disabled until the workspace is trusted/);
+	});
+
+	it('anchors parent-file resolution at the project root marker when evaluation starts in a child directory', async () => {
+		const projectRoot = `${process.cwd()}/../tghclparser_testenv/showcase/current`;
+		const configPath = `${projectRoot}/environments/prod/app/terragrunt.hcl`;
+		const result = await evaluator.evaluateUnit(
+			configPath,
+			'inputs = { root = find_in_parent_folders("root.hcl") }',
+			`${projectRoot}/environments/prod/app`
+		);
+		assert.equal(result.valid, true);
+		assert.deepEqual(result.inputs ? runtimeValueToPlain(result.inputs) : undefined, {
+			root: path.resolve(`${projectRoot}/root.hcl`)
+		});
 	});
 
 	it('requires and evaluates the deep-merge experiment explicitly', async () => {
