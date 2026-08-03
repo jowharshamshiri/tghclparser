@@ -125,6 +125,15 @@ unit "app" {
 		}
 	});
 
+	it('has a runtime entry for every current function definition', () => {
+		const schema = Schema.getInstance();
+		const registry = schema.getFunctionRegistry();
+		for (const definition of schema.getAllFunctions()) {
+			expect(registry.hasFunction(definition.name), `${definition.name} runtime entry`).to.equal(true);
+		}
+		expect(registry.getFunctionNames().sort()).to.deep.equal(schema.getAllFunctions().map(definition => definition.name).sort());
+	});
+
 	it('does not expose functions rejected by the current runtime', () => {
 		const schema = Schema.getInstance();
 		for (const name of ['base64gunzip', 'cidrcontains', 'issensitive', 'plantimestamp', 'regex_replace', 'templatestring', 'type', 'urldecode']) {

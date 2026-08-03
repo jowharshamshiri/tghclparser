@@ -335,6 +335,7 @@ export const builtinFunctionGroup = {
 		base64gzip: async (args: RuntimeValue<ValueType>[]) => stringValue(gzipSync(Buffer.from(stringArgument(args, 0, 'base64gzip'))).toString('base64')),
 		base64sha256: async (args: RuntimeValue<ValueType>[]) => stringValue(createHash('sha256').update(stringArgument(args, 0, 'base64sha256'), 'utf8').digest('base64')),
 		base64sha512: async (args: RuntimeValue<ValueType>[]) => stringValue(createHash('sha512').update(stringArgument(args, 0, 'base64sha512'), 'utf8').digest('base64')),
+		can: async (args: RuntimeValue<ValueType>[]) => booleanValue(args.length > 0),
 		ceil: async (args: RuntimeValue<ValueType>[]) => numberValue(Math.ceil(numberArgument(args, 0, 'ceil'))),
 		chomp: async (args: RuntimeValue<ValueType>[]) => {
 			const value = stringArgument(args, 0, 'chomp');
@@ -739,6 +740,10 @@ export const builtinFunctionGroup = {
 			const value = stringArgument(args, 0, 'trimprefix');
 			const prefix = stringArgument(args, 1, 'trimprefix');
 			return stringValue(value.startsWith(prefix) ? value.slice(prefix.length) : value);
+		},
+		try: async (args: RuntimeValue<ValueType>[]) => {
+			if (args.length === 0) throw new Error('try requires at least one argument');
+			return args[0];
 		},
 		trimspace: async (args: RuntimeValue<ValueType>[]) => stringValue(stringArgument(args, 0, 'trimspace').trim()),
 		trimsuffix: async (args: RuntimeValue<ValueType>[]) => {

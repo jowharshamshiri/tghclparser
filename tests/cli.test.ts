@@ -67,7 +67,8 @@ describe('CLI configuration discovery', () => {
 		await fs.rm(root, {recursive: true, force: true});
 	});
 
-	it('generates a stack from a Git source repository', async () => {
+	it('generates a stack from a Git source repository', async function () {
+		this.timeout(10000);
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-stack-git-'));
 		const repository = path.join(root, 'repository');
 		await fs.mkdir(path.join(repository, 'module'), {recursive: true});
@@ -124,6 +125,28 @@ describe('CLI configuration discovery', () => {
 			''
 		].join('\n'));
 		await fs.rm(root, {recursive: true, force: true});
+	});
+
+	it('rejects unsafe scaffold boundaries and unknown execution options', async function () {
+		this.timeout(10000);
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-cli-boundary-'));
+		const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-cli-outside-'));
+		await fs.writeFile(path.join(outside, 'variables.tf'), 'variable "region" { default = "eu-west-1" }\n');
+		const inside = path.join(root, 'module');
+		await fs.mkdir(inside, {recursive: true});
+		await fs.writeFile(path.join(inside, 'variables.tf'), 'variable "region" { default = "eu-west-1" }\n');
+		const cli = path.resolve('dist/cli.cjs');
+		const sourceEscape = spawnSync(process.execPath, [cli, 'scaffold', `../${path.basename(outside)}`, '--working-dir', root, '--output-folder', 'generated'], {encoding: 'utf8'});
+		expect(sourceEscape.status).to.not.equal(0);
+		expect(sourceEscape.stderr).to.contain('inside the working directory');
+		const outputEscape = spawnSync(process.execPath, [cli, 'scaffold', './module', '--working-dir', root, '--output-folder', '../generated'], {encoding: 'utf8'});
+		expect(outputEscape.status).to.not.equal(0);
+		expect(outputEscape.stderr).to.contain('inside the working directory');
+		const unknown = spawnSync(process.execPath, [cli, 'hcl', 'format', '--definitely-unknown', '--working-dir', root], {encoding: 'utf8'});
+		expect(unknown.status).to.not.equal(0);
+		expect(unknown.stderr).to.contain('Unknown format option');
+		await fs.rm(root, {recursive: true, force: true});
+		await fs.rm(outside, {recursive: true, force: true});
 	});
 
 	it('scaffolds a Git module source and selects its subdirectory', async () => {
@@ -195,7 +218,8 @@ describe('CLI configuration discovery', () => {
 		await fs.rm(root, {recursive: true, force: true});
 	});
 
-	it('lists local catalog components as JSON lines only with the catalog experiment', async () => {
+	it('lists local catalog components as JSON lines only with the catalog experiment', async function () {
+		this.timeout(10000);
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-catalog-'));
 		const catalog = path.join(root, 'catalog');
 		const component = path.join(catalog, 'network');

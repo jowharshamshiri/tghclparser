@@ -244,7 +244,7 @@ async function printDependencyGraph(workingDir: string): Promise<void> {
 			: path.basename(fullPath).startsWith('terragrunt.')
 				? path.dirname(fullPath)
 				: fsSync.existsSync(path.join(fullPath, 'terragrunt.hcl')) ? fullPath : path.dirname(fullPath);
-		const name = configDir ? path.relative(workingDir, configDir) || '.' : undefined;
+		const name = configDir ? path.resolve(configDir) : undefined;
 		if (name) nodes.push({name, parent});
 		for (const child of node.children ?? []) visit(child, name);
 	};
