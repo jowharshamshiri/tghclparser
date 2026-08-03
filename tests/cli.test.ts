@@ -1,11 +1,13 @@
 import {expect} from 'chai';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 import {discoverConfigs} from '../src/cli';
 import {stackGenerate} from '../src/cli';
-import {spawnSync} from 'node:child_process';
+import {spawn, spawnSync} from 'node:child_process';
+import {createServer} from 'node:http';
 
 describe('CLI configuration discovery', () => {
 	it('discovers units and stacks in stable relative order', async () => {
@@ -140,6 +142,56 @@ describe('CLI configuration discovery', () => {
 		expect(result.status).to.equal(0, result.stderr);
 		expect(await fs.readFile(path.join(output, 'terragrunt.hcl'), 'utf8')).to.contain(`source = ${JSON.stringify(source)}`);
 		expect(await fs.readFile(path.join(output, 'terragrunt.hcl'), 'utf8')).to.contain('region = "eu-west-1"');
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
+	it('scaffolds an HTTP archive module source and selects its subdirectory', async function () {
+		this.timeout(10000);
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-scaffold-archive-'));
+		const repository = path.join(root, 'repository');
+		await fs.mkdir(path.join(repository, 'module'), {recursive: true});
+		await fs.writeFile(path.join(repository, 'module', 'variables.tf'), 'variable "region" { default = "eu-west-1" }\n');
+		const archive = path.join(root, 'module.zip');
+		const zipped = spawnSync('zip', ['-qr', archive, '.'], {cwd: repository, encoding: 'utf8', shell: false});
+		expect(zipped.status).to.equal(0, zipped.stderr);
+		const server = createServer((_, response) => fsSync.createReadStream(archive).pipe(response));
+		await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+		try {
+			const address = server.address();
+			if (address === null || typeof address === 'string') throw new Error('archive test server did not expose a TCP port');
+			const source = `http://127.0.0.1:${address.port}/module.zip//module`;
+			const output = path.join(root, 'generated');
+			const cli = path.resolve('dist/cli.cjs');
+			const result = await new Promise<{status: number | null; stdout: string; stderr: string}>((resolve, reject) => {
+				const child = spawn(process.execPath, [cli, 'scaffold', source, '--working-dir', root, '--output-folder', 'generated', '--no-include-root'], {encoding: 'utf8'});
+				let stdout = '';
+				let stderr = '';
+				child.stdout.on('data', chunk => { stdout += String(chunk); });
+				child.stderr.on('data', chunk => { stderr += String(chunk); });
+				child.on('error', reject);
+				child.on('close', status => resolve({status, stdout, stderr}));
+			});
+			expect(result.status).to.equal(0, result.stderr);
+			expect(await fs.readFile(path.join(output, 'terragrunt.hcl'), 'utf8')).to.contain('region = "eu-west-1"');
+		} finally {
+			await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+			await fs.rm(root, {recursive: true, force: true});
+		}
+	});
+
+	it('scaffolds a Mercurial module source through the configured hg executable', async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-scaffold-hg-'));
+		const repository = path.join(root, 'repository');
+		const bin = path.join(root, 'bin');
+		await fs.mkdir(path.join(repository, 'module'), {recursive: true});
+		await fs.mkdir(bin, {recursive: true});
+		await fs.writeFile(path.join(repository, 'module', 'variables.tf'), 'variable "region" { default = "eu-west-1" }\n');
+		await fs.writeFile(path.join(bin, 'hg'), '#!/usr/bin/env node\nconst fs=require("node:fs"); const args=process.argv.slice(2); fs.cpSync(args[args.length-2], args[args.length-1], {recursive:true});\n', {mode: 0o755});
+		const cli = path.resolve('dist/cli.cjs');
+		const source = `hg::${repository}//module?ref=stable`;
+		const result = spawnSync(process.execPath, [cli, 'scaffold', source, '--working-dir', root, '--output-folder', 'generated', '--no-include-root'], {encoding: 'utf8', env: {...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`}});
+		expect(result.status).to.equal(0, result.stderr);
+		expect(await fs.readFile(path.join(root, 'generated', 'terragrunt.hcl'), 'utf8')).to.contain('region = "eu-west-1"');
 		await fs.rm(root, {recursive: true, force: true});
 	});
 

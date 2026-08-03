@@ -684,9 +684,14 @@ interface AcquiredSource {
 	cleanup: () => Promise<void>;
 }
 
-function splitModuleSource(source: string): {repository: string; subdirectory: string; ref?: string} {
+function splitModuleSource(source: string): {repository: string; subdirectory: string; ref?: string; forced?: string} {
 	let value = source.trim();
-	if (value.startsWith('git::')) value = value.slice('git::'.length);
+	let forced: string | undefined;
+	const forcedMatch = value.match(/^([a-z][a-z0-9+.-]*):\:/i);
+	if (forcedMatch) {
+		forced = forcedMatch[1].toLowerCase();
+		value = value.slice(forcedMatch[0].length);
+	}
 	const queryIndex = value.indexOf('?');
 	const query = queryIndex >= 0 ? new URLSearchParams(value.slice(queryIndex + 1)) : new URLSearchParams();
 	if (queryIndex >= 0) value = value.slice(0, queryIndex);
@@ -699,7 +704,7 @@ function splitModuleSource(source: string): {repository: string; subdirectory: s
 		repository = value.slice(0, separator);
 		subdirectory = value.slice(separator + 2);
 	}
-	return {repository, subdirectory, ref: query.get('ref') || undefined};
+	return {repository, subdirectory, ref: query.get('ref') || undefined, forced};
 }
 
 function providerCommand(name: string, args: string[], workingDir: string): void {
@@ -829,8 +834,79 @@ function isLocalSource(source: string): boolean {
 	return source.startsWith('./') || source.startsWith('../') || source.startsWith('/') || source.startsWith('file://');
 }
 
+function isArchiveSource(source: string): boolean {
+	return /\.(zip|tar|tgz|tar\.gz)(?:\?.*)?$/i.test(source);
+}
+
+async function verifyExtractedTree(root: string): Promise<void> {
+	const canonicalRoot = await fs.realpath(root);
+	const walk = async (directory: string): Promise<void> => {
+		for (const entry of await fs.readdir(directory, {withFileTypes: true})) {
+			const target = path.join(directory, entry.name);
+			const canonical = await fs.realpath(target);
+			const relative = path.relative(canonicalRoot, canonical);
+			if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error(`Acquired source contains an entry outside its extraction root: ${entry.name}`);
+			if (entry.isDirectory()) await walk(target);
+		}
+	};
+	await walk(root);
+}
+
+async function acquireArchiveSource(source: string, workingDir: string, subdirectory: string): Promise<AcquiredSource> {
+	const temporary = await fs.mkdtemp(path.join(await fs.realpath(workingDir), '.tghclp-source-'));
+	const archive = path.join(temporary, path.basename(new URL(source).pathname) || 'source.archive');
+	const downloaded = spawnSync('curl', ['--fail', '--location', '--silent', '--show-error', '--output', archive, source], {cwd: workingDir, encoding: 'utf8', shell: false, stdio: ['ignore', 'pipe', 'pipe']});
+	if (downloaded.error || downloaded.status !== 0) {
+		await fs.rm(temporary, {recursive: true, force: true});
+		throw new Error(`Unable to download module archive ${source}: ${(downloaded.stderr || downloaded.error?.message || 'curl failed').trim()}`);
+	}
+	const extraction = path.join(temporary, 'extracted');
+	await fs.mkdir(extraction);
+	const archiveName = archive.toLowerCase();
+	const extractor = archiveName.endsWith('.zip') ? spawnSync('unzip', ['-q', archive, '-d', extraction], {cwd: workingDir, encoding: 'utf8', shell: false, stdio: ['ignore', 'pipe', 'pipe']}) : spawnSync('tar', ['-xf', archive, '-C', extraction], {cwd: workingDir, encoding: 'utf8', shell: false, stdio: ['ignore', 'pipe', 'pipe']});
+	if (extractor.error || extractor.status !== 0) {
+		await fs.rm(temporary, {recursive: true, force: true});
+		throw new Error(`Unable to extract module archive ${source}: ${(extractor.stderr || extractor.error?.message || 'archive extraction failed').trim()}`);
+	}
+	await verifyExtractedTree(extraction);
+	const entries = await fs.readdir(extraction, {withFileTypes: true});
+	const base = entries.length === 1 && entries[0].isDirectory() ? path.join(extraction, entries[0].name) : extraction;
+	let selected: string;
+	if (!subdirectory) selected = await fs.realpath(base);
+	else {
+		const direct = path.resolve(extraction, subdirectory);
+		const nested = path.resolve(base, subdirectory);
+		selected = await fs.realpath(await pathExists(direct) ? direct : nested);
+	}
+	const relative = path.relative(extraction, selected);
+	if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+		await fs.rm(temporary, {recursive: true, force: true});
+		throw new Error(`Module archive subdirectory escapes extraction root: ${source}`);
+	}
+	return {root: selected, source, cleanup: async () => { await fs.rm(temporary, {recursive: true, force: true}); }};
+}
+
 async function acquireModuleSource(source: string, workingDir: string): Promise<AcquiredSource> {
 	const parts = splitModuleSource(source);
+	if (parts.forced === 'hg') {
+		const temporary = await fs.mkdtemp(path.join(await fs.realpath(workingDir), '.tghclp-source-'));
+		const cloneTarget = path.join(temporary, 'repository');
+		const args = ['clone'];
+		if (parts.ref) args.push('--updaterev', parts.ref);
+		args.push(parts.repository, cloneTarget);
+		const result = spawnSync('hg', args, {cwd: workingDir, encoding: 'utf8', shell: false, stdio: ['ignore', 'pipe', 'pipe']});
+		if (result.error || result.status !== 0) {
+			await fs.rm(temporary, {recursive: true, force: true});
+			throw new Error(`Unable to acquire Mercurial module source ${source}: ${(result.stderr || result.error?.message || 'hg clone failed').trim()}`);
+		}
+		const selected = parts.subdirectory ? await fs.realpath(path.resolve(cloneTarget, parts.subdirectory)) : await fs.realpath(cloneTarget);
+		const relative = path.relative(cloneTarget, selected);
+		if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+			await fs.rm(temporary, {recursive: true, force: true});
+			throw new Error(`Mercurial source subdirectory escapes repository: ${source}`);
+		}
+		return {root: selected, source, cleanup: async () => { await fs.rm(temporary, {recursive: true, force: true}); }};
+	}
 	if (isLocalSource(parts.repository)) {
 		const local = parts.repository.startsWith('file://')
 			? fileURLToPath(new URL(parts.repository))
@@ -842,6 +918,7 @@ async function acquireModuleSource(source: string, workingDir: string): Promise<
 		await fs.access(selected);
 		return {root: selected, source, cleanup: async () => {}};
 	}
+	if (/^https?:/i.test(parts.repository) && isArchiveSource(parts.repository)) return acquireArchiveSource(parts.repository, workingDir, parts.subdirectory);
 	if (!/^(https?|ssh):|^git@/i.test(parts.repository)) throw new Error(`Unsupported module source: ${source}`);
 	const temporary = await fs.mkdtemp(path.join(await fs.realpath(workingDir), '.tghclp-source-'));
 	const cloneTarget = path.join(temporary, 'repository');
