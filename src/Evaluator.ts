@@ -272,6 +272,9 @@ export class ConfigEvaluator {
 			await this.assertPathAllowed(includePath, scope.workspaceRoot);
 			const includeContent = await fs.readFile(includePath, 'utf8');
 			const includeResult = await this.evaluateFile(includePath, includeContent, workDir);
+			if (blocks.some(block => block.value === 'remote_state') && includeResult.scope.blocks.some(block => block.value === 'remote_state')) {
+				throw new Error(`remote_state is defined in both ${filePath} and included configuration ${includePath}`);
+			}
 			scope.includes.set(name, { expose, mergeStrategy, dir: path.dirname(includePath), result: includeResult });
 		}
 
