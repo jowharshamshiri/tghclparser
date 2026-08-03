@@ -626,12 +626,14 @@ PipeExpression = head:ConditionalExpression tail:(_ "|>" _ FunctionCall)* {
 
 ListComprehension = "[" _ 
   "for" _ item:Identifier _ 
+  second:("," _ Identifier)? _
   "in" _ collection:PipeableExpression _
   OptionalCondition? _
   ":" _ expr:PipeableExpression _ 
 "]" {
   return makeNode('list_comprehension', null, location(), [
     makeIdentifierNode(item, location()),
+    ...(second ? [makeIdentifierNode(second[2], location())] : []),
     collection,
     expr
   ]);
@@ -639,6 +641,7 @@ ListComprehension = "[" _
 
 MapComprehension = "{" _
   "for" _ item:Identifier _ 
+  second:("," _ Identifier)? _
   "in" _ collection:PipeableExpression _
   OptionalCondition? _
   ":" _ key:PipeableExpression _ 
@@ -646,6 +649,7 @@ MapComprehension = "{" _
 "}" {
   return makeNode('map_comprehension', null, location(), [
     makeIdentifierNode(item, location()),
+    ...(second ? [makeIdentifierNode(second[2], location())] : []),
     collection,
     key,
     value
@@ -749,6 +753,7 @@ NegationExpression = "-" _ expr:UnaryExpression {
 
 PostfixExpression = head:PrimaryExpression tail:(
   IndexAccess /
+  FullSplatAccess /
   SplatAccess /
   MemberAccess
 )* {
@@ -760,6 +765,13 @@ IndexAccess = _ "[" _ index:(Number / StringLiteral / Expression) _ "]" {
 }
 
 SplatAccess = _ ".*" _ attr:("." Identifier)? {
+  return base => makeNode('splat_expression', null, location(), [
+    base,
+    ...(attr ? [makeIdentifierNode(attr[1], location())] : [])
+  ]);
+}
+
+FullSplatAccess = _ "[" _ "*" _ "]" _ attr:("." Identifier)? {
   return base => makeNode('splat_expression', null, location(), [
     base,
     ...(attr ? [makeIdentifierNode(attr[1], location())] : [])
