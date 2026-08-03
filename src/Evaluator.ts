@@ -70,6 +70,7 @@ interface Scope {
 	autoinclude: FileResult | null;
 	rootAttrs: Map<string, TNode>;
 	terraform: Map<string, TNode>;
+	blocks: TNode[];
 	comprehension: Array<Map<string, RuntimeValue<ValueType>>>;
 }
 
@@ -127,6 +128,12 @@ export class ConfigEvaluator {
 				error: error instanceof Error ? error.message : String(error)
 			};
 		}
+	}
+
+	async evaluateRenderedConfig(configPath: string, content: string, workDir: string): Promise<RuntimeValue<ValueType>> {
+		this.assertTrusted('Rendered configuration evaluation');
+		const result = await this.evaluateFile(configPath, content, workDir);
+		return this.readConfigObject(result);
 	}
 
 	async evaluateAtPosition(
@@ -204,6 +211,7 @@ export class ConfigEvaluator {
 			autoinclude: null,
 			rootAttrs: new Map(),
 			terraform: new Map(),
+			blocks,
 			comprehension: []
 		};
 
@@ -387,17 +395,65 @@ export class ConfigEvaluator {
 		for (const name of result.scope.locals.keys()) {
 			locals.set(name, await this.resolveLocal(result.scope, name));
 		}
-		if (locals.size > 0) output.set('locals', makeObjectValue(locals));
-		if (result.inputs !== null) output.set('inputs', makeObjectValue(result.inputs));
+		output.set('dependencies', makeNullValue());
+		output.set('dependency', makeObjectValue(new Map()));
+		output.set('download_dir', makeStringValue(''));
+		output.set('feature', makeObjectValue(new Map()));
+		output.set('generate', makeObjectValue(new Map()));
+		output.set('iam_assume_role_duration', makeNullValue());
+		output.set('iam_assume_role_session_name', makeStringValue(''));
+		output.set('iam_role', makeStringValue(''));
+		output.set('iam_web_identity_token', makeStringValue(''));
+		output.set('terraform_binary', makeStringValue(''));
+		output.set('terraform_version_constraint', makeStringValue(''));
+		output.set('terragrunt_version_constraint', makeStringValue(''));
+		output.set('locals', locals.size > 0 ? makeObjectValue(locals) : makeNullValue());
+		output.set('inputs', result.inputs !== null ? makeObjectValue(result.inputs) : makeObjectValue(new Map()));
 		const terraform = new Map<string, RuntimeValue<ValueType>>();
 		for (const [name, node] of result.scope.terraform) {
 			terraform.set(name, await this.evalNode(node, result.scope));
 		}
-		if (terraform.size > 0) output.set('terraform', makeObjectValue(terraform));
+		const terraformDefaults = new Map<string, RuntimeValue<ValueType>>([
+			['after_hook', makeObjectValue(new Map())],
+			['before_hook', makeObjectValue(new Map())],
+			['copy_terraform_lock_file', makeNullValue()],
+			['error_hook', makeObjectValue(new Map())],
+			['exclude_from_copy', makeNullValue()],
+			['extra_arguments', makeObjectValue(new Map())],
+			['include_in_copy', makeNullValue()]
+		]);
+		for (const [name, value] of terraform) terraformDefaults.set(name, value);
+		output.set('terraform', makeObjectValue(terraformDefaults));
+		for (const block of result.scope.blocks) {
+			if (['locals', 'terraform', 'include'].includes(String(block.value))) continue;
+			const name = String(block.value);
+			const labels = (block.children ?? []).filter(child => child.type === 'parameter').map(child => String(child.value));
+			const value = await this.evaluateBlock(block, result.scope);
+			if (labels.length > 0) {
+				const existing = output.get(name);
+				const entries = existing && (existing.type === 'object' || existing.type === 'block')
+					? new Map(existing.value as Map<string, RuntimeValue<ValueType>>)
+					: new Map<string, RuntimeValue<ValueType>>();
+				entries.set(labels[0], value);
+				output.set(name, makeObjectValue(entries));
+			} else if (!output.has(name) || (output.get(name)?.type === 'object' && (output.get(name)?.value as Map<string, RuntimeValue<ValueType>>).size === 0)) {
+				output.set(name, value);
+			}
+		}
 		for (const [name, node] of result.scope.rootAttrs) {
 			output.set(name, await this.evalNode(node, result.scope));
 		}
 		return makeObjectValue(output);
+	}
+
+	private async evaluateBlock(block: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
+		const values = new Map<string, RuntimeValue<ValueType>>();
+		for (const child of block.children ?? []) {
+			if (child.type !== 'attribute') continue;
+			const value = child.children?.find(item => item.type !== 'attribute_identifier');
+			if (value) values.set(String(child.value), await this.evalNode(value, scope));
+		}
+		return makeObjectValue(values);
 	}
 
 	private async readTFVars(target: string, content: string): Promise<RuntimeValue<ValueType>> {
@@ -858,6 +914,7 @@ function makeRootScope(filePath: string, content: string): Scope {
 		autoinclude: null,
 		rootAttrs: new Map(),
 		terraform: new Map(),
+		blocks: [],
 		comprehension: []
 	};
 }

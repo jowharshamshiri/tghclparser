@@ -33,6 +33,19 @@ tghclp hcl validate --json --working-dir ./infrastructure
 
 It recursively validates Terragrunt HCL files, returns a non-zero status when diagnostics are found, and supports JSON diagnostics for automation. Add `--show-config-path` to emit the invalid configuration paths instead of diagnostic objects.
 
+Configuration discovery is also available without evaluating a configuration:
+
+```sh
+tghclp find --json --working-dir ./infrastructure
+tghclp list --working-dir ./infrastructure
+tghclp dag graph --working-dir ./infrastructure
+tghclp info print --working-dir ./infrastructure
+tghclp run --working-dir ./infrastructure -- plan
+```
+
+Discovery skips generated and dependency-cache directories and reports paths relative to the selected working directory.
+`run` validates the discovered configuration before invoking the selected OpenTofu/Terraform binary without a shell; use `--tf-path` to select the executable explicitly.
+
 Experiment-gated language features must be enabled explicitly, for example `--experiment deep-merge`; the command fails when such a feature is used without its explicit switch.
 
 ## Development
