@@ -46,6 +46,52 @@ describe('CLI configuration discovery', () => {
 		await fs.rm(root, {recursive: true, force: true});
 	});
 
+	it('runs and cleans the generated stack lifecycle', async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-stack-lifecycle-'));
+		await fs.mkdir(path.join(root, 'module'), {recursive: true});
+		await fs.writeFile(path.join(root, 'module', 'terragrunt.hcl'), 'inputs = {}\n');
+		await fs.writeFile(path.join(root, 'terragrunt.stack.hcl'), 'unit "app" { source = "./module" path = "generated/app" }\n');
+		const cli = path.resolve('dist/cli.cjs');
+		const run = spawnSync(process.execPath, [cli, 'stack', 'run', '--working-dir', root, '--tf-path', '/bin/echo', 'plan'], {encoding: 'utf8'});
+		expect(run.status).to.equal(0, run.stderr);
+		expect(run.stdout).to.equal('Generated unit app\nplan\n');
+		const generatedStat = await fs.stat(path.join(root, '.terragrunt-stack', 'generated', 'app', 'terragrunt.hcl'));
+		expect(generatedStat.isFile()).to.equal(true);
+		const clean = spawnSync(process.execPath, [cli, 'stack', 'clean', '--working-dir', root], {encoding: 'utf8'});
+		expect(clean.status).to.equal(0, clean.stderr);
+		let exists = true;
+		try { await fs.access(path.join(root, '.terragrunt-stack')); } catch { exists = false; }
+		expect(exists).to.equal(false);
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
+	it('generates a stack from a Git source repository', async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-stack-git-'));
+		const repository = path.join(root, 'repository');
+		await fs.mkdir(path.join(repository, 'module'), {recursive: true});
+		await fs.writeFile(path.join(repository, 'module', 'terragrunt.hcl'), 'inputs = {}\n');
+		for (const args of [['init', '-q'], ['config', 'user.email', 'test@example.invalid'], ['config', 'user.name', 'tghclp-test'], ['add', '.'], ['commit', '-qm', 'fixture']]) {
+			const result = spawnSync('git', args, {cwd: repository, encoding: 'utf8', shell: false});
+			expect(result.status).to.equal(0, result.stderr);
+		}
+		await fs.writeFile(path.join(root, 'terragrunt.stack.hcl'), `unit "app" { source = "git::file://${repository}//module" path = "generated/app" }\n`);
+		const cli = path.resolve('dist/cli.cjs');
+		const result = spawnSync(process.execPath, [cli, 'stack', 'generate', '--working-dir', root], {encoding: 'utf8'});
+		expect(result.status).to.equal(0, result.stderr);
+		expect(await fs.readFile(path.join(root, '.terragrunt-stack', 'generated', 'app', 'terragrunt.hcl'), 'utf8')).to.equal('inputs = {}\n');
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
+	it('renders JSON configuration without dropping the authored structure', async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-render-json-'));
+		await fs.writeFile(path.join(root, 'terragrunt.hcl.json'), JSON.stringify({inputs: {region: 'eu-west-1'}, terraform: {source: './module'}}));
+		const cli = path.resolve('dist/cli.cjs');
+		const result = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', root, '--config', 'terragrunt.hcl.json'], {encoding: 'utf8'});
+		expect(result.status).to.equal(0, result.stderr);
+		expect(JSON.parse(result.stdout)).to.deep.equal({inputs: {region: 'eu-west-1'}, terraform: {source: './module'}});
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
 	it('scaffolds a local module without unresolved placeholders', async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-scaffold-'));
 		const moduleDir = path.join(root, 'module');
