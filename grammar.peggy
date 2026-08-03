@@ -413,7 +413,7 @@ Heredoc = "<<" trim:"-"? marker:beginMarker newline content:heredocContent endMa
 heredocContent = parts:(
   (!endMarkerLine (
     InterpolatedExpr /
-    . { return text(); }
+    [^\r] { return text(); }
   ))
 )* {
   // Extract actual content from the parts array structure
@@ -450,6 +450,7 @@ endMarkerLine =
   whitespace
   marker:$[A-Z][A-Z0-9]* 
   whitespace
+  &newline
   &{
     return marker === peekHeredocMarker();
   }
@@ -628,14 +629,16 @@ ListComprehension = "[" _
   "for" _ item:Identifier _ 
   second:("," _ Identifier)? _
   "in" _ collection:PipeableExpression _
-  OptionalCondition? _
-  ":" _ expr:PipeableExpression _ 
+  precondition:OptionalCondition? _
+  ":" _ expr:PipeableExpression _
+  postcondition:OptionalCondition? _
 "]" {
   return makeNode('list_comprehension', null, location(), [
     makeIdentifierNode(item, location()),
     ...(second ? [makeIdentifierNode(second[2], location())] : []),
     collection,
-    expr
+    expr,
+    ...(postcondition ? [postcondition] : [])
   ]);
 }
 
@@ -643,16 +646,18 @@ MapComprehension = "{" _
   "for" _ item:Identifier _ 
   second:("," _ Identifier)? _
   "in" _ collection:PipeableExpression _
-  OptionalCondition? _
-  ":" _ key:PipeableExpression _ 
+  precondition:OptionalCondition? _
+  ":" _ key:PipeableExpression _
   "=>" _ value:PipeableExpression _
+  postcondition:OptionalCondition? _
 "}" {
   return makeNode('map_comprehension', null, location(), [
     makeIdentifierNode(item, location()),
     ...(second ? [makeIdentifierNode(second[2], location())] : []),
     collection,
     key,
-    value
+    value,
+    ...(postcondition ? [postcondition] : [])
   ]);
 }
 
