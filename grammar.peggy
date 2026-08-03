@@ -167,8 +167,8 @@ BlockIdentifier = name:$([a-zA-Z_][a-zA-Z0-9_\-.*]*) {
   return makeNode('block_identifier', name, location());
 }
 
-BlockParameter = _ param:StringLiteral {
-  return makeNode('parameter', param.value, location(), [param]);
+BlockParameter = _ param:(StringLiteral / Identifier) {
+	return makeNode('parameter', typeof param === 'string' ? param : param.value, location(), typeof param === 'string' ? [] : [param]);
 }
 
 RootAssignmentIdentifier
@@ -176,7 +176,7 @@ RootAssignmentIdentifier
     return makeNode('root_assignment_identifier', name, location());
   }
 
-Pair = key:ObjectKey _ "=" _ value:Value {
+Pair = key:ObjectKey _ ("=" / ":") _ value:Value {
 	return makeNode('attribute', key.type === 'attribute_identifier' ? key.value : null, location(), [key, value]);
 }
 
@@ -816,9 +816,9 @@ TypeParameters = "<" _ types:TypeConstraint (_ "," _ TypeConstraint)* _ ">" {
 }
 
 FunctionArgs = args:(
+  VariadicArgs /
   PositionalArgs /
   NamedArgs /
-  VariadicArgs /
   EmptyArgs
 ) {
   return args;
@@ -841,7 +841,7 @@ NamedArg = name:Identifier _ "=" _ value:Expression {
 }
 
 VariadicArgs = args:Expression _ "..." {
-  return makeNode('variadic_arguments', null, location(), [args]);
+  return [makeNode('variadic_arguments', null, location(), [args])];
 }
 
 FunctionArg = arg:(
