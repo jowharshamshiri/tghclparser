@@ -1004,7 +1004,8 @@ async function runHooks(rendered: Record<string, unknown>, hookName: 'before_hoo
 		if (hook.if !== undefined && hook.if !== true) continue;
 		const execute = hook.execute;
 		if (!Array.isArray(execute) || execute.length === 0 || !execute.every(item => typeof item === 'string')) throw new Error(`${hookName}.execute must be a non-empty list of strings`);
-		const configuredDir = typeof hook.working_dir === 'string' ? path.resolve(unitDir, hook.working_dir) : unitDir;
+		const requestedDir = typeof hook.working_dir === 'string' ? path.resolve(unitDir, hook.working_dir) : unitDir;
+		const configuredDir = path.join(await fs.realpath(path.dirname(requestedDir)), path.basename(requestedDir));
 		const root = await fs.realpath(workDir);
 		const relative = path.relative(root, configuredDir);
 		if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error(`${hookName}.working_dir is outside the working directory`);
