@@ -57,15 +57,6 @@
     return makeNode('identifier', name, location);
   }
 
-  function validateObjectKeys(values) {
-    const seen = new Set();
-    for (const value of values) {
-      if (value.type !== 'attribute' || value.value == null) continue;
-      if (seen.has(value.value)) throw new Error(`Attribute redefined: ${value.value}`);
-      seen.add(value.value);
-    }
-  }
-
   function validateBodyAttributes(items) {
     const seen = new Set();
     for (const item of items) {
@@ -211,7 +202,10 @@ Pair = key:ObjectKey _ ("=" / ":") _ value:Value {
 }
 
 ObjectKey
-	= AttributeIdentifier
+  = AttributeIdentifier
+  / number:Number {
+		return makeNode('object_key', null, location(), [number]);
+	}
 	/ "(" _ key:Expression _ ")" {
 		return makeNode('object_key', null, location(), [key]);
 	}
@@ -231,7 +225,6 @@ UnquotedAttributeIdentifier
 
 RootObject = "{" _ pairs:(Pair (_ ","? _ Pair)* (_ ",")?)? _ inherit:InheritanceExpression? _ "}" {
   const values = pairs ? [pairs[0], ...pairs[1].map(pair => pair[3])] : [];
-  validateObjectKeys(values);
   return makeNode('object', null, location(), [...values, ...(inherit ? [inherit] : [])]);
 }
 
@@ -414,7 +407,6 @@ QuotedIdentifier = '"' name:$([^"]*) '"' {
 
 Object = "{" _ pairs:(Pair (_ ","? _ Pair)* (_ ",")?)? _ "}" {
   const values = pairs ? [pairs[0], ...pairs[1].map(pair => pair[3])] : [];
-  validateObjectKeys(values);
   return makeNode('object', null, location(), values);
 }
 
@@ -600,7 +592,7 @@ EndifDirective = "%{" _ "endif" _ "}" {
   return makeNode('endif_directive', null, location());
 }
 
-Number = HexNumber / OctalNumber / LegacyOctal / DecimalNumber
+Number = OctalNumber / LegacyOctal / DecimalNumber
 
 LegacyOctal = "0" digits:$[0-7]+ {
   return makeNode('number_lit', parseInt(digits, 8), location());
@@ -695,7 +687,7 @@ MapComprehension = "{" _
   "in" _ collection:Expression _
   precondition:OptionalCondition? _
   ":" _ key:Expression _
-  "=>" _ value:Expression _
+  "=>" _ value:Expression _ grouping:"..."?
   postcondition:OptionalCondition? _
 "}" {
   return makeNode('map_comprehension', null, location(), [
@@ -708,7 +700,7 @@ MapComprehension = "{" _
   ]);
 }
 
-OptionalCondition = "if" _ condition:PipeableExpression {
+OptionalCondition = "if" _ condition:Expression {
   return condition;
 }
 

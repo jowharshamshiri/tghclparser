@@ -801,6 +801,7 @@ export class ParsedDocument {
 	}
 
 	private validateUniqueArguments(node: any): void {
+		if (node?.type !== 'root' && node?.type !== 'block' && node?.type !== 'locals_block') return;
 		const names = new Set<string>();
 		for (const child of node?.children ?? []) {
 			if (child.type !== 'attribute' && child.type !== 'assignment') continue;
