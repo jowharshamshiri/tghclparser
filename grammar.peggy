@@ -84,9 +84,9 @@ RootAssignment = _ name:RootAssignmentIdentifier _ "=" _ value:(ComprehensionExp
 RootValue = val:(
   Boolean /
   Block / 
-  Expression /
   RootObject / 
   Array / 
+  Expression /
   FunctionCall / 
   TypeConstraint /
   TypeConstructor /
@@ -647,14 +647,9 @@ SimpleExpression = "${" expr:(!("}") .)* "}" {
 }
 
 Expression = 
-  ParenthesizedTernary /
-  TernaryExpression /
   ComprehensionExpression /
+  TernaryExpression /
   PipeExpression
-
-ParenthesizedTernary = "(" _ condition:LogicalExpression _ "?" _ trueExpr:PipeableExpression _ ":" _ falseExpr:PipeableExpression _ ")" {
-  return makeNode('ternary_expression', null, location(), [condition, trueExpr, falseExpr]);
-}
 
 ComprehensionExpression = 
   head:(ListComprehension / MapComprehension) tail:PostfixTail* {
@@ -714,8 +709,9 @@ OptionalCondition = "if" _ condition:Expression {
   return condition;
 }
 
-ParenthesizedCollection = "(" _ condition:LogicalExpression _ "?" _ trueExpr:PostfixExpression _ ":" _ falseExpr:PostfixExpression _ ")" {
-  return makeNode('ternary_expression', null, location(), [condition, trueExpr, falseExpr]);
+ParenthesizedCollection = "(" _ condition:LogicalExpression _ "?" _ trueExpr:PostfixExpression _ ":" _ falseExpr:PostfixExpression _ ")" tail:PostfixTail* {
+  const ternary = makeNode('ternary_expression', null, location(), [condition, trueExpr, falseExpr]);
+  return tail.reduce((expr, access) => access(expr), ternary);
 }
 
 ConditionalExpression =
