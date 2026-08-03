@@ -58,7 +58,7 @@
   }
 }
 
-Start = _ statements:Statement* _ {
+Start = _ statements:Statement* _ !. {
   return makeNode('root', null, location(), statements);
 }
 
@@ -84,6 +84,9 @@ RootValue = val:(
 }
 
 Block = _ name:BlockIdentifier _ params:BlockParameter* _ metaArgs:MetaArguments? _ "{" _ items:BlockItems _ "}" {
+  if ((items || []).some(item => ['block', 'dynamic_block', 'validation', 'check_block', 'import_block', 'moved_block', 'locals_block'].includes(item.type) && item.location.start.line === location().start.line)) {
+    throw new Error('Nested blocks must start on their own line');
+  }
   return makeNode('block', name.value, location(), [
     name, 
     ...params, 
@@ -535,7 +538,7 @@ StringContent = chars:(
   );
 }
 
-TemplateInterpolation = "${" expr:Expression "}" {
+TemplateInterpolation = "${" _ expr:Expression _ "}" {
   return makeNode('interpolation', null, location(), [expr]);
 }
 
@@ -858,7 +861,7 @@ FunctionArg = arg:(
   return arg;
 }
 
-FunctionIdentifier = identifier:$([a-zA-Z_][a-zA-Z0-9_]*) {
+FunctionIdentifier = identifier:$([a-zA-Z_][a-zA-Z0-9_\-]* ("::" [a-zA-Z_][a-zA-Z0-9_\-]*)*) {
   return makeNode('function_identifier', identifier, location());
 }
 
