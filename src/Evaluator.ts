@@ -423,6 +423,23 @@ export class ConfigEvaluator {
 			['include_in_copy', makeNullValue()]
 		]);
 		for (const [name, value] of terraform) terraformDefaults.set(name, value);
+		const terraformBlock = result.scope.blocks.find(block => block.value === 'terraform');
+		if (terraformBlock) {
+			for (const child of terraformBlock.children ?? []) {
+				if (child.type !== 'block') continue;
+				const name = String(child.value);
+				const value = await this.evaluateBlock(child, result.scope);
+				const labels = (child.children ?? []).filter(item => item.type === 'parameter').map(item => String(item.value));
+				if (labels.length > 0) {
+					const current = terraformDefaults.get(name);
+					const entries = current && (current.type === 'object' || current.type === 'block') ? new Map(current.value as Map<string, RuntimeValue<ValueType>>) : new Map<string, RuntimeValue<ValueType>>();
+					entries.set(labels[0], value);
+					terraformDefaults.set(name, makeObjectValue(entries));
+				} else {
+					terraformDefaults.set(name, value);
+				}
+			}
+		}
 		output.set('terraform', makeObjectValue(terraformDefaults));
 		for (const block of result.scope.blocks) {
 			if (['locals', 'terraform', 'include'].includes(String(block.value))) continue;
@@ -452,6 +469,20 @@ export class ConfigEvaluator {
 			if (child.type !== 'attribute') continue;
 			const value = child.children?.find(item => item.type !== 'attribute_identifier');
 			if (value) values.set(String(child.value), await this.evalNode(value, scope));
+		}
+		for (const child of block.children ?? []) {
+			if (child.type !== 'block') continue;
+			const name = String(child.value);
+			const value = await this.evaluateBlock(child, scope);
+			const labels = (child.children ?? []).filter(item => item.type === 'parameter').map(item => String(item.value));
+			if (labels.length > 0) {
+				const current = values.get(name);
+				const entries = current && (current.type === 'object' || current.type === 'block') ? new Map(current.value as Map<string, RuntimeValue<ValueType>>) : new Map<string, RuntimeValue<ValueType>>();
+				entries.set(labels[0], value);
+				values.set(name, makeObjectValue(entries));
+			} else {
+				values.set(name, value);
+			}
 		}
 		return makeObjectValue(values);
 	}

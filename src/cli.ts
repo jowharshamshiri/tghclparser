@@ -9,6 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ConfigEvaluator, runtimeValueToPlain } from './Evaluator';
 import { ParsedDocument } from './ParsedDocument';
 import { Workspace } from './Workspace';
+import { parse } from './parser';
 
 interface CLIOptions {
 	json: boolean;
@@ -79,6 +80,8 @@ function rootUsage(): string {
 		'Main commands:',
 		'  run              Run an OpenTofu/Terraform command',
 		'  exec             Execute an external command without a shell',
+		'  catalog          Browse configured module catalogs',
+		'  scaffold         Create a Terragrunt module configuration',
 		'',
 		'Discovery commands:',
 		'  find, fd         Find Terragrunt configurations',
@@ -268,6 +271,7 @@ interface ExecutionOptions {
 	workingDir: string;
 	tfPath: string;
 	args: string[];
+	all: boolean;
 }
 
 interface FormatOptions {
@@ -282,6 +286,7 @@ interface FormatOptions {
 function parseExecutionArgs(argv: string[]): ExecutionOptions & {command: string} {
 	let workingDir = process.cwd();
 	let tfPath = process.env.TG_TF_PATH ?? process.env.TERRAGRUNT_TFPATH ?? 'tofu';
+	let all = false;
 	let index = 0;
 	while (index < argv.length) {
 		const argument = argv[index];
@@ -316,6 +321,7 @@ function parseExecutionArgs(argv: string[]): ExecutionOptions & {command: string
 			index++;
 			continue;
 		}
+		if (argument === '--all' || argument === '-a') { all = true; index++; continue; }
 		if (argument === '--') {
 			index++;
 			break;
@@ -324,7 +330,8 @@ function parseExecutionArgs(argv: string[]): ExecutionOptions & {command: string
 	}
 	const command = argv[index];
 	if (!command || command.startsWith('-')) throw new Error('A Terraform/OpenTofu command is required');
-	return {workingDir, tfPath, command, args: argv.slice(index + 1)};
+	const args = argv.slice(index + 1).filter(argument => argument !== '--all' && argument !== '-a');
+	return {workingDir, tfPath, command, args, all};
 }
 
 function parseFormatArgs(argv: string[]): FormatOptions | 'help' {
@@ -619,6 +626,205 @@ async function materializeGeneratedFiles(configPath: string, content: string, wo
 	}
 }
 
+interface ScaffoldVariable {
+	name: string;
+	description?: string;
+	defaultValue?: unknown;
+}
+
+async function scaffoldLocal(argv: string[]): Promise<number> {
+	let workingDir = process.cwd();
+	let outputFolder = process.cwd();
+	let rootFileName = 'root.hcl';
+	let includeRoot = true;
+	const variables = new Map<string, unknown>();
+	let moduleURL = '';
+	for (let index = 0; index < argv.length; index++) {
+		const argument = argv[index];
+		if (argument === '--help' || argument === '-h') {
+			console.log('Usage: tghclp scaffold <local-module> [--output-folder <path>] [--var name=value] [--no-include-root]');
+			return 0;
+		}
+		if (argument === '--working-dir' || argument === '--output-folder' || argument === '--root-file-name' || argument === '--var') {
+			const value = argv[++index];
+			if (!value) throw new Error(`${argument} requires a value`);
+			if (argument === '--working-dir') workingDir = path.resolve(value);
+			else if (argument === '--output-folder') outputFolder = path.resolve(workingDir, value);
+			else if (argument === '--root-file-name') rootFileName = value;
+			else {
+				const split = value.indexOf('=');
+				if (split <= 0) throw new Error('--var must use name=value');
+				variables.set(value.slice(0, split), value.slice(split + 1));
+			}
+			continue;
+		}
+		if (argument === '--no-include-root') { includeRoot = false; continue; }
+		if (argument === '--no-color' || argument === '--no-tips' || argument === '--non-interactive') continue;
+		if (argument.startsWith('-')) throw new Error(`Unknown scaffold option ${argument}`);
+		if (moduleURL) throw new Error('Only one module source may be scaffolded');
+		moduleURL = argument;
+	}
+	if (!moduleURL) throw new Error('A local module source is required');
+	if (/^[a-z]+:|^git@/i.test(moduleURL)) throw new Error(`Remote scaffold sources are not available: ${moduleURL}`);
+	const root = await fs.realpath(workingDir);
+	const moduleDir = await fs.realpath(path.resolve(workingDir, moduleURL));
+	const relativeModule = path.relative(root, moduleDir);
+	if (relativeModule === '..' || relativeModule.startsWith(`..${path.sep}`) || path.isAbsolute(relativeModule)) throw new Error('Scaffold source must be inside the working directory');
+	outputFolder = path.join(await fs.realpath(path.dirname(outputFolder)), path.basename(outputFolder));
+	const relativeOutput = path.relative(root, outputFolder);
+	if (relativeOutput === '..' || relativeOutput.startsWith(`..${path.sep}`) || path.isAbsolute(relativeOutput)) throw new Error('Scaffold output must be inside the working directory');
+	await fs.access(moduleDir);
+	const files: string[] = [];
+	const walk = async (directory: string): Promise<void> => {
+		for (const entry of await fs.readdir(directory, {withFileTypes: true})) {
+			const target = path.join(directory, entry.name);
+			if (entry.isDirectory()) await walk(target);
+			else if (entry.isFile() && entry.name.endsWith('.tf')) files.push(target);
+		}
+	};
+	await walk(moduleDir);
+	const evaluator = new ConfigEvaluator({environmentVariables: process.env as Record<string, string>, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true});
+	const discovered: ScaffoldVariable[] = [];
+	for (const file of files.sort()) {
+		const content = await fs.readFile(file, 'utf8');
+		const ast: any = parse(content, {grammarSource: file, tracer: {trace() {}}});
+		for (const block of ast.children ?? []) {
+			if (block.type !== 'block' || block.value !== 'variable') continue;
+			const label = block.children?.find((child: any) => child.type === 'parameter');
+			if (!label) throw new Error(`Variable block in ${file} has no name`);
+			const item: ScaffoldVariable = {name: String(label.value)};
+			for (const child of block.children ?? []) {
+				if (child.type !== 'attribute') continue;
+				const valueNode = child.children?.find((value: any) => value.type !== 'attribute_identifier');
+				if (!valueNode) continue;
+				if (child.value === 'description') {
+					const value = await evaluator.evaluateAtPosition(file, content, moduleDir, offsetPosition(content, valueNode.location.start.offset));
+					if (value?.type === 'string') item.description = String(value.value);
+				}
+				if (child.value === 'default') {
+					const value = await evaluator.evaluateAtPosition(file, content, moduleDir, offsetPosition(content, valueNode.location.start.offset));
+					if (value) item.defaultValue = runtimeValueToPlain(value);
+				}
+			}
+			discovered.push(item);
+		}
+	}
+	const inputs = new Map<string, unknown>();
+	for (const variable of discovered) {
+		if (variables.has(variable.name)) inputs.set(variable.name, variables.get(variable.name));
+		else if (variable.defaultValue !== undefined) inputs.set(variable.name, variable.defaultValue);
+		else throw new Error(`Required module variable "${variable.name}" needs --var ${variable.name}=...`);
+	}
+	await fs.mkdir(outputFolder, {recursive: true});
+	const configLines = [`terraform {`, `  source = ${JSON.stringify(moduleURL)}`, `}`, ''];
+	if (includeRoot) configLines.push('include "root" {', `  path = find_in_parent_folders(${JSON.stringify(rootFileName)})`, '}', '');
+	configLines.push('inputs = {');
+	for (const [name, value] of [...inputs.entries()].sort(([left], [right]) => left.localeCompare(right))) configLines.push(`  ${name} = ${hclValue(value)}`);
+	configLines.push('}', '');
+	const target = path.join(outputFolder, 'terragrunt.hcl');
+	if (await pathExists(target)) throw new Error(`Scaffold target already exists: ${target}`);
+	await fs.writeFile(target, configLines.join('\n'), 'utf8');
+	console.log(`Scaffolded ${target}`);
+	return 0;
+}
+
+async function catalogJSONL(argv: string[]): Promise<number> {
+	let workingDir = process.cwd();
+	let format = 'tui';
+	let experiment = false;
+	for (let index = 0; index < argv.length; index++) {
+		const argument = argv[index];
+		if (argument === '--help' || argument === '-h') {
+			console.log('Usage: tghclp catalog --format=jsonl --experiment=catalog-format [--working-dir <path>]');
+			return 0;
+		}
+		if (argument === '--experiment=catalog-format' || (argument === '--experiment' && argv[++index] === 'catalog-format')) { experiment = true; continue; }
+		if (argument === '--format') { format = argv[++index] ?? ''; continue; }
+		if (argument.startsWith('--format=')) { format = argument.slice('--format='.length); continue; }
+		if (argument === '--working-dir') { workingDir = path.resolve(argv[++index] ?? ''); continue; }
+		if (argument.startsWith('--working-dir=')) { workingDir = path.resolve(argument.slice('--working-dir='.length)); continue; }
+		if (argument === '--non-interactive' || argument === '--no-color' || argument === '--no-tips') continue;
+		if (argument.startsWith('-')) throw new Error(`Unknown catalog option ${argument}`);
+	}
+	if (format !== 'jsonl') throw new Error('Interactive catalog browsing is not available; use --format=jsonl');
+	if (!experiment) throw new Error("non-interactive catalog formats require usage of the 'catalog-format' experiment");
+	const configPath = path.join(workingDir, 'terragrunt.hcl');
+	const content = await fs.readFile(configPath, 'utf8');
+	const evaluator = new ConfigEvaluator({environmentVariables: process.env as Record<string, string>, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true});
+	const rendered = runtimeValueToPlain(await evaluator.evaluateRenderedConfig(configPath, content, workingDir)) as Record<string, unknown>;
+	const catalog = rendered.catalog;
+	if (catalog === null || typeof catalog !== 'object' || Array.isArray(catalog)) throw new Error('catalog configuration is required');
+	const urls = (catalog as Record<string, unknown>).urls;
+	if (!Array.isArray(urls) || urls.some(url => typeof url !== 'string')) throw new Error('catalog.urls must be a list of strings');
+	for (const source of urls as string[]) {
+		if (/^[a-z]+:|^git@/i.test(source)) throw new Error(`Remote catalog sources are not available: ${source}`);
+		const catalogRoot = await fs.realpath(path.resolve(workingDir, source));
+		const root = await fs.realpath(workingDir);
+		const relative = path.relative(root, catalogRoot);
+		if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error(`Catalog source is outside the working directory: ${source}`);
+		const components = await discoverConfigs(catalogRoot, false, catalogRoot);
+		for (const component of components.filter(item => item.type === 'unit')) {
+			const componentContent = await fs.readFile(component.absPath, 'utf8');
+			const componentRendered = runtimeValueToPlain(await evaluator.evaluateRenderedConfig(component.absPath, componentContent, workingDir)) as Record<string, unknown>;
+			const terraform = componentRendered.terraform as Record<string, unknown> | undefined;
+			process.stdout.write(`${JSON.stringify({kind: 'unit', title: path.basename(component.path), description: '', source, dir: component.path, component_source: terraform?.source ?? '', copyable: true})}\n`);
+		}
+	}
+	return 0;
+}
+
+async function backendCommand(argv: string[]): Promise<number> {
+	const operation = argv[0];
+	if (!operation || operation === '--help' || operation === '-h') {
+		console.log('Usage: tghclp backend <bootstrap|delete|migrate> [options]');
+		return 0;
+	}
+	if (!['bootstrap', 'delete', 'migrate'].includes(operation)) throw new Error(`Unknown backend operation ${operation}`);
+	let workingDir = process.cwd();
+	let tfPath = process.env.TG_TF_PATH ?? process.env.TERRAGRUNT_TFPATH ?? 'tofu';
+	let force = false;
+	const positional: string[] = [];
+	for (let index = 1; index < argv.length; index++) {
+		const argument = argv[index];
+		if (argument === '--help' || argument === '-h') {
+			console.log(`Usage: tghclp backend ${operation} [--working-dir <path>] [--tf-path <path>]${operation === 'migrate' ? ' <src-unit> <dst-unit>' : ''}`);
+			return 0;
+		}
+		if (argument === '--working-dir') { workingDir = path.resolve(argv[++index] ?? ''); continue; }
+		if (argument.startsWith('--working-dir=')) { workingDir = path.resolve(argument.slice('--working-dir='.length)); continue; }
+		if (argument === '--tf-path') { tfPath = argv[++index] ?? ''; if (!tfPath) throw new Error('--tf-path requires a path'); continue; }
+		if (argument.startsWith('--tf-path=')) { tfPath = argument.slice('--tf-path='.length); continue; }
+		if (argument === '--force') { force = true; continue; }
+		if (argument === '--no-color' || argument === '--no-tips' || argument === '--non-interactive' || argument === '--no-cas') continue;
+		if (argument.startsWith('-')) throw new Error(`Unknown backend option ${argument}`);
+		positional.push(argument);
+	}
+	if (operation === 'migrate') {
+		if (positional.length !== 2) throw new Error('backend migrate requires <src-unit> and <dst-unit>');
+		const destination = path.resolve(workingDir, positional[1]);
+		return executeTerraformCommand(['--working-dir', destination, '--tf-path', tfPath, 'init', '-migrate-state', '-input=false']);
+	}
+	const configPath = path.join(workingDir, 'terragrunt.hcl');
+	const content = await fs.readFile(configPath, 'utf8');
+	const evaluator = new ConfigEvaluator({environmentVariables: process.env as Record<string, string>, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true});
+	const rendered = runtimeValueToPlain(await evaluator.evaluateRenderedConfig(configPath, content, workingDir)) as Record<string, unknown>;
+	const remoteState = rendered.remote_state as Record<string, unknown> | undefined;
+	if (!remoteState || typeof remoteState.backend !== 'string') throw new Error('remote_state.backend is required for backend operations');
+	if (operation === 'bootstrap') {
+		if (remoteState.backend === 'local') {
+			console.warn('Bootstrap for local backend not implemented.');
+			return 0;
+		}
+		return executeTerraformCommand(['--working-dir', workingDir, '--tf-path', tfPath, 'init', '-input=false']);
+	}
+	if (!force) throw new Error('backend delete requires --force');
+	if (remoteState.backend === 'local') {
+		console.warn('Delete for local backend not implemented.');
+		return 0;
+	}
+	throw new Error(`backend delete for ${remoteState.backend} requires its provider API`);
+}
+
 async function executeTerraformCommand(argv: string[]): Promise<number> {
 	const options = parseExecutionArgs(argv);
 	const configFiles = await collectFiles(options.workingDir);
@@ -628,18 +834,37 @@ async function executeTerraformCommand(argv: string[]): Promise<number> {
 		for (const item of diagnostics) process.stderr.write(`${item.range.filename}: ${item.summary}: ${item.detail}\n`);
 		return 1;
 	}
-	for (const configFile of configFiles) {
-		await materializeGeneratedFiles(configFile, await fs.readFile(configFile, 'utf8'), options.workingDir);
+	const discovered = await dependencyOrderedFiles(configFiles, options.workingDir);
+	let selected: string[];
+	if (options.all) selected = discovered;
+	else {
+		const rootConfig = configFiles.find(file => path.dirname(file) === options.workingDir);
+		if (rootConfig) selected = [rootConfig];
+		else if (configFiles.length === 1) selected = [configFiles[0]];
+		else throw new Error(`Multiple units found under ${options.workingDir}; use --all to run the dependency graph`);
 	}
-	const executable = path.isAbsolute(options.tfPath) ? options.tfPath : options.tfPath;
-	const result = spawnSync(executable, [options.command, ...options.args], {
-		cwd: options.workingDir,
-		stdio: 'inherit',
-		 shell: false
-	});
-	if (result.error) throw new Error(`Unable to execute ${options.tfPath}: ${result.error.message}`);
-	if (result.signal) throw new Error(`${options.tfPath} terminated by ${result.signal}`);
-	return result.status ?? 1;
+	const executable = options.tfPath;
+	for (const configFile of selected) {
+		const unitDir = path.dirname(configFile);
+		const content = await fs.readFile(configFile, 'utf8');
+		await materializeGeneratedFiles(configFile, content, options.workingDir);
+		const evaluator = new ConfigEvaluator({environmentVariables: process.env as Record<string, string>, terraformCommand: options.command, terraformCliArgs: options.args, workspaceTrusted: true});
+		const rendered = runtimeValueToPlain(await evaluator.evaluateRenderedConfig(configFile, content, options.workingDir)) as Record<string, unknown>;
+		await runHooks(rendered, 'before_hook', options.command, unitDir, options.workingDir);
+		const result = spawnSync(executable, [options.command, ...options.args], {
+			cwd: unitDir,
+			stdio: 'inherit',
+			shell: false
+		});
+		if (result.error) throw new Error(`Unable to execute ${options.tfPath}: ${result.error.message}`);
+		if (result.signal) throw new Error(`${options.tfPath} terminated by ${result.signal}`);
+		if ((result.status ?? 1) !== 0) {
+			try { await runHooks(rendered, 'error_hook', options.command, unitDir, options.workingDir); } catch (error) { console.error(error instanceof Error ? error.message : String(error)); }
+			return result.status ?? 1;
+		}
+		await runHooks(rendered, 'after_hook', options.command, unitDir, options.workingDir);
+	}
+	return 0;
 }
 
 async function collectFiles(root: string): Promise<string[]> {
@@ -723,9 +948,78 @@ async function validateFile(filePath: string, workDir: string, experiments: stri
 	}];
 }
 
+async function dependencyOrderedFiles(files: string[], workDir: string): Promise<string[]> {
+	const byDirectory = new Map<string, string>();
+	for (const file of files) byDirectory.set(path.dirname(await fs.realpath(file)), file);
+	const dependencies = new Map<string, string[]>();
+	for (const file of files) {
+		const content = await fs.readFile(file, 'utf8');
+		const ast: any = parse(content, {grammarSource: file, tracer: {trace() {}}});
+		const evaluator = new ConfigEvaluator({environmentVariables: process.env as Record<string, string>, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true});
+		const refs: string[] = [];
+		const visit = async (node: any): Promise<void> => {
+			if (node.type === 'block' && node.value === 'dependency') {
+				const attribute = node.children?.find((child: any) => child.type === 'attribute' && child.value === 'config_path');
+				const valueNode = attribute?.children?.find((child: any) => child.type !== 'attribute_identifier');
+				if (!valueNode) throw new Error(`dependency in ${file} is missing config_path`);
+				const value = await evaluator.evaluateAtPosition(file, content, workDir, offsetPosition(content, valueNode.location.start.offset));
+				if (!value || value.type !== 'string') throw new Error(`dependency config_path in ${file} must evaluate to a string`);
+				const targetDir = path.resolve(path.dirname(file), String(value.value));
+				const targetFile = byDirectory.get(await fs.realpath(targetDir));
+				if (!targetFile) throw new Error(`dependency config_path does not identify a discovered unit: ${value.value}`);
+				refs.push(targetFile);
+			}
+			for (const child of node.children ?? []) await visit(child);
+		};
+		await visit(ast);
+		dependencies.set(file, refs);
+	}
+	const result: string[] = [];
+	const visiting = new Set<string>();
+	const visited = new Set<string>();
+	const visit = (file: string): void => {
+		if (visiting.has(file)) throw new Error(`Dependency cycle detected at ${file}`);
+		if (visited.has(file)) return;
+		visiting.add(file);
+		for (const dependency of dependencies.get(file) ?? []) visit(dependency);
+		visiting.delete(file);
+		visited.add(file);
+		result.push(file);
+	};
+	for (const file of files.sort()) visit(file);
+	return result;
+}
+
+async function runHooks(rendered: Record<string, unknown>, hookName: 'before_hook' | 'after_hook' | 'error_hook', command: string, unitDir: string, workDir: string): Promise<void> {
+	const terraform = rendered.terraform;
+	if (terraform === null || typeof terraform !== 'object' || Array.isArray(terraform)) return;
+	const hooks = (terraform as Record<string, unknown>)[hookName];
+	if (hooks === null || typeof hooks !== 'object' || Array.isArray(hooks)) return;
+	for (const entry of Object.values(hooks as Record<string, unknown>)) {
+		if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) throw new Error(`${hookName} entries must be objects`);
+		const hook = entry as Record<string, unknown>;
+		const commands = hook.commands;
+		if (!Array.isArray(commands) || !commands.every(item => typeof item === 'string')) throw new Error(`${hookName}.commands must be a list of strings`);
+		if (!(commands as string[]).includes(command)) continue;
+		if (hook.if !== undefined && hook.if !== true) continue;
+		const execute = hook.execute;
+		if (!Array.isArray(execute) || execute.length === 0 || !execute.every(item => typeof item === 'string')) throw new Error(`${hookName}.execute must be a non-empty list of strings`);
+		const configuredDir = typeof hook.working_dir === 'string' ? path.resolve(unitDir, hook.working_dir) : unitDir;
+		const root = await fs.realpath(workDir);
+		const relative = path.relative(root, configuredDir);
+		if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error(`${hookName}.working_dir is outside the working directory`);
+		const result = spawnSync(String(execute[0]), (execute as string[]).slice(1), {cwd: configuredDir, stdio: 'inherit', shell: false});
+		if (result.error) throw new Error(`Unable to execute ${hookName}: ${result.error.message}`);
+		if ((result.status ?? 1) !== 0) throw new Error(`${hookName} exited with status ${result.status ?? 1}`);
+	}
+}
+
 async function main(argv: string[]): Promise<number> {
 	if (argv[0] === 'hcl' && (argv[1] === 'format' || argv[1] === 'fmt')) return formatHCL(argv.slice(2));
 	if (argv[0] === 'stack' && argv[1] === 'generate') return stackGenerate(argv.slice(2));
+	if (argv[0] === 'scaffold') return scaffoldLocal(argv.slice(1));
+	if (argv[0] === 'catalog') return catalogJSONL(argv.slice(1));
+	if (argv[0] === 'backend') return backendCommand(argv.slice(1));
 	if (argv[0] === 'render') return renderConfig(argv.slice(1));
 	if (argv[0] === 'run') {
 		if (argv.includes('--help')) {
