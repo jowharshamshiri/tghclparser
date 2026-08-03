@@ -567,7 +567,12 @@ DirectiveInterpolation =
   IfDirective /
   ForDirective /
   ElseDirective /
-  EndifDirective
+  EndifDirective /
+  RawDirective
+
+RawDirective = "%{" body:$([^}]*) "}" {
+  return makeNode('template_directive', body, location());
+}
 
 IfDirective = "%{" _ "if" _ condition:Expression _ "}" content:StringContent {
   return makeNode('if_directive', null, location(), [
@@ -648,8 +653,9 @@ Expression =
   PipeExpression
 
 ComprehensionExpression = 
-  ListComprehension /
-  MapComprehension
+  head:(ListComprehension / MapComprehension) tail:PostfixTail* {
+    return tail.reduce((expr, access) => access(expr), head);
+  }
 
 PipeableExpression = 
   ConditionalExpression /
@@ -796,13 +802,17 @@ NegationExpression = "-" _ expr:UnaryExpression {
 }
 
 PostfixExpression = head:PrimaryExpression tail:(
-  IndexAccess /
-  FullSplatAccess /
-  SplatAccess /
-  MemberAccess
+  PostfixTail
 )* {
   return tail.reduce((expr, access) => access(expr), head);
 }
+
+PostfixTail =
+  IndexAccess /
+  FullSplatAccess /
+  SplatAccess /
+  NumericMemberAccess /
+  MemberAccess
 
 IndexAccess = _ "[" _ index:(Number / StringLiteral / Expression) _ "]" {
   return base => makeNode('index_expression', null, location(), [base, index]);
@@ -824,6 +834,10 @@ FullSplatAccess = _ "[" _ "*" _ "]" _ attr:("." Identifier)? {
 
 MemberAccess = _ "." _ member:Identifier {
   return base => makeNode('member_access', null, location(), [base, makeIdentifierNode(member, location())]);
+}
+
+NumericMemberAccess = _ "." _ member:Number {
+  return base => makeNode('member_access', null, location(), [base, makeIdentifierNode(String(member.value), location())]);
 }
 
 FunctionCall = 
