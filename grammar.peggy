@@ -586,13 +586,13 @@ Array = "[" _ items:(ArrayItem (_ "," _ ArrayItem)* (_ ",")?)? _ "]" {
 }
 
 ArrayItem = val:(
+  Expression /
   StringLiteral /
   Number /
   Boolean /
   Object /
   FunctionCall /
   PrimaryExpression /
-  Expression /
   Reference
 ) {
   return val;
@@ -829,6 +829,7 @@ VariadicArgs = args:Expression _ "..." {
 }
 
 FunctionArg = arg:(
+  Expression /
   StringLiteral /
   Number /
   Boolean /
@@ -836,7 +837,6 @@ FunctionArg = arg:(
   Object /
   FunctionCall /
   PrimaryExpression /
-  Expression /
   Reference
 ) {
   return arg;

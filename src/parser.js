@@ -8506,19 +8506,19 @@ function peg$parse(input, options) {
     }
 
     s0 = peg$currPos;
-    s1 = peg$parseStringLiteral();
+    s1 = peg$parseExpression();
     if (s1 === peg$FAILED) {
-      s1 = peg$parseNumber();
+      s1 = peg$parseStringLiteral();
       if (s1 === peg$FAILED) {
-        s1 = peg$parseBoolean();
+        s1 = peg$parseNumber();
         if (s1 === peg$FAILED) {
-          s1 = peg$parseObject();
+          s1 = peg$parseBoolean();
           if (s1 === peg$FAILED) {
-            s1 = peg$parseFunctionCall();
+            s1 = peg$parseObject();
             if (s1 === peg$FAILED) {
-              s1 = peg$parsePrimaryExpression();
+              s1 = peg$parseFunctionCall();
               if (s1 === peg$FAILED) {
-                s1 = peg$parseExpression();
+                s1 = peg$parsePrimaryExpression();
                 if (s1 === peg$FAILED) {
                   s1 = peg$parseReference();
                 }
@@ -12449,21 +12449,21 @@ function peg$parse(input, options) {
     }
 
     s0 = peg$currPos;
-    s1 = peg$parseStringLiteral();
+    s1 = peg$parseExpression();
     if (s1 === peg$FAILED) {
-      s1 = peg$parseNumber();
+      s1 = peg$parseStringLiteral();
       if (s1 === peg$FAILED) {
-        s1 = peg$parseBoolean();
+        s1 = peg$parseNumber();
         if (s1 === peg$FAILED) {
-          s1 = peg$parseArray();
+          s1 = peg$parseBoolean();
           if (s1 === peg$FAILED) {
-            s1 = peg$parseObject();
+            s1 = peg$parseArray();
             if (s1 === peg$FAILED) {
-              s1 = peg$parseFunctionCall();
+              s1 = peg$parseObject();
               if (s1 === peg$FAILED) {
-                s1 = peg$parsePrimaryExpression();
+                s1 = peg$parseFunctionCall();
                 if (s1 === peg$FAILED) {
-                  s1 = peg$parseExpression();
+                  s1 = peg$parsePrimaryExpression();
                   if (s1 === peg$FAILED) {
                     s1 = peg$parseReference();
                   }

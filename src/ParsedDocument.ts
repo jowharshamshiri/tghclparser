@@ -754,6 +754,13 @@ export class ParsedDocument {
 		this.tokens = [];
 		this.diagnostics = [];
 		try {
+			const filePath = URI.parse(this.uri).fsPath;
+			if (filePath.endsWith('.tf.json') || filePath.endsWith('.tfvars.json')) {
+				JSON.parse(this.content);
+				this.ast = { id: 0, type: 'root', location: { start: { line: 1, column: 1, offset: 0 }, end: { line: 1, column: 1, offset: this.content.length } } };
+				this.tokens = [this.parseNode(this.ast)];
+				return;
+			}
 			this.ast = tg_parse(this.content, { grammarSource: this.uri, tracer: this.parserTracer() });
 			this.tokens = [this.parseNode(this.ast)];
 			this.diagnostics = this.diagnosticsProvider.getDiagnostics(this);
