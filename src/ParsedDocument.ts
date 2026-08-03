@@ -762,9 +762,12 @@ export class ParsedDocument {
 				return;
 			}
 			this.ast = tg_parse(this.content, { grammarSource: this.uri, tracer: this.parserTracer() });
+			this.validateUniqueArguments(this.ast);
 			this.tokens = [this.parseNode(this.ast)];
 			this.diagnostics = this.diagnosticsProvider.getDiagnostics(this);
 		} catch (error) {
+			this.ast = null;
+			this.tokens = [];
 			if (error instanceof SyntaxError && error.location) {
 				// Convert the parser's location format to VSCode's format
 				this.diagnostics.push({
@@ -795,6 +798,18 @@ export class ParsedDocument {
 			}
 
 		}
+	}
+
+	private validateUniqueArguments(node: any): void {
+		const names = new Set<string>();
+		for (const child of node?.children ?? []) {
+			if (child.type !== 'attribute' && child.type !== 'assignment') continue;
+			if (child.value == null) continue;
+			const name = String(child.value);
+			if (names.has(name)) throw new Error(`Attribute redefined: ${name}`);
+			names.add(name);
+		}
+		for (const child of node?.children ?? []) this.validateUniqueArguments(child);
 	}
 
 	public getUri(): string {

@@ -56,9 +56,29 @@
   function makeIdentifierNode(name, location) {
     return makeNode('identifier', name, location);
   }
+
+  function validateObjectKeys(values) {
+    const seen = new Set();
+    for (const value of values) {
+      if (value.type !== 'attribute' || value.value == null) continue;
+      if (seen.has(value.value)) throw new Error(`Attribute redefined: ${value.value}`);
+      seen.add(value.value);
+    }
+  }
+
+  function validateBodyAttributes(items) {
+    const seen = new Set();
+    for (const item of items) {
+      const name = item.type === 'attribute' || item.type === 'assignment' ? item.value : null;
+      if (name == null) continue;
+      if (seen.has(name)) throw new Error(`Attribute redefined: ${name}`);
+      seen.add(name);
+    }
+  }
 }
 
 Start = _ statements:Statement* _ !. {
+  validateBodyAttributes(statements);
   return makeNode('root', null, location(), statements);
 }
 
@@ -71,6 +91,7 @@ RootAssignment = _ name:RootAssignmentIdentifier _ "=" _ value:(RootValue / Bool
 }
 
 RootValue = val:(
+  Boolean /
   Block / 
   RootObject / 
   Array / 
@@ -83,7 +104,8 @@ RootValue = val:(
   return val;
 }
 
-Block = _ name:BlockIdentifier _ params:BlockParameter* _ metaArgs:MetaArguments? _ "{" _ items:BlockItems _ "}" {
+Block = _ name:BlockIdentifier params:BlockParameter* _ metaArgs:MetaArguments? _ "{" _ items:BlockItems _ "}" {
+  validateBodyAttributes(items || []);
   if ((items || []).some(item => ['block', 'dynamic_block', 'validation', 'check_block', 'import_block', 'moved_block', 'locals_block'].includes(item.type) && item.location.start.line === location().start.line)) {
     throw new Error('Nested blocks must start on their own line');
   }
@@ -166,16 +188,17 @@ DynamicBlock = "dynamic" _ blockType:StringLiteral _ "{" _
   ]);
 }
 
-BlockIdentifier = name:$([a-zA-Z_][a-zA-Z0-9_\-.*]*) {
+BlockIdentifier = name:$([a-zA-Z_\u0080-\uFFFF][a-zA-Z0-9_\-.*\u0080-\uFFFF]*) {
   return makeNode('block_identifier', name, location());
 }
 
-BlockParameter = _ param:(StringLiteral / Identifier) {
+BlockParameter = [ \t]+ param:(StringLiteral / Identifier) {
+	if (typeof param !== 'string' && param.type !== 'string_lit') throw new Error('Interpolated block labels are not valid');
 	return makeNode('parameter', typeof param === 'string' ? param : param.value, location(), typeof param === 'string' ? [] : [param]);
 }
 
 RootAssignmentIdentifier
-  = name:$([a-zA-Z_][a-zA-Z0-9_\-.]*) {
+  = name:$([a-zA-Z_\u0080-\uFFFF][a-zA-Z0-9_\-.\u0080-\uFFFF]*) {
     return makeNode('root_assignment_identifier', name, location());
   }
 
@@ -198,12 +221,13 @@ QuotedAttributeIdentifier
   }
 
 UnquotedAttributeIdentifier
-  = name:$([a-zA-Z_][a-zA-Z0-9_\-.]*) {
+  = name:$([a-zA-Z_\u0080-\uFFFF][a-zA-Z0-9_\-.\u0080-\uFFFF]*) {
     return makeNode('attribute_identifier', name, location(), [], { quoted: false });
   }
 
 RootObject = "{" _ pairs:(Pair (_ ","? _ Pair)* (_ ",")?)? _ inherit:InheritanceExpression? _ "}" {
   const values = pairs ? [pairs[0], ...pairs[1].map(pair => pair[3])] : [];
+  validateObjectKeys(values);
   return makeNode('object', null, location(), [...values, ...(inherit ? [inherit] : [])]);
 }
 
@@ -220,7 +244,7 @@ PrimaryExpression =
   "(" _ expr:Expression _ ")" { return expr; } /
   SimpleExpression
 
-TraversalIdentifier = name:$([a-zA-Z_][a-zA-Z0-9_\-]*) {
+TraversalIdentifier = name:$([a-zA-Z_\u0080-\uFFFF][a-zA-Z0-9_\-\u0080-\uFFFF]*) {
   return makeNode('traversal_reference', name, location());
 }
 
@@ -365,7 +389,7 @@ NumericIdentifier = name:$([0-9]+) {
   return makeNode('reference_identifier', name, location());
 }
 
-SimpleIdentifier = name:$([a-zA-Z_][a-zA-Z0-9_\-]*) {
+SimpleIdentifier = name:$([a-zA-Z_\u0080-\uFFFF][a-zA-Z0-9_\-\u0080-\uFFFF]*) {
   return makeNode('reference_identifier', name, location());
 }
 
@@ -386,6 +410,7 @@ QuotedIdentifier = '"' name:$([^"]*) '"' {
 
 Object = "{" _ pairs:(Pair (_ ","? _ Pair)* (_ ",")?)? _ "}" {
   const values = pairs ? [pairs[0], ...pairs[1].map(pair => pair[3])] : [];
+  validateObjectKeys(values);
   return makeNode('object', null, location(), values);
 }
 
@@ -450,7 +475,7 @@ heredocContent = parts:(
   return content;
 }
 
-beginMarker = marker:$[A-Z][A-Z0-9]* {
+beginMarker = marker:$[A-Z][A-Z0-9_]* {
   pushHeredocMarker(marker);
   return marker;
 }
@@ -462,7 +487,7 @@ whitespace = [ \t]*
 endMarkerLine = 
   newline 
   whitespace
-  marker:$[A-Z][A-Z0-9]* 
+  marker:$[A-Z][A-Z0-9_]* 
   whitespace
   &newline
   &{
@@ -865,7 +890,7 @@ FunctionIdentifier = identifier:$([a-zA-Z_][a-zA-Z0-9_\-]* ("::" [a-zA-Z_][a-zA-
   return makeNode('function_identifier', identifier, location());
 }
 
-Identifier = first:[a-zA-Z_] rest:[a-zA-Z0-9_\-.]* {
+Identifier = first:[a-zA-Z_\u0080-\uFFFF] rest:[a-zA-Z0-9_\-.\u0080-\uFFFF]* {
   return first + rest.join('');
 }
 
