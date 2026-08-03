@@ -118,7 +118,7 @@ Block = _ name:BlockIdentifier params:BlockParameter* _ metaArgs:MetaArguments? 
 }
 
 BlockItems = items:(item:(
-  Pair /
+  BodyPair /
   ParameterizedBlock /
   DynamicBlock /
   ValidationBlock /
@@ -129,6 +129,10 @@ BlockItems = items:(item:(
   Block
 ) _ { return item; })* {
   return items;
+}
+
+BodyPair = key:UnquotedAttributeIdentifier _ ("=" / ":") _ value:Value {
+  return makeNode('attribute', key.value, location(), [key, value]);
 }
 MovedBlock = "moved" _ "{" _
   "from" _ "=" _ from:Reference _
@@ -192,7 +196,7 @@ BlockIdentifier = name:$([a-zA-Z_\u0080-\uFFFF][a-zA-Z0-9_\-.*\u0080-\uFFFF]*) {
   return makeNode('block_identifier', name, location());
 }
 
-BlockParameter = [ \t]+ param:(StringLiteral / Identifier) {
+BlockParameter = [ \t]+ ([ \t] / MultiLineComment)* param:(StringLiteral / Identifier) {
 	if (typeof param !== 'string' && param.type !== 'string_lit') throw new Error('Interpolated block labels are not valid');
 	return makeNode('parameter', typeof param === 'string' ? param : param.value, location(), typeof param === 'string' ? [] : [param]);
 }
@@ -596,7 +600,11 @@ EndifDirective = "%{" _ "endif" _ "}" {
   return makeNode('endif_directive', null, location());
 }
 
-Number = HexNumber / OctalNumber / DecimalNumber
+Number = HexNumber / OctalNumber / LegacyOctal / DecimalNumber
+
+LegacyOctal = "0" digits:$[0-7]+ {
+  return makeNode('number_lit', parseInt(digits, 8), location());
+}
 
 HexNumber = "0x" digits:$[0-9a-fA-F]+ {
   return makeNode('number_lit', parseInt(digits, 16), location());
