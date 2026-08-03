@@ -78,6 +78,25 @@ describe('CLI configuration discovery', () => {
 		await fs.rm(root, {recursive: true, force: true});
 	});
 
+	it('scaffolds a Git module source and selects its subdirectory', async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-scaffold-git-'));
+		const repository = path.join(root, 'repository');
+		await fs.mkdir(path.join(repository, 'modules', 'app'), {recursive: true});
+		await fs.writeFile(path.join(repository, 'modules', 'app', 'variables.tf'), 'variable "region" { default = "eu-west-1" }\n');
+		for (const args of [['init', '-q'], ['config', 'user.email', 'test@example.invalid'], ['config', 'user.name', 'tghclp-test'], ['add', '.'], ['commit', '-qm', 'fixture']]) {
+			const result = spawnSync('git', args, {cwd: repository, encoding: 'utf8', shell: false});
+			expect(result.status).to.equal(0, result.stderr);
+		}
+		const output = path.join(root, 'generated');
+		const cli = path.resolve('dist/cli.cjs');
+		const source = `git::file://${repository}//modules/app`;
+		const result = spawnSync(process.execPath, [cli, 'scaffold', source, '--working-dir', root, '--output-folder', 'generated', '--no-include-root'], {encoding: 'utf8'});
+		expect(result.status).to.equal(0, result.stderr);
+		expect(await fs.readFile(path.join(output, 'terragrunt.hcl'), 'utf8')).to.contain(`source = ${JSON.stringify(source)}`);
+		expect(await fs.readFile(path.join(output, 'terragrunt.hcl'), 'utf8')).to.contain('region = "eu-west-1"');
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
 	it('lists local catalog components as JSON lines only with the catalog experiment', async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-catalog-'));
 		const catalog = path.join(root, 'catalog');
@@ -91,6 +110,23 @@ describe('CLI configuration discovery', () => {
 		const result = spawnSync(process.execPath, [cli, 'catalog', '--format=jsonl', '--experiment=catalog-format', '--working-dir', root], {encoding: 'utf8'});
 		expect(result.status).to.equal(0, result.stderr);
 		expect(JSON.parse(result.stdout)).to.deep.equal({kind: 'unit', title: 'network', description: '', source: './catalog', dir: 'network', component_source: './module', copyable: true});
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
+	it('lists components from a Git catalog source', async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-catalog-git-'));
+		const repository = path.join(root, 'repository');
+		await fs.mkdir(path.join(repository, 'modules', 'network'), {recursive: true});
+		await fs.writeFile(path.join(repository, 'modules', 'network', 'terragrunt.hcl'), 'terraform { source = "./network" }\n');
+		for (const args of [['init', '-q'], ['config', 'user.email', 'test@example.invalid'], ['config', 'user.name', 'tghclp-test'], ['add', '.'], ['commit', '-qm', 'fixture']]) {
+			const result = spawnSync('git', args, {cwd: repository, encoding: 'utf8', shell: false});
+			expect(result.status).to.equal(0, result.stderr);
+		}
+		await fs.writeFile(path.join(root, 'terragrunt.hcl'), `catalog { urls = ["git::file://${repository}"] }\n`);
+		const cli = path.resolve('dist/cli.cjs');
+		const result = spawnSync(process.execPath, [cli, 'catalog', '--format=jsonl', '--experiment=catalog-format', '--working-dir', root], {encoding: 'utf8'});
+		expect(result.status).to.equal(0, result.stderr);
+		expect(JSON.parse(result.stdout)).to.deep.include({kind: 'unit', title: 'network', component_source: './network', copyable: true});
 		await fs.rm(root, {recursive: true, force: true});
 	});
 
@@ -120,6 +156,34 @@ describe('CLI configuration discovery', () => {
 		let stateExists = true;
 		try { await fs.access(path.join(root, 'state.tfstate')); } catch { stateExists = false; }
 		expect(stateExists).to.equal(true);
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
+	it('performs S3 backend bootstrap and state deletion through provider operations', async function () {
+		this.timeout(10000);
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-backend-s3-'));
+		const bin = path.join(root, 'bin');
+		await fs.mkdir(bin, {recursive: true});
+		const log = path.join(root, 'provider.log');
+		const provider = path.join(bin, 'aws');
+		await fs.writeFile(provider, `#!/usr/bin/env node\nconst fs=require('node:fs'); const args=process.argv.slice(2); fs.appendFileSync(${JSON.stringify(log)}, args.join(' ')+'\\n'); if ((args[0]==='s3api' && args[1]==='head-bucket') || (args[0]==='dynamodb' && args[1]==='describe-table')) process.exit(1);\n`, {mode: 0o755});
+		await fs.writeFile(path.join(root, 'terragrunt.hcl'), 'remote_state { backend = "s3" config = { bucket = "state" key = "env/app.tfstate" region = "eu-west-1" dynamodb_table = "locks" } }\n');
+		const cli = path.resolve('dist/cli.cjs');
+		const environment = {...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`};
+		const bootstrap = spawnSync(process.execPath, [cli, 'backend', 'bootstrap', '--working-dir', root], {encoding: 'utf8', env: environment});
+		expect(bootstrap.status).to.equal(0, bootstrap.stderr);
+		const deleted = spawnSync(process.execPath, [cli, 'backend', 'delete', '--force', '--working-dir', root], {encoding: 'utf8', env: environment});
+		expect(deleted.status).to.equal(0, deleted.stderr);
+		const commands = (await fs.readFile(log, 'utf8')).trim().split('\n');
+		expect(commands).to.deep.equal([
+			's3api head-bucket --bucket state',
+			's3api create-bucket --bucket state --create-bucket-configuration LocationConstraint=eu-west-1',
+			's3api put-bucket-versioning --bucket state --versioning-configuration Status=Enabled',
+			'dynamodb describe-table --table-name locks',
+			'dynamodb create-table --table-name locks --attribute-definitions AttributeName=LockID,AttributeType=S --key-schema AttributeName=LockID,KeyType=HASH --billing-mode PAY_PER_REQUEST',
+			'dynamodb delete-item --table-name locks --key LockID={S=state/env/app.tfstate-md5}',
+			's3api delete-object --bucket state --key env/app.tfstate'
+		]);
 		await fs.rm(root, {recursive: true, force: true});
 	});
 

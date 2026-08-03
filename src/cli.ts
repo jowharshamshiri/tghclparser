@@ -632,6 +632,190 @@ interface ScaffoldVariable {
 	defaultValue?: unknown;
 }
 
+interface AcquiredSource {
+	root: string;
+	source: string;
+	cleanup: () => Promise<void>;
+}
+
+function splitModuleSource(source: string): {repository: string; subdirectory: string; ref?: string} {
+	let value = source.trim();
+	if (value.startsWith('git::')) value = value.slice('git::'.length);
+	const queryIndex = value.indexOf('?');
+	const query = queryIndex >= 0 ? new URLSearchParams(value.slice(queryIndex + 1)) : new URLSearchParams();
+	if (queryIndex >= 0) value = value.slice(0, queryIndex);
+	let repository = value;
+	let subdirectory = '';
+	const protocolEnd = value.indexOf('://');
+	const searchStart = protocolEnd >= 0 ? protocolEnd + 3 : 0;
+	const separator = value.indexOf('//', searchStart);
+	if (separator >= 0) {
+		repository = value.slice(0, separator);
+		subdirectory = value.slice(separator + 2);
+	}
+	return {repository, subdirectory, ref: query.get('ref') || undefined};
+}
+
+function providerCommand(name: string, args: string[], workingDir: string): void {
+	const result = spawnSync(name, args, {cwd: workingDir, encoding: 'utf8', shell: false, stdio: ['ignore', 'pipe', 'pipe']});
+	if (result.error) throw new Error(`Unable to execute provider command ${name}: ${result.error.message}`);
+	if (result.status !== 0) throw new Error(`${name} ${args.join(' ')} failed: ${(result.stderr || result.stdout || `exit status ${result.status}`).trim()}`);
+}
+
+function backendConfigObject(remoteState: Record<string, unknown>): Record<string, unknown> {
+	const config = remoteState.config;
+	if (config === null || typeof config !== 'object' || Array.isArray(config)) throw new Error('remote_state.config must be an object');
+	return config as Record<string, unknown>;
+}
+
+function requiredConfigString(config: Record<string, unknown>, key: string): string {
+	const value = config[key];
+	if (typeof value !== 'string' || value.length === 0) throw new Error(`remote_state.config.${key} must be a non-empty string`);
+	return value;
+}
+
+function backendBootstrap(backend: string, config: Record<string, unknown>, workingDir: string): void {
+	if (backend === 's3') {
+		const bucket = requiredConfigString(config, 'bucket');
+		const region = typeof config.region === 'string' && config.region.length > 0 ? config.region : undefined;
+		const head = spawnSync('aws', ['s3api', 'head-bucket', '--bucket', bucket], {cwd: workingDir, encoding: 'utf8', shell: false, stdio: ['ignore', 'pipe', 'pipe']});
+		if (head.error) throw new Error(`Unable to execute provider command aws: ${head.error.message}`);
+		if (head.status !== 0) {
+			const create = ['s3api', 'create-bucket', '--bucket', bucket];
+			if (region && region !== 'us-east-1') create.push('--create-bucket-configuration', `LocationConstraint=${region}`);
+			providerCommand('aws', create, workingDir);
+		}
+		providerCommand('aws', ['s3api', 'put-bucket-versioning', '--bucket', bucket, '--versioning-configuration', 'Status=Enabled'], workingDir);
+		const table = typeof config.dynamodb_table === 'string' ? config.dynamodb_table : '';
+		if (table) {
+			const describe = spawnSync('aws', ['dynamodb', 'describe-table', '--table-name', table], {cwd: workingDir, encoding: 'utf8', shell: false, stdio: ['ignore', 'pipe', 'pipe']});
+			if (describe.error) throw new Error(`Unable to execute provider command aws: ${describe.error.message}`);
+			if (describe.status !== 0) providerCommand('aws', ['dynamodb', 'create-table', '--table-name', table, '--attribute-definitions', 'AttributeName=LockID,AttributeType=S', '--key-schema', 'AttributeName=LockID,KeyType=HASH', '--billing-mode', 'PAY_PER_REQUEST'], workingDir);
+		}
+		return;
+	}
+	if (backend === 'gcs') {
+		const bucket = requiredConfigString(config, 'bucket');
+		const describe = spawnSync('gcloud', ['storage', 'buckets', 'describe', `gs://${bucket}`], {cwd: workingDir, encoding: 'utf8', shell: false, stdio: ['ignore', 'pipe', 'pipe']});
+		if (describe.error) throw new Error(`Unable to execute provider command gcloud: ${describe.error.message}`);
+		if (describe.status !== 0) {
+			const create = ['storage', 'buckets', 'create', `gs://${bucket}`];
+			if (typeof config.location === 'string' && config.location) create.push('--location', config.location);
+			providerCommand('gcloud', create, workingDir);
+		}
+		providerCommand('gcloud', ['storage', 'buckets', 'update', `gs://${bucket}`, '--versioning'], workingDir);
+		return;
+	}
+	if (backend === 'azurerm') {
+		const account = requiredConfigString(config, 'storage_account_name');
+		const container = requiredConfigString(config, 'container_name');
+		const show = spawnSync('az', ['storage', 'container', 'show', '--account-name', account, '--name', container, '--auth-mode', 'login'], {cwd: workingDir, encoding: 'utf8', shell: false, stdio: ['ignore', 'pipe', 'pipe']});
+		if (show.error) throw new Error(`Unable to execute provider command az: ${show.error.message}`);
+		if (show.status !== 0) providerCommand('az', ['storage', 'container', 'create', '--account-name', account, '--name', container, '--auth-mode', 'login'], workingDir);
+		return;
+	}
+	throw new Error(`Unsupported remote state backend: ${backend}`);
+}
+
+function backendMigrate(backend: string, source: Record<string, unknown>, destination: Record<string, unknown>, workingDir: string): void {
+	if (backend === 's3') {
+		const sourceBucket = requiredConfigString(source, 'bucket');
+		const sourceKey = requiredConfigString(source, 'key');
+		const destinationBucket = requiredConfigString(destination, 'bucket');
+		const destinationKey = requiredConfigString(destination, 'key');
+		providerCommand('aws', ['s3api', 'copy-object', '--copy-source', `${sourceBucket}/${sourceKey}`, '--bucket', destinationBucket, '--key', destinationKey], workingDir);
+		providerCommand('aws', ['s3api', 'delete-object', '--bucket', sourceBucket, '--key', sourceKey], workingDir);
+		return;
+	}
+	if (backend === 'gcs') {
+		const sourceBucket = requiredConfigString(source, 'bucket');
+		const destinationBucket = requiredConfigString(destination, 'bucket');
+		const sourcePrefix = typeof source.prefix === 'string' ? source.prefix : 'default.tfstate';
+		const destinationPrefix = typeof destination.prefix === 'string' ? destination.prefix : 'default.tfstate';
+		providerCommand('gcloud', ['storage', 'cp', `gs://${sourceBucket}/${sourcePrefix || 'default.tfstate'}`, `gs://${destinationBucket}/${destinationPrefix || 'default.tfstate'}`], workingDir);
+		providerCommand('gcloud', ['storage', 'rm', `gs://${sourceBucket}/${sourcePrefix || 'default.tfstate'}`], workingDir);
+		return;
+	}
+	if (backend === 'azurerm') {
+		const sourceAccount = requiredConfigString(source, 'storage_account_name');
+		const sourceContainer = requiredConfigString(source, 'container_name');
+		const sourceKey = requiredConfigString(source, 'key');
+		const destinationAccount = requiredConfigString(destination, 'storage_account_name');
+		const destinationContainer = requiredConfigString(destination, 'container_name');
+		const destinationKey = requiredConfigString(destination, 'key');
+		if (sourceAccount !== destinationAccount) throw new Error('azurerm backend migration across storage accounts requires separate pull and push credentials');
+		providerCommand('az', ['storage', 'blob', 'copy', 'start', '--account-name', sourceAccount, '--destination-account-name', destinationAccount, '--source-container', sourceContainer, '--source-blob', sourceKey, '--destination-container', destinationContainer, '--destination-blob', destinationKey, '--auth-mode', 'login'], workingDir);
+		providerCommand('az', ['storage', 'blob', 'delete', '--account-name', sourceAccount, '--container-name', sourceContainer, '--name', sourceKey, '--auth-mode', 'login'], workingDir);
+		return;
+	}
+	throw new Error(`Unsupported remote state backend: ${backend}`);
+}
+
+function backendDelete(backend: string, config: Record<string, unknown>, workingDir: string): void {
+	if (backend === 's3') {
+		const bucket = requiredConfigString(config, 'bucket');
+		const key = requiredConfigString(config, 'key');
+		const table = typeof config.dynamodb_table === 'string' ? config.dynamodb_table : '';
+		if (table) {
+			const lockKey = `${bucket}/${key}-md5`;
+			providerCommand('aws', ['dynamodb', 'delete-item', '--table-name', table, '--key', `LockID={S=${lockKey}}`], workingDir);
+		}
+		providerCommand('aws', ['s3api', 'delete-object', '--bucket', bucket, '--key', key], workingDir);
+		return;
+	}
+	if (backend === 'gcs') {
+		const bucket = requiredConfigString(config, 'bucket');
+		const prefix = requiredConfigString(config, 'prefix');
+		providerCommand('gcloud', ['storage', 'rm', `gs://${bucket}/${prefix}`], workingDir);
+		return;
+	}
+	if (backend === 'azurerm') {
+		const account = requiredConfigString(config, 'storage_account_name');
+		const container = requiredConfigString(config, 'container_name');
+		const key = requiredConfigString(config, 'key');
+		providerCommand('az', ['storage', 'blob', 'delete', '--account-name', account, '--container-name', container, '--name', key, '--auth-mode', 'login'], workingDir);
+		return;
+	}
+	throw new Error(`Unsupported remote state backend: ${backend}`);
+}
+
+function isLocalSource(source: string): boolean {
+	return source.startsWith('./') || source.startsWith('../') || source.startsWith('/') || source.startsWith('file://');
+}
+
+async function acquireModuleSource(source: string, workingDir: string): Promise<AcquiredSource> {
+	const parts = splitModuleSource(source);
+	if (isLocalSource(parts.repository)) {
+		const local = parts.repository.startsWith('file://')
+			? fileURLToPath(new URL(parts.repository))
+			: path.resolve(workingDir, parts.repository);
+		const root = await fs.realpath(local);
+		const selected = parts.subdirectory ? await fs.realpath(path.resolve(root, parts.subdirectory)) : root;
+		const relative = path.relative(root, selected);
+		if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error(`Module source subdirectory escapes repository: ${source}`);
+		await fs.access(selected);
+		return {root: selected, source, cleanup: async () => {}};
+	}
+	if (!/^(https?|ssh):|^git@/i.test(parts.repository)) throw new Error(`Unsupported module source: ${source}`);
+	const temporary = await fs.mkdtemp(path.join(await fs.realpath(workingDir), '.tghclp-source-'));
+	const cloneTarget = path.join(temporary, 'repository');
+	const args = ['clone', '--depth', '1'];
+	if (parts.ref) args.push('--branch', parts.ref);
+	args.push(parts.repository, cloneTarget);
+	const result = spawnSync('git', args, {cwd: workingDir, encoding: 'utf8', shell: false, stdio: ['ignore', 'pipe', 'pipe']});
+	if (result.error || result.status !== 0) {
+		await fs.rm(temporary, {recursive: true, force: true});
+		throw new Error(`Unable to acquire module source ${source}: ${(result.stderr || result.error?.message || 'git clone failed').trim()}`);
+	}
+	const selected = parts.subdirectory ? await fs.realpath(path.resolve(cloneTarget, parts.subdirectory)) : await fs.realpath(cloneTarget);
+	const relative = path.relative(cloneTarget, selected);
+	if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+		await fs.rm(temporary, {recursive: true, force: true});
+		throw new Error(`Module source subdirectory escapes repository: ${source}`);
+	}
+	return {root: selected, source, cleanup: async () => { await fs.rm(temporary, {recursive: true, force: true}); }};
+}
+
 async function scaffoldLocal(argv: string[]): Promise<number> {
 	let workingDir = process.cwd();
 	let outputFolder = process.cwd();
@@ -664,16 +848,19 @@ async function scaffoldLocal(argv: string[]): Promise<number> {
 		if (moduleURL) throw new Error('Only one module source may be scaffolded');
 		moduleURL = argument;
 	}
-	if (!moduleURL) throw new Error('A local module source is required');
-	if (/^[a-z]+:|^git@/i.test(moduleURL)) throw new Error(`Remote scaffold sources are not available: ${moduleURL}`);
+	if (!moduleURL) throw new Error('A module source is required');
 	const root = await fs.realpath(workingDir);
-	const moduleDir = await fs.realpath(path.resolve(workingDir, moduleURL));
+	const acquired = await acquireModuleSource(moduleURL, root);
+	const moduleDir = acquired.root;
 	const relativeModule = path.relative(root, moduleDir);
-	if (relativeModule === '..' || relativeModule.startsWith(`..${path.sep}`) || path.isAbsolute(relativeModule)) throw new Error('Scaffold source must be inside the working directory');
+	if (isLocalSource(splitModuleSource(moduleURL).repository) && (relativeModule === '..' || relativeModule.startsWith(`..${path.sep}`) || path.isAbsolute(relativeModule))) {
+		await acquired.cleanup();
+		throw new Error('Scaffold source must be inside the working directory');
+	}
 	outputFolder = path.join(await fs.realpath(path.dirname(outputFolder)), path.basename(outputFolder));
 	const relativeOutput = path.relative(root, outputFolder);
 	if (relativeOutput === '..' || relativeOutput.startsWith(`..${path.sep}`) || path.isAbsolute(relativeOutput)) throw new Error('Scaffold output must be inside the working directory');
-	await fs.access(moduleDir);
+	try {
 	const files: string[] = [];
 	const walk = async (directory: string): Promise<void> => {
 		for (const entry of await fs.readdir(directory, {withFileTypes: true})) {
@@ -726,6 +913,9 @@ async function scaffoldLocal(argv: string[]): Promise<number> {
 	await fs.writeFile(target, configLines.join('\n'), 'utf8');
 	console.log(`Scaffolded ${target}`);
 	return 0;
+	} finally {
+		await acquired.cleanup();
+	}
 }
 
 async function catalogJSONL(argv: string[]): Promise<number> {
@@ -757,17 +947,18 @@ async function catalogJSONL(argv: string[]): Promise<number> {
 	const urls = (catalog as Record<string, unknown>).urls;
 	if (!Array.isArray(urls) || urls.some(url => typeof url !== 'string')) throw new Error('catalog.urls must be a list of strings');
 	for (const source of urls as string[]) {
-		if (/^[a-z]+:|^git@/i.test(source)) throw new Error(`Remote catalog sources are not available: ${source}`);
-		const catalogRoot = await fs.realpath(path.resolve(workingDir, source));
-		const root = await fs.realpath(workingDir);
-		const relative = path.relative(root, catalogRoot);
-		if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error(`Catalog source is outside the working directory: ${source}`);
-		const components = await discoverConfigs(catalogRoot, false, catalogRoot);
-		for (const component of components.filter(item => item.type === 'unit')) {
+		const acquired = await acquireModuleSource(source, workingDir);
+		try {
+			const catalogRoot = acquired.root;
+			const components = await discoverConfigs(catalogRoot, false, catalogRoot);
+			for (const component of components.filter(item => item.type === 'unit')) {
 			const componentContent = await fs.readFile(component.absPath, 'utf8');
 			const componentRendered = runtimeValueToPlain(await evaluator.evaluateRenderedConfig(component.absPath, componentContent, workingDir)) as Record<string, unknown>;
 			const terraform = componentRendered.terraform as Record<string, unknown> | undefined;
 			process.stdout.write(`${JSON.stringify({kind: 'unit', title: path.basename(component.path), description: '', source, dir: component.path, component_source: terraform?.source ?? '', copyable: true})}\n`);
+			}
+		} finally {
+			await acquired.cleanup();
 		}
 	}
 	return 0;
@@ -801,8 +992,20 @@ async function backendCommand(argv: string[]): Promise<number> {
 	}
 	if (operation === 'migrate') {
 		if (positional.length !== 2) throw new Error('backend migrate requires <src-unit> and <dst-unit>');
+		const sourceDir = path.resolve(workingDir, positional[0]);
 		const destination = path.resolve(workingDir, positional[1]);
-		return executeTerraformCommand(['--working-dir', destination, '--tf-path', tfPath, 'init', '-migrate-state', '-input=false']);
+		const sourcePath = path.join(sourceDir, 'terragrunt.hcl');
+		const destinationPath = path.join(destination, 'terragrunt.hcl');
+		const sourceContent = await fs.readFile(sourcePath, 'utf8');
+		const destinationContent = await fs.readFile(destinationPath, 'utf8');
+		const evaluator = new ConfigEvaluator({environmentVariables: process.env as Record<string, string>, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true});
+		const sourceRendered = runtimeValueToPlain(await evaluator.evaluateRenderedConfig(sourcePath, sourceContent, workingDir)) as Record<string, unknown>;
+		const destinationRendered = runtimeValueToPlain(await evaluator.evaluateRenderedConfig(destinationPath, destinationContent, workingDir)) as Record<string, unknown>;
+		const sourceState = sourceRendered.remote_state as Record<string, unknown> | undefined;
+		const destinationState = destinationRendered.remote_state as Record<string, unknown> | undefined;
+		if (!sourceState || !destinationState || typeof sourceState.backend !== 'string' || sourceState.backend !== destinationState.backend) throw new Error('backend migrate requires matching source and destination remote_state backends');
+		backendMigrate(sourceState.backend, backendConfigObject(sourceState), backendConfigObject(destinationState), workingDir);
+		return 0;
 	}
 	const configPath = path.join(workingDir, 'terragrunt.hcl');
 	const content = await fs.readFile(configPath, 'utf8');
@@ -815,14 +1018,16 @@ async function backendCommand(argv: string[]): Promise<number> {
 			console.warn('Bootstrap for local backend not implemented.');
 			return 0;
 		}
-		return executeTerraformCommand(['--working-dir', workingDir, '--tf-path', tfPath, 'init', '-input=false']);
+		backendBootstrap(remoteState.backend, backendConfigObject(remoteState), workingDir);
+		return 0;
 	}
 	if (!force) throw new Error('backend delete requires --force');
 	if (remoteState.backend === 'local') {
 		console.warn('Delete for local backend not implemented.');
 		return 0;
 	}
-	throw new Error(`backend delete for ${remoteState.backend} requires its provider API`);
+	backendDelete(remoteState.backend, backendConfigObject(remoteState), workingDir);
+	return 0;
 }
 
 async function executeTerraformCommand(argv: string[]): Promise<number> {
