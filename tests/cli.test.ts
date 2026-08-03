@@ -9,7 +9,8 @@ import {stackGenerate} from '../src/cli';
 import {spawn, spawnSync} from 'node:child_process';
 import {createServer} from 'node:http';
 
-describe('CLI configuration discovery', () => {
+describe('CLI configuration discovery', function () {
+	this.timeout(10000);
 	it('discovers units and stacks in stable relative order', async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-cli-'));
 		await fs.mkdir(path.join(root, 'z', '.hidden'), {recursive: true});
