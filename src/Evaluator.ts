@@ -778,8 +778,11 @@ export class ConfigEvaluator {
 		const map = new Map<string, RuntimeValue<ValueType>>();
 		for (const child of node.children ?? []) {
 			if (child.type === 'attribute') {
-				const key = String(child.value);
-				const valueNode = child.children?.find(c => c.type !== 'attribute_identifier');
+				const keyNode = child.children?.find(c => c.type === 'object_key');
+				const key = keyNode
+					? coerceToString(await this.evalNode(keyNode.children?.[0], scope))
+					: String(child.value);
+				const valueNode = child.children?.find(c => c.type !== 'attribute_identifier' && c.type !== 'object_key');
 				map.set(key, await this.evalNode(valueNode, scope));
 			} else if (child.type === 'inheritance') {
 				const source = await this.evalNode(child.children?.[0], scope);

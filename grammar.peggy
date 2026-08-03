@@ -176,9 +176,15 @@ RootAssignmentIdentifier
     return makeNode('root_assignment_identifier', name, location());
   }
 
-Pair = key:AttributeIdentifier _ "=" _ value:Value {
-  return makeNode('attribute', key.value, location(), [key, value]);
+Pair = key:ObjectKey _ "=" _ value:Value {
+	return makeNode('attribute', key.type === 'attribute_identifier' ? key.value : null, location(), [key, value]);
 }
+
+ObjectKey
+	= AttributeIdentifier
+	/ "(" _ key:Expression _ ")" {
+		return makeNode('object_key', null, location(), [key]);
+	}
 
 AttributeIdentifier
   = QuotedAttributeIdentifier / UnquotedAttributeIdentifier
@@ -346,10 +352,15 @@ ReferenceChain = head:ReferenceIdentifier tail:("." ReferenceIdentifier)* {
 }
 
 ReferenceIdentifier = (
+  NumericIdentifier /
   SimpleIdentifier /
   IndexIdentifier /
   QuotedIdentifier
 )
+
+NumericIdentifier = name:$([0-9]+) {
+  return makeNode('reference_identifier', name, location());
+}
 
 SimpleIdentifier = name:$([a-zA-Z_][a-zA-Z0-9_\-]*) {
   return makeNode('reference_identifier', name, location());
@@ -579,7 +590,7 @@ Boolean = val:("true" / "false") {
   return makeNode('boolean_lit', val === 'true', location()); 
 }
 
-Null = "null" { return makeNode('null_lit', null, location()); }
+Null = "null" ![a-zA-Z0-9_\-] { return makeNode('null_lit', null, location()); }
 
 Array = "[" _ items:(ArrayItem (_ "," _ ArrayItem)* (_ ",")?)? _ "]" {
   const values = items ? [items[0], ...items[1].map(item => item[3])] : [];
@@ -628,9 +639,9 @@ PipeExpression = head:ConditionalExpression tail:(_ "|>" _ FunctionCall)* {
 ListComprehension = "[" _ 
   "for" _ item:Identifier _ 
   second:("," _ Identifier)? _
-  "in" _ collection:PipeableExpression _
+  "in" _ collection:Expression _
   precondition:OptionalCondition? _
-  ":" _ expr:PipeableExpression _
+  ":" _ expr:Expression _
   postcondition:OptionalCondition? _
 "]" {
   return makeNode('list_comprehension', null, location(), [
@@ -645,10 +656,10 @@ ListComprehension = "[" _
 MapComprehension = "{" _
   "for" _ item:Identifier _ 
   second:("," _ Identifier)? _
-  "in" _ collection:PipeableExpression _
+  "in" _ collection:Expression _
   precondition:OptionalCondition? _
-  ":" _ key:PipeableExpression _
-  "=>" _ value:PipeableExpression _
+  ":" _ key:Expression _
+  "=>" _ value:Expression _
   postcondition:OptionalCondition? _
 "}" {
   return makeNode('map_comprehension', null, location(), [
