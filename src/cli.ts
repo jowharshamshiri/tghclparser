@@ -1016,6 +1016,12 @@ async function runHooks(rendered: Record<string, unknown>, hookName: 'before_hoo
 }
 
 async function main(argv: string[]): Promise<number> {
+	if (argv[0] === '--version' || argv[0] === '-v') {
+		const versionFile = path.resolve(path.dirname(process.argv[1] ?? process.cwd()), '../version.txt');
+		try { process.stdout.write(`${(await fs.readFile(versionFile, 'utf8')).trim()}\n`); }
+		catch { throw new Error('Unable to determine tghclp version'); }
+		return 0;
+	}
 	if (argv[0] === 'hcl' && (argv[1] === 'format' || argv[1] === 'fmt')) return formatHCL(argv.slice(2));
 	if (argv[0] === 'stack' && argv[1] === 'generate') return stackGenerate(argv.slice(2));
 	if (argv[0] === 'scaffold') return scaffoldLocal(argv.slice(1));
