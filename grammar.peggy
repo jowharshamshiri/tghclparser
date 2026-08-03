@@ -77,16 +77,16 @@ Statement = statement:(RootAssignment / Block) _ {
   return statement;
 }
 
-RootAssignment = _ name:RootAssignmentIdentifier _ "=" _ value:(RootValue / Boolean / StringLiteral) {
+RootAssignment = _ name:RootAssignmentIdentifier _ "=" _ value:(ComprehensionExpression / RootValue / Boolean / StringLiteral) {
   return makeNode('assignment', name.value, location(), [name, value]);
 }
 
 RootValue = val:(
   Boolean /
   Block / 
+  Expression /
   RootObject / 
   Array / 
-  Expression /
   FunctionCall / 
   TypeConstraint /
   TypeConstructor /
@@ -446,10 +446,12 @@ Heredoc = "<<" trim:"-"? marker:beginMarker newline content:heredocContent endMa
 }
 
 heredocContent = parts:(
-  (!endMarkerLine (
-    InterpolatedExpr /
-    [^\r] { return text(); }
-  ))
+    (!endMarkerLine (
+      InterpolatedExpr /
+      "$$" "{" { return text(); } /
+      "\r" { return text(); } /
+      [^\r] { return text(); }
+    ))
 )* {
   // Extract actual content from the parts array structure
   let content = parts.map(([_, part]) => {
@@ -471,7 +473,7 @@ heredocContent = parts:(
   return content;
 }
 
-beginMarker = marker:$[A-Z][A-Z0-9_]* {
+beginMarker = marker:$([A-Z][A-Z0-9_]*) {
   pushHeredocMarker(marker);
   return marker;
 }
@@ -480,15 +482,16 @@ newline = "\n" / "\r\n"
 
 whitespace = [ \t]* 
 
-endMarkerLine = 
-  newline 
+endMarkerLine =
+  &{
+    const match = input.slice(offset()).match(/^\r?\n[ \t]*([A-Z][A-Z0-9_]*)[ \t]*(?=\r?\n)/);
+    return match !== null && match[1] === peekHeredocMarker();
+  }
+  newline
   whitespace
   marker:$[A-Z][A-Z0-9_]* 
   whitespace
   &newline
-  &{
-    return marker === peekHeredocMarker();
-  }
 
 
 QuotedString = '"' chars:DoubleStringChar* '"' {
@@ -517,6 +520,7 @@ QuotedString = '"' chars:DoubleStringChar* '"' {
 }
 
 DoubleStringChar =
+  "$$" "{" { return text(); } /
   InterpolatedExpr /
   EscapedChar /
   [^"\\]
@@ -563,12 +567,7 @@ TemplateInterpolation = "${" _ expr:Expression _ "}" {
   return makeNode('interpolation', null, location(), [expr]);
 }
 
-DirectiveInterpolation = 
-  IfDirective /
-  ForDirective /
-  ElseDirective /
-  EndifDirective /
-  RawDirective
+DirectiveInterpolation = RawDirective
 
 RawDirective = "%{" body:$([^}]*) "}" {
   return makeNode('template_directive', body, location());
@@ -648,9 +647,14 @@ SimpleExpression = "${" expr:(!("}") .)* "}" {
 }
 
 Expression = 
+  ParenthesizedTernary /
   TernaryExpression /
   ComprehensionExpression /
   PipeExpression
+
+ParenthesizedTernary = "(" _ condition:LogicalExpression _ "?" _ trueExpr:PipeableExpression _ ":" _ falseExpr:PipeableExpression _ ")" {
+  return makeNode('ternary_expression', null, location(), [condition, trueExpr, falseExpr]);
+}
 
 ComprehensionExpression = 
   head:(ListComprehension / MapComprehension) tail:PostfixTail* {
@@ -673,7 +677,7 @@ PipeExpression = head:ConditionalExpression tail:(_ "|>" _ FunctionCall)* {
 ListComprehension = "[" _ 
   "for" _ item:Identifier _ 
   second:("," _ Identifier)? _
-  "in" _ collection:Expression _
+  "in" _ collection:(ParenthesizedCollection / Expression) _
   precondition:OptionalCondition? _
   ":" _ expr:Expression _
   postcondition:OptionalCondition? _
@@ -690,7 +694,7 @@ ListComprehension = "[" _
 MapComprehension = "{" _
   "for" _ item:Identifier _ 
   second:("," _ Identifier)? _
-  "in" _ collection:Expression _
+  "in" _ collection:(ParenthesizedCollection / Expression) _
   precondition:OptionalCondition? _
   ":" _ key:Expression _
   "=>" _ value:Expression _ grouping:"..."?
@@ -708,6 +712,10 @@ MapComprehension = "{" _
 
 OptionalCondition = "if" _ condition:Expression {
   return condition;
+}
+
+ParenthesizedCollection = "(" _ condition:LogicalExpression _ "?" _ trueExpr:PostfixExpression _ ":" _ falseExpr:PostfixExpression _ ")" {
+  return makeNode('ternary_expression', null, location(), [condition, trueExpr, falseExpr]);
 }
 
 ConditionalExpression =
@@ -870,7 +878,7 @@ EmptyArgs = "" {
   return [];
 }
 
-PositionalArgs = first:FunctionArg rest:(_ "," _ FunctionArg)* _ ","? {
+PositionalArgs = first:FunctionArg rest:(_ "," _ (VariadicArg / FunctionArg))* _ ","? {
   return [first, ...rest.map(r => r[3])];
 }
 
@@ -884,6 +892,10 @@ NamedArg = name:Identifier _ "=" _ value:Expression {
 
 VariadicArgs = args:Expression _ "..." {
   return [makeNode('variadic_arguments', null, location(), [args])];
+}
+
+VariadicArg = args:FunctionArg _ "..." {
+  return makeNode('variadic_arguments', null, location(), [args]);
 }
 
 FunctionArg = arg:(
