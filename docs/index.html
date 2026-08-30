@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Documentation for tghclparser, the Terragrunt HCL parser, evaluator, CLI, and language-service toolkit.">
+  <meta name="theme-color" content="#15334a">
+  <title>tghclparser documentation</title>
+  <link rel="stylesheet" href="assets/styles.css">
+  <script>
+    const savedTheme = localStorage.getItem('tghclp-theme');
+    if (savedTheme) document.documentElement.dataset.theme = savedTheme;
+  </script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to documentation</a>
+
+  <header class="site-header">
+    <div class="header-inner">
+      <button class="menu-button" type="button" aria-label="Open navigation" aria-expanded="false">☰</button>
+      <a class="brand" href="#overview" data-page-link>
+        <span class="brand-mark">tg</span>
+        <span>tghclparser</span>
+        <span class="brand-version">v1.153</span>
+      </a>
+      <nav class="top-nav" aria-label="Primary navigation">
+        <a href="#tutorial-first-parse" data-page-link>Tutorial</a>
+        <a href="#how-to-validate-ci" data-page-link>How-to guides</a>
+        <a href="#reference-cli" data-page-link>Reference</a>
+        <a href="#explanation-architecture" data-page-link>Explanation</a>
+      </nav>
+      <div class="header-actions">
+        <button class="search-button" type="button" aria-label="Search documentation"><span>Search docs</span><kbd>⌘K</kbd></button>
+        <button class="icon-button theme-button" type="button" aria-label="Use dark theme">◐</button>
+        <a class="icon-button" href="https://github.com/jowharshamshiri/tghclparser" aria-label="tghclparser on GitHub" style="display:grid;place-items:center;text-decoration:none">↗</a>
+      </div>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" aria-label="Documentation navigation">
+      <div class="sidebar-section">
+        <p class="sidebar-label">Start</p>
+        <a href="#overview" data-page-link>Overview</a>
+      </div>
+      <div class="sidebar-section">
+        <p class="sidebar-label">Tutorial</p>
+        <a href="#tutorial-first-parse" data-page-link>Parse your first config</a>
+      </div>
+      <div class="sidebar-section">
+        <p class="sidebar-label">How-to guides</p>
+        <a href="#how-to-validate-ci" data-page-link>Validate in CI</a>
+        <a href="#how-to-workspace-graph" data-page-link>Build a workspace graph</a>
+        <a href="#how-to-language-features" data-page-link>Add language features</a>
+      </div>
+      <div class="sidebar-section">
+        <p class="sidebar-label">Reference</p>
+        <a href="#reference-cli" data-page-link>Command line</a>
+        <a href="#reference-api" data-page-link>JavaScript API</a>
+        <a href="#reference-files" data-page-link>Supported files</a>
+      </div>
+      <div class="sidebar-section">
+        <p class="sidebar-label">Explanation</p>
+        <a href="#explanation-architecture" data-page-link>How the toolkit fits together</a>
+        <a href="#explanation-trust" data-page-link>Trust and evaluation</a>
+      </div>
+      <p class="sidebar-meta">Docs for <strong>1.153.1029</strong><br>MIT · Community supported</p>
+    </aside>
+
+    <main class="content" id="main">
+      <article class="doc-page hero" id="overview" data-title="Overview" data-kind="Start">
+        <div class="hero-copy">
+          <p class="eyebrow">Terragrunt language tooling</p>
+          <h1>Understand HCL before you run it.</h1>
+          <p class="lede">Parse, validate, evaluate, and navigate Terragrunt 1.x configurations from a command line or a TypeScript application.</p>
+          <div class="hero-actions">
+            <a class="button primary" href="#tutorial-first-parse">Start the tutorial →</a>
+            <a class="button" href="#reference-api">Browse the API</a>
+          </div>
+        </div>
+        <div class="terminal" aria-label="tghclparser example">
+          <div class="terminal-bar"><span class="terminal-dot"></span><span class="terminal-dot"></span><span class="terminal-dot"></span><span class="terminal-title">terragrunt.hcl</span></div>
+          <pre><code><span class="code-comment"># Parse with source-aware tokens</span>
+<span class="code-key">locals</span> {
+  region = <span class="code-value">"eu-west-1"</span>
+}
+
+<span class="code-key">dependency</span> <span class="code-value">"network"</span> {
+  config_path = <span class="code-value">"../network"</span>
+}
+
+inputs = {
+  region = local.region
+  vpc_id = dependency.network.outputs.vpc_id
+}</code></pre>
+        </div>
+
+        <section style="grid-column:1/-1">
+          <div class="feature-grid">
+            <div class="feature-card"><span class="card-kicker">Parse</span><h2>Source-aware token tree</h2><p>Keep ranges, relationships, values, and decorators for editor-grade navigation.</p></div>
+            <div class="feature-card"><span class="card-kicker">Understand</span><h2>Terragrunt-aware schema</h2><p>Recognize unit, stack, values, and autoinclude files under the current language regime.</p></div>
+            <div class="feature-card"><span class="card-kicker">Connect</span><h2>Workspace graph</h2><p>Follow includes, dependencies, reads, explicit stack components, and state outputs.</p></div>
+            <div class="feature-card"><span class="card-kicker">Assist</span><h2>Language-service providers</h2><p>Produce diagnostics, completions, hover information, and document links.</p></div>
+          </div>
+
+          <h2>Choose the path that matches your job</h2>
+          <p>The documentation separates learning, task instructions, technical facts, and background so each page does one job clearly.</p>
+          <div class="path-grid">
+            <a class="path-card" href="#tutorial-first-parse"><span class="card-kicker">Learn</span><h3>Follow a first parse</h3><p>Install the package, parse one file, inspect tokens, and read diagnostics.</p></a>
+            <a class="path-card" href="#how-to-validate-ci"><span class="card-kicker">Do</span><h3>Solve a specific task</h3><p>Add CI validation, graph a workspace, or embed editor features.</p></a>
+            <a class="path-card" href="#reference-cli"><span class="card-kicker">Look up</span><h3>Check exact details</h3><p>Find commands, options, classes, methods, types, and supported files.</p></a>
+            <a class="path-card" href="#explanation-architecture"><span class="card-kicker">Understand</span><h3>See the architecture</h3><p>Learn why syntax, schema, workspace context, and evaluation stay separate.</p></a>
+          </div>
+          <footer class="page-footer">tghclparser is community supported and is not affiliated with Gruntwork or the Terragrunt project.</footer>
+        </section>
+      </article>
+
+      <article class="doc-page" id="tutorial-first-parse" data-title="Parse your first configuration" data-kind="Tutorial">
+        <p class="eyebrow">Tutorial</p>
+        <h1 tabindex="-1">Parse your first Terragrunt configuration</h1>
+        <p class="lede">In about ten minutes, you will create a small TypeScript program that parses HCL, inspects its token tree, and prints diagnostics.</p>
+        <div class="doc-meta"><span><strong>Level</strong> Beginner</span><span><strong>Time</strong> 10 minutes</span><span><strong>Result</strong> A working parser script</span></div>
+
+        <div class="callout"><strong>Before you begin</strong><p>Use a supported Node.js release and a project where TypeScript can run. The examples use <code>tsx</code>, but any ESM-capable TypeScript runner works.</p></div>
+
+        <ol class="steps">
+          <li>
+            <h2>Create a project</h2>
+            <p>Start in an empty directory and install the parser, its TypeScript peer, and a development runner.</p>
+            <div class="code-block"><pre><code>npm init -y
+npm install tghclparser typescript
+npm install --save-dev tsx</code></pre></div>
+          </li>
+          <li>
+            <h2>Add a Terragrunt file</h2>
+            <p>Create <code>terragrunt.hcl</code>. This small configuration is valid enough to show structure and references.</p>
+            <div class="code-block"><pre><code>locals {
+  environment = "development"
+}
+
+inputs = {
+  environment = local.environment
+  replicas    = 2
+}</code></pre></div>
+          </li>
+          <li>
+            <h2>Parse the document</h2>
+            <p>Create <code>inspect.ts</code>. A document belongs to a workspace, and both use file URIs rather than plain paths.</p>
+            <div class="code-block"><pre><code>import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { ParsedDocument, Workspace } from 'tghclparser';
+
+const filePath = resolve('terragrunt.hcl');
+const uri = pathToFileURL(filePath).toString();
+const content = await readFile(filePath, 'utf8');
+
+const workspace = new Workspace();
+workspace.setWorkspaceRoot(pathToFileURL(process.cwd()).toString());
+
+const document = new ParsedDocument(workspace, uri, content);
+await workspace.addDocument(document);
+
+console.log('diagnostics:', document.getDiagnostics());
+console.log('root tokens:', document.getTokens()[0]?.children.length ?? 0);</code></pre></div>
+          </li>
+          <li>
+            <h2>Run it</h2>
+            <div class="code-block"><pre><code>npx tsx inspect.ts</code></pre></div>
+            <p>You should see an empty diagnostics array and a non-zero root-token count. You have parsed real HCL and attached it to workspace context.</p>
+          </li>
+          <li>
+            <h2>Inspect the token tree</h2>
+            <p>Add this traversal after the existing output. Each token records its type, display value, source range, parent, and children.</p>
+            <div class="code-block"><pre><code>function printToken(token, depth = 0) {
+  console.log(`${'  '.repeat(depth)}${token.type}: ${token.getDisplayText()}`);
+  for (const child of token.children) printToken(child, depth + 1);
+}
+
+for (const token of document.getTokens()) printToken(token);</code></pre></div>
+          </li>
+          <li>
+            <h2>Introduce an error</h2>
+            <p>Remove the closing brace from the <code>inputs</code> object and run the script again. The diagnostics now contain source-positioned feedback. Restore the brace when you are done.</p>
+          </li>
+        </ol>
+
+        <h2>What you learned</h2>
+        <p>You created a <code>Workspace</code>, parsed content into a <code>ParsedDocument</code>, read syntax and schema diagnostics, and traversed the token tree. Those same objects underpin completions, hovers, links, dependency graphs, and evaluation.</p>
+        <div class="next-page"><span></span><a href="#how-to-language-features">Next: Add language features →</a></div>
+      </article>
+
+      <article class="doc-page" id="how-to-validate-ci" data-title="Validate Terragrunt HCL in CI" data-kind="How-to guide">
+        <p class="eyebrow">How-to guide</p>
+        <h1 tabindex="-1">Validate Terragrunt HCL in CI</h1>
+        <p class="lede">Fail a continuous-integration job when the repository contains syntax or schema diagnostics, and preserve machine-readable results.</p>
+
+        <h2>Install and run validation</h2>
+        <p>Install <code>tghclparser</code> as a development dependency so the validator version is pinned by your lockfile.</p>
+        <div class="code-block"><pre><code>npm install --save-dev tghclparser
+npx tghclp hcl validate --working-dir ./infrastructure</code></pre></div>
+        <p>The command recursively discovers supported Terragrunt HCL files. It exits with status <code>1</code> when diagnostics exist and <code>0</code> when validation passes.</p>
+
+        <h2>Add a GitHub Actions job</h2>
+        <div class="code-block"><pre><code>name: Validate Terragrunt HCL
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx tghclp hcl validate --working-dir ./infrastructure</code></pre></div>
+
+        <h2>Capture JSON diagnostics</h2>
+        <p>Use <code>--json</code> when another tool will consume the result. Output is a JSON array only when diagnostics are present; always use the process exit status as the pass/fail signal.</p>
+        <div class="code-block"><pre><code>npx tghclp hcl validate \
+  --json \
+  --working-dir ./infrastructure \
+  &gt; diagnostics.json</code></pre></div>
+
+        <h2>List only affected configurations</h2>
+        <div class="code-block"><pre><code>npx tghclp hcl validate \
+  --show-config-path \
+  --working-dir ./infrastructure</code></pre></div>
+
+        <div class="callout"><strong>Experimental syntax</strong><p>Language features behind an experiment gate must be enabled explicitly with <code>--experiment &lt;name&gt;</code>. For example, use <code>--experiment deep-merge</code> only where that feature is intentional.</p></div>
+
+        <h2>CI checklist</h2>
+        <ul class="checklist">
+          <li>Pin the package through <code>package-lock.json</code>.</li>
+          <li>Point <code>--working-dir</code> at the repository subtree you intend to validate.</li>
+          <li>Treat the exit status—not the presence of standard output—as authoritative.</li>
+          <li>Upload JSON output as an artifact only when a later job needs it.</li>
+        </ul>
+        <div class="next-page"><a href="#tutorial-first-parse">← Tutorial</a><a href="#how-to-workspace-graph">Next: Build a graph →</a></div>
+      </article>
+
+      <article class="doc-page" id="how-to-workspace-graph" data-title="Build a workspace dependency graph" data-kind="How-to guide">
+        <p class="eyebrow">How-to guide</p>
+        <h1 tabindex="-1">Build a workspace dependency graph</h1>
+        <p class="lede">Discover the relationships between includes, dependencies, reads, and generated stack components.</p>
+
+        <h2>Print DOT from the command line</h2>
+        <p>For visualization tools such as Graphviz, generate a DOT graph directly.</p>
+        <div class="code-block"><pre><code>npx tghclp dag graph --working-dir ./infrastructure &gt; graph.dot
+dot -Tsvg graph.dot -o graph.svg</code></pre></div>
+        <p>To graph discovered configurations through <code>list</code>, enable dependency edges explicitly:</p>
+        <div class="code-block"><pre><code>npx tghclp list \
+  --format=dot \
+  --dependencies \
+  --working-dir ./infrastructure</code></pre></div>
+
+        <h2>Build the graph in TypeScript</h2>
+        <div class="code-block"><pre><code>import { pathToFileURL } from 'node:url';
+import { Workspace } from 'tghclparser';
+
+const workspace = new Workspace();
+workspace.setWorkspaceRoot(pathToFileURL('/repo/infrastructure').toString());
+
+const root = await workspace.refreshDependencyTree();
+
+await root?.breadthFirstTraversal(async (node, depth) =&gt; {
+  console.log(`${'  '.repeat(depth)}${node.type}: ${node.name}`);
+  return true;
+});</code></pre></div>
+
+        <h2>Query one configuration</h2>
+        <p>Use a file URI when asking for dependencies or dependents.</p>
+        <div class="code-block"><pre><code>const unitUri = pathToFileURL(
+  '/repo/infrastructure/app/terragrunt.hcl'
+).toString();
+
+const dependencies = await workspace.getDependencies(unitUri);
+const dependents = await workspace.getDependents(unitUri);
+
+console.log(dependencies.map((config) =&gt; config.targetPath));
+console.log(dependents.map((config) =&gt; config.targetPath));</code></pre></div>
+
+        <div class="callout"><strong>What counts as an edge?</strong><p>The graph records <code>include</code> relationships, <code>dependency</code> blocks, <code>dependencies.paths</code>, files consumed by <code>read_terragrunt_config</code>, and explicit <code>unit</code> or <code>stack</code> targets.</p></div>
+        <div class="next-page"><a href="#how-to-validate-ci">← Validate in CI</a><a href="#how-to-language-features">Next: Language features →</a></div>
+      </article>
+
+      <article class="doc-page" id="how-to-language-features" data-title="Add language features to an editor" data-kind="How-to guide">
+        <p class="eyebrow">How-to guide</p>
+        <h1 tabindex="-1">Add language features to an editor</h1>
+        <p class="lede">Turn an open Terragrunt file into diagnostics, completions, hover content, and navigable document links.</p>
+
+        <h2>Create and register a document</h2>
+        <div class="code-block"><pre><code>import { pathToFileURL } from 'node:url';
+import { ParsedDocument, Workspace } from 'tghclparser';
+
+const rootUri = pathToFileURL('/repo/infrastructure').toString();
+const fileUri = pathToFileURL('/repo/infrastructure/app/terragrunt.hcl').toString();
+
+const workspace = new Workspace();
+workspace.setWorkspaceRoot(rootUri);
+
+const document = new ParsedDocument(workspace, fileUri, sourceText);
+await workspace.addDocument(document);</code></pre></div>
+
+        <h2>Read language-service results</h2>
+        <p>Positions are zero-based LSP positions: the first line and first character are both <code>0</code>.</p>
+        <div class="code-block"><pre><code>const position = { line: 8, character: 17 };
+
+const diagnostics = document.getDiagnostics();
+const completions = await document.getCompletionsAtPosition(position);
+const hover = await document.getHoverInfo(position);
+const links = await document.getLinks();
+const token = document.findTokenAtPosition(position);</code></pre></div>
+
+        <h2>Handle edits</h2>
+        <p>Update the document content, then re-add it so the workspace rebuilds relationships owned by that document.</p>
+        <div class="code-block"><pre><code>document.setContent(updatedSourceText);
+await workspace.addDocument(document);
+
+publishDiagnostics(fileUri, document.getDiagnostics());</code></pre></div>
+
+        <h2>Handle close events</h2>
+        <div class="code-block"><pre><code>workspace.removeDocument(fileUri);</code></pre></div>
+
+        <div class="callout"><strong>Protocol types</strong><p>Diagnostics, completions, hovers, positions, and links use the types from <code>vscode-languageserver</code>. You can pass them directly through an LSP implementation or adapt them for another editor protocol.</p></div>
+        <div class="next-page"><a href="#how-to-workspace-graph">← Workspace graph</a><a href="#reference-cli">Next: CLI reference →</a></div>
+      </article>
+
+      <article class="doc-page" id="reference-cli" data-title="Command-line reference" data-kind="Reference">
+        <p class="eyebrow">Reference</p>
+        <h1 tabindex="-1">Command line</h1>
+        <p class="lede">The <code>tghclp</code> executable validates, discovers, formats, evaluates, scaffolds, and orchestrates Terragrunt configurations.</p>
+
+        <h2>Synopsis</h2>
+        <div class="code-block"><pre><code>tghclp [global options] &lt;command&gt; [options]</code></pre></div>
+        <table class="reference-table">
+          <thead><tr><th>Command</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td>hcl validate</td><td>Recursively validate supported HCL and JSON configurations.</td></tr>
+            <tr><td>hcl format</td><td>Format HCL with the selected OpenTofu or Terraform binary.</td></tr>
+            <tr><td>find, fd</td><td>Discover unit and stack configurations.</td></tr>
+            <tr><td>list, ls</td><td>List configurations as text, a tree, or DOT.</td></tr>
+            <tr><td>dag graph</td><td>Print the resolved configuration graph in DOT form.</td></tr>
+            <tr><td>render</td><td>Evaluate and print a rendered configuration as JSON.</td></tr>
+            <tr><td>info print</td><td>Print evaluation-context paths and command details.</td></tr>
+            <tr><td>run</td><td>Validate, run hooks, then invoke OpenTofu or Terraform without a shell.</td></tr>
+            <tr><td>exec</td><td>Execute an external command directly without a shell.</td></tr>
+            <tr><td>stack generate</td><td>Generate explicit stack component targets.</td></tr>
+            <tr><td>stack run</td><td>Run a command over generated stack units.</td></tr>
+            <tr><td>stack output</td><td>Collect output from generated stack units.</td></tr>
+            <tr><td>stack clean</td><td>Remove generated stack material.</td></tr>
+            <tr><td>scaffold</td><td>Create a unit configuration for a local module.</td></tr>
+            <tr><td>catalog</td><td>Print configured catalog entries as JSON Lines.</td></tr>
+            <tr><td>backend</td><td>Bootstrap, delete, or migrate backend state.</td></tr>
+          </tbody>
+        </table>
+
+        <h2>Validation options</h2>
+        <table class="reference-table">
+          <thead><tr><th>Option</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td>--working-dir &lt;path&gt;</td><td>Resolve discovery and relative paths from this directory.</td></tr>
+            <tr><td>--json</td><td>Write diagnostics as a JSON array.</td></tr>
+            <tr><td>--show-config-path</td><td>Write invalid configuration paths instead of diagnostic objects.</td></tr>
+            <tr><td>--experiment &lt;name&gt;</td><td>Enable one named experimental language feature. Repeatable.</td></tr>
+            <tr><td>--help, -h</td><td>Print help for the selected command.</td></tr>
+          </tbody>
+        </table>
+
+        <h2>Discovery options</h2>
+        <table class="reference-table">
+          <thead><tr><th>Option</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td>--format &lt;format&gt;</td><td><code>text</code> or <code>json</code> for find; <code>text</code>, <code>tree</code>, or <code>dot</code> for list.</td></tr>
+            <tr><td>--no-hidden</td><td>Exclude hidden directories during discovery.</td></tr>
+            <tr><td>--dependencies</td><td>Include dependency edges. Valid with DOT output.</td></tr>
+            <tr><td>--working-dir &lt;path&gt;</td><td>Set the discovery root.</td></tr>
+          </tbody>
+        </table>
+
+        <h2>Execution behavior</h2>
+        <p><code>run</code> and OpenTofu shortcut commands validate the selected configuration before starting the executable. Use <code>--tf-path &lt;path&gt;</code> to select a binary; the default is <code>tofu</code>, or the value of <code>TG_TF_PATH</code> / <code>TERRAGRUNT_TFPATH</code>.</p>
+        <div class="code-block"><pre><code>tghclp run --working-dir ./infrastructure/app -- plan
+tghclp plan --working-dir ./infrastructure/app
+tghclp run --tf-path terraform --working-dir ./app -- apply</code></pre></div>
+        <p>The executable is spawned without a shell. Arguments are passed directly.</p>
+        <div class="next-page"><a href="#how-to-language-features">← Language features</a><a href="#reference-api">Next: API reference →</a></div>
+      </article>
+
+      <article class="doc-page" id="reference-api" data-title="JavaScript API reference" data-kind="Reference">
+        <p class="eyebrow">Reference</p>
+        <h1 tabindex="-1">JavaScript API</h1>
+        <p class="lede">Public exports from the <code>tghclparser</code> package root. The package provides ESM, CommonJS, and TypeScript declarations.</p>
+
+        <h2>Core classes</h2>
+        <div class="signature"><h3>new ParsedDocument(workspace, uri, content)</h3><p>Parses one document immediately and exposes syntax, token, evaluation, and language-service queries.</p></div>
+        <table class="reference-table"><thead><tr><th>Method</th><th>Returns / effect</th></tr></thead><tbody>
+          <tr><td>getUri()</td><td>The document URI.</td></tr>
+          <tr><td>getContent()</td><td>The current source text.</td></tr>
+          <tr><td>setContent(content)</td><td>Replaces source text and reparses the document.</td></tr>
+          <tr><td>getAST()</td><td>The parser AST, or <code>null</code> when unavailable.</td></tr>
+          <tr><td>getTokens()</td><td>Top-level <code>Token[]</code>.</td></tr>
+          <tr><td>getDiagnostics()</td><td>LSP <code>Diagnostic[]</code>.</td></tr>
+          <tr><td>getCompletionsAtPosition(position)</td><td>A promise of LSP <code>CompletionItem[]</code>.</td></tr>
+          <tr><td>getHoverInfo(position)</td><td>A promise of LSP markup, or <code>null</code>.</td></tr>
+          <tr><td>getLinks()</td><td>A promise of LSP <code>DocumentLink[]</code>.</td></tr>
+          <tr><td>findTokenAtPosition(position)</td><td>The narrowest token at an LSP position, or <code>null</code>.</td></tr>
+          <tr><td>getAllLocals()</td><td>A map of evaluated local values.</td></tr>
+          <tr><td>getAllOutputs()</td><td>A map of outputs discovered from Terraform state.</td></tr>
+          <tr><td>evaluateValue(token, targetName?)</td><td>The evaluated runtime value, when resolvable.</td></tr>
+        </tbody></table>
+
+        <div class="signature"><h3>new Workspace()</h3><p>Owns documents and configuration relationships for a workspace root.</p></div>
+        <table class="reference-table"><thead><tr><th>Method</th><th>Returns / effect</th></tr></thead><tbody>
+          <tr><td>setWorkspaceRoot(uri)</td><td>Sets the root as a URI string.</td></tr>
+          <tr><td>addDocument(document)</td><td>Adds or updates a parsed document and its relationships.</td></tr>
+          <tr><td>removeDocument(uri)</td><td>Removes an open document.</td></tr>
+          <tr><td>findTerragruntConfigs(rootDir)</td><td>Discovers configuration paths below a filesystem directory.</td></tr>
+          <tr><td>refreshDependencyTree()</td><td>Builds and returns <code>TreeNode&lt;TerragruntConfig&gt;</code>.</td></tr>
+          <tr><td>getParsedDocument(uri)</td><td>Loads or returns a parsed document.</td></tr>
+          <tr><td>getDependencies(uri)</td><td>Returns direct dependency configurations.</td></tr>
+          <tr><td>getDependents(uri)</td><td>Returns configurations that depend on the URI.</td></tr>
+          <tr><td>getReferencingConfigs(uri)</td><td>Returns all configurations referencing the URI.</td></tr>
+          <tr><td>getConfigTreeRoot()</td><td>Returns the most recently built graph root.</td></tr>
+        </tbody></table>
+
+        <div class="signature"><h3>new ConfigEvaluator(options)</h3><p>Evaluates Terragrunt configuration values with explicit environment and trust settings.</p></div>
+        <div class="code-block"><pre><code>const evaluator = new ConfigEvaluator({
+  environmentVariables: process.env,
+  workspaceTrusted: true,
+  terraformCommand: 'plan',
+  terraformCliArgs: []
+});</code></pre></div>
+        <table class="reference-table"><thead><tr><th>Method</th><th>Returns / effect</th></tr></thead><tbody>
+          <tr><td>setWorkspaceTrusted(value)</td><td>Changes the evaluator trust state.</td></tr>
+          <tr><td>evaluateUnit(path, content, workDir)</td><td><code>{ valid, inputs, error? }</code>; evaluation errors are captured.</td></tr>
+          <tr><td>evaluateRenderedConfig(path, content, workDir)</td><td>A complete <code>RuntimeValue</code>; errors are thrown.</td></tr>
+          <tr><td>evaluateAtPosition(path, content, workDir, position)</td><td>The value of the function call at the zero-based position, if any.</td></tr>
+        </tbody></table>
+
+        <div class="signature"><h3>Schema.getInstance()</h3><p>Returns the schema singleton used for file-kind, block, attribute, and function definitions.</p></div>
+        <p>Lookup methods include <code>getFileKind</code>, <code>getRootBlockDefinitions</code>, <code>getRootAttributeDefinitions</code>, <code>getBlockDefinition</code>, <code>getAllBlockTemplates</code>, <code>getAllFunctions</code>, and <code>getFunctionDefinition</code>. Snippet helpers and value-validation methods are also public.</p>
+
+        <div class="signature"><h3>FunctionRegistry.getInstance()</h3><p>Returns the registry for named Terragrunt function implementations and serializable function operations.</p></div>
+        <p>Register implementations with <code>registerFunction</code>, operations with <code>registerOperation</code>, or a namespaced group with <code>registerFunctionGroup</code>. Duplicate names throw.</p>
+
+        <h2>Utility exports</h2>
+        <table class="reference-table"><thead><tr><th>Export</th><th>Purpose</th></tr></thead><tbody>
+          <tr><td>runtimeValueToPlain</td><td>Converts nested typed runtime values and maps to plain JavaScript values.</td></tr>
+          <tr><td>Token</td><td>A source-positioned node with type, value, children, parent, decorators, and display helpers.</td></tr>
+          <tr><td>FunctionOperation</td><td>An ops-ts operation wrapper for a named function evaluator.</td></tr>
+          <tr><td>invokeFunctionOperation</td><td>Invokes an operation with serialized arguments and live evaluation context.</td></tr>
+          <tr><td>CompletionsProvider</td><td>Computes completion items from schema and document context.</td></tr>
+          <tr><td>DiagnosticsProvider</td><td>Computes schema and reference diagnostics.</td></tr>
+          <tr><td>HoverProvider</td><td>Computes markup content at a token.</td></tr>
+          <tr><td>LinkProvider</td><td>Resolves navigable links in a document.</td></tr>
+        </tbody></table>
+
+        <h2>Primary types</h2>
+        <p><code>RuntimeValue</code> preserves an explicit value type. Objects and blocks contain <code>Map&lt;string, RuntimeValue&gt;</code>; arrays contain nested runtime values. <code>TerragruntConfig</code> records a configuration's URI, content, incoming and outgoing relationships, source and target paths, dependency type, and optional outputs.</p>
+        <div class="next-page"><a href="#reference-cli">← Command line</a><a href="#reference-files">Next: Supported files →</a></div>
+      </article>
+
+      <article class="doc-page" id="reference-files" data-title="Supported files" data-kind="Reference">
+        <p class="eyebrow">Reference</p>
+        <h1 tabindex="-1">Supported files</h1>
+        <p class="lede">File names select a schema. The parser accepts general HCL syntax, while diagnostics and completions follow the Terragrunt file kind.</p>
+
+        <table class="reference-table">
+          <thead><tr><th>File</th><th>Kind and role</th></tr></thead>
+          <tbody>
+            <tr><td>terragrunt.hcl</td><td><strong>unit</strong> — a deployable unit configuration.</td></tr>
+            <tr><td>root.hcl</td><td><strong>unit</strong> — a conventional named shared configuration.</td></tr>
+            <tr><td>*.hcl</td><td><strong>unit</strong> — named shared unit configurations use the unit schema.</td></tr>
+            <tr><td>terragrunt.stack.hcl</td><td><strong>stack</strong> — explicit <code>unit</code> and <code>stack</code> component declarations.</td></tr>
+            <tr><td>terragrunt.values.hcl</td><td><strong>values</strong> — values generated or consumed by stack components; arbitrary root attributes are allowed.</td></tr>
+            <tr><td>terragrunt.autoinclude.hcl</td><td><strong>unit-autoinclude</strong> — configuration automatically applied to matching units.</td></tr>
+            <tr><td>terragrunt.autoinclude.stack.hcl</td><td><strong>stack-autoinclude</strong> — configuration automatically applied to matching stacks.</td></tr>
+            <tr><td>terragrunt.hcl.json</td><td>JSON form of a unit configuration.</td></tr>
+            <tr><td>terragrunt.stack.hcl.json</td><td>JSON form of a stack configuration.</td></tr>
+            <tr><td>terragrunt.values.hcl.json</td><td>JSON values configuration; arbitrary object keys are accepted.</td></tr>
+          </tbody>
+        </table>
+
+        <h2>Discovery</h2>
+        <p>The CLI's <code>find</code>, <code>list</code>, and graph discovery commands look specifically for <code>terragrunt.hcl</code> and <code>terragrunt.stack.hcl</code>. Validation recognizes the broader supported filename set.</p>
+        <p>Discovery skips <code>.git</code>, <code>.scrap</code>, <code>.terraform</code>, <code>.terragrunt-cache</code>, <code>.terragrunt-stack</code>, <code>.trash</code>, and <code>node_modules</code>. With <code>--no-hidden</code>, it skips all hidden directories.</p>
+
+        <h2>Language regime</h2>
+        <p>Version 1 follows the current Terragrunt language regime. Removed or deprecated compatibility syntax is intentionally not accepted. The schema covers unit configuration, stack components, autoincludes, features, excludes, error policies, catalogs, IaC engines, CAS source controls, and Terragrunt functions.</p>
+        <div class="next-page"><a href="#reference-api">← JavaScript API</a><a href="#explanation-architecture">Next: Architecture →</a></div>
+      </article>
+
+      <article class="doc-page" id="explanation-architecture" data-title="How the toolkit fits together" data-kind="Explanation">
+        <p class="eyebrow">Explanation</p>
+        <h1 tabindex="-1">How the toolkit fits together</h1>
+        <p class="lede">tghclparser separates syntax, language knowledge, workspace context, and semantic evaluation because each answers a different question.</p>
+
+        <h2>Four layers, four questions</h2>
+        <div class="feature-grid">
+          <div class="feature-card"><span class="card-kicker">1 · Grammar</span><h2>What was written?</h2><p>The Peggy grammar turns characters into an AST while retaining exact source locations.</p></div>
+          <div class="feature-card"><span class="card-kicker">2 · Schema</span><h2>What is allowed here?</h2><p>File-kind-aware definitions describe valid blocks, attributes, functions, parameters, and value types.</p></div>
+          <div class="feature-card"><span class="card-kicker">3 · Workspace</span><h2>What does this connect to?</h2><p>Documents become a graph of includes, dependencies, reads, stacks, units, and state outputs.</p></div>
+          <div class="feature-card"><span class="card-kicker">4 · Evaluator</span><h2>What does it mean?</h2><p>Typed runtime values resolve locals, references, expressions, includes, and supported functions.</p></div>
+        </div>
+
+        <h2>Why tokens sit between syntax and features</h2>
+        <p>The raw parser AST closely follows grammar rules. A <code>ParsedDocument</code> also builds a navigable <code>Token</code> tree. Tokens normalize the shapes that completions, hovers, links, diagnostics, and reference resolution need while preserving parent/child relationships and source ranges.</p>
+        <p>This keeps editor providers from each having to reinterpret raw parser nodes. It also gives callers a stable vocabulary such as <code>block</code>, <code>attribute</code>, <code>reference</code>, <code>function_call</code>, and <code>interpolation</code>.</p>
+
+        <h2>Why a document needs a workspace</h2>
+        <p>Terragrunt configuration is rarely meaningful in isolation. An include can expose locals, a dependency can expose state outputs, a stack can declare generated component targets, and a function can read another configuration. The workspace owns that cross-file context.</p>
+        <p>A document can still report local syntax and schema diagnostics immediately. Registering it with a workspace adds the context needed for reference-aware results and graph queries.</p>
+
+        <h2>Why runtime values keep their types</h2>
+        <p>Evaluation does not collapse everything into plain JavaScript. <code>RuntimeValue&lt;T&gt;</code> carries an explicit Terragrunt value type, and nested collections contain more runtime values. This allows providers to retain type knowledge, sensitive wrappers, and origin information while computing results. Convert to plain values only at an application boundary with <code>runtimeValueToPlain</code>.</p>
+
+        <h2>Language service versus execution</h2>
+        <p>Parsing and most editor assistance are observational: they analyze text. Semantic evaluation can read workspace files and invoke selected functions. Command execution goes further by starting an OpenTofu, Terraform, or explicitly requested external program. Those capabilities are kept behind separate APIs and trust checks.</p>
+        <div class="next-page"><a href="#reference-files">← Supported files</a><a href="#explanation-trust">Next: Trust and evaluation →</a></div>
+      </article>
+
+      <article class="doc-page" id="explanation-trust" data-title="Trust and evaluation" data-kind="Explanation">
+        <p class="eyebrow">Explanation</p>
+        <h1 tabindex="-1">Trust and evaluation</h1>
+        <p class="lede">Parsing text is different from evaluating a repository. The trust boundary makes that distinction explicit.</p>
+
+        <h2>Parsing is local analysis</h2>
+        <p>Constructing a <code>ParsedDocument</code> parses its supplied string, creates tokens, and computes immediate diagnostics. It does not need permission to execute arbitrary programs.</p>
+
+        <h2>Evaluation can observe the workspace</h2>
+        <p>Terragrunt semantics include functions that read files, find parent configurations, inspect environment variables, and derive paths. Accurate evaluation therefore needs a filesystem context. <code>ConfigEvaluator</code> refuses semantic evaluation unless <code>workspaceTrusted</code> is explicitly <code>true</code>.</p>
+        <div class="callout security"><strong>Trust is a caller decision</strong><p>Set <code>workspaceTrusted: true</code> only after your application has established that the user trusts the workspace. Do not infer trust from a file extension or from successful parsing.</p></div>
+
+        <h2>Paths stay inside the workspace root</h2>
+        <p>Trusted file access resolves real paths and rejects targets outside the workspace root. Resolving real paths is important because a path that looks internal can escape through a symbolic link.</p>
+
+        <h2>Function operations separate data from capabilities</h2>
+        <p>Function evaluation uses named operations. Arguments travel through a serializable dry context; live services such as filesystem access or command execution travel through a wet context. This boundary makes capability-bearing context visible instead of smuggling it into ordinary values.</p>
+
+        <h2>The CLI does not invoke a shell</h2>
+        <p><code>run</code> and <code>exec</code> spawn the selected executable with an argument array and <code>shell: false</code>. Shell operators in an argument are not interpreted as shell syntax. This removes a common command-injection surface, although callers must still choose trusted executables and arguments.</p>
+
+        <h2>Recommended integration policy</h2>
+        <ul class="checklist">
+          <li>Allow parsing and local diagnostics before workspace trust.</li>
+          <li>Gate semantic evaluation and workspace file reads on explicit trust.</li>
+          <li>Keep the workspace root as narrow as practical.</li>
+          <li>Pass environment variables intentionally; they are part of evaluation input.</li>
+          <li>Require a separate user action before executing infrastructure commands.</li>
+        </ul>
+        <div class="next-page"><a href="#explanation-architecture">← Architecture</a><a href="#overview">Back to overview ↑</a></div>
+      </article>
+    </main>
+  </div>
+
+  <dialog class="search-dialog" aria-label="Search documentation">
+    <div class="search-input-wrap"><input id="search-input" type="search" placeholder="Search commands, APIs, and guides…" autocomplete="off" aria-label="Search query"></div>
+    <div class="search-results" aria-live="polite"></div>
+    <div class="search-help">Press Esc to close · Search matches page titles and content</div>
+  </dialog>
+
+  <script type="module" src="assets/app.js"></script>
+</body>
+</html>

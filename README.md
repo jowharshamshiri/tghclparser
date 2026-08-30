@@ -4,6 +4,8 @@ Parser and language-service toolkit for the Terragrunt 1.x HCL language. Version
 
 It powers the [Terragrunt HCL Language Server](https://marketplace.visualstudio.com/items?itemName=BahramJoharshamshiri.hcl-lsp) VS Code extension and is published as a standalone [npm package](https://www.npmjs.com/package/tghclparser).
 
+Read the [tghclparser documentation](https://jowharshamshiri.github.io/tghclparser/) for a guided tutorial, task-focused how-to guides, command and API reference, and architectural explanation.
+
 ## Supported files
 
 - `terragrunt.hcl` and named shared unit configurations such as `root.hcl`
