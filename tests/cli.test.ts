@@ -432,4 +432,64 @@ describe('CLI configuration discovery', function () {
 
 		await fs.rm(root, {recursive: true, force: true});
 	});
+
+	it('reads a dependency\'s outputs, which is how one unit uses another', async () => {
+		// `dependency.<name>.outputs.<x>` is the ordinary way a Terragrunt
+		// workspace is wired -- the step that provisions reads what the step
+		// that planned produced. The hook for it existed on the evaluator and
+		// nothing supplied it, so every such reference threw "Dependency has no
+		// evaluated outputs" and no real workspace could be run at all.
+		//
+		// Terragrunt resolves these by asking OpenTofu for the dependency's
+		// outputs, which is checked here against a unit that has actually been
+		// applied.
+		const cli = path.resolve('dist/cli.cjs');
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-dep-')));
+		await fs.mkdir(path.join(root, '.git'));
+		await fs.writeFile(path.join(root, 'terragrunt.hcl'), 'locals {\n  marker = "root"\n}\n');
+
+        // The dependency: a real unit with a real output, applied so that
+        // `tofu output` has something to return.
+		const producer = path.join(root, 'producer');
+		await fs.mkdir(producer);
+		await fs.writeFile(
+			path.join(producer, 'terragrunt.hcl'),
+			'include "root" {\n  path = find_in_parent_folders("terragrunt.hcl")\n}\n'
+		);
+		await fs.writeFile(path.join(producer, 'main.tf'), 'output "answer" {\n  value = "forty-two"\n}\n');
+		const tofu = spawnSync('tofu', ['init', '-input=false'], {cwd: producer, encoding: 'utf8'});
+		if (tofu.error) { await fs.rm(root, {recursive: true, force: true}); return; }  // no tofu here
+		spawnSync('tofu', ['apply', '-auto-approve'], {cwd: producer, encoding: 'utf8'});
+
+		const consumer = path.join(root, 'consumer');
+		await fs.mkdir(consumer);
+		const unit = [
+			'include "root" {',
+			'  path = find_in_parent_folders("terragrunt.hcl")',
+			'}',
+			'',
+			'dependency "producer" {',
+			'  config_path = "../producer"',
+			'}',
+			'',
+			'generate "seen" {',
+			'  path      = "seen.tf"',
+			'  if_exists = "overwrite_terragrunt"',
+			'  contents  = "# ${dependency.producer.outputs.answer}"',
+			'}'
+		].join('\n');
+		await fs.writeFile(path.join(consumer, 'terragrunt.hcl'), unit);
+
+		const result = spawnSync(
+			process.execPath, [cli, 'init', '--working-dir', consumer, '--tf-path', '/bin/echo'],
+			{cwd: consumer, encoding: 'utf8'}
+		);
+		const output = `${result.stdout}${result.stderr}`;
+		expect(output).to.not.contain('has no evaluated outputs');
+		// The generated file proves the value crossed the boundary, rather than
+		// the reference merely not throwing.
+		expect(await fs.readFile(path.join(consumer, 'seen.tf'), 'utf8')).to.contain('forty-two');
+
+		await fs.rm(root, {recursive: true, force: true});
+	});
 });

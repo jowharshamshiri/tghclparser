@@ -7,6 +7,8 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { ConfigEvaluator, runtimeValueToPlain } from './Evaluator';
+import { convertToRuntimeValue, makeObjectValue } from './functions/utils';
+import type { RuntimeValue, ValueType } from './model';
 import type { FunctionDefinition } from './model';
 import { ParsedDocument } from './ParsedDocument';
 import { Workspace } from './Workspace';
@@ -560,7 +562,7 @@ export async function stackGenerate(argv: string[]): Promise<number> {
 	const document = new ParsedDocument(new Workspace(), pathToFileURL(stackPath).toString(), content);
 	const ast: any = document.getAST();
 	if (!ast || document.getDiagnostics().length > 0) throw new Error(`Invalid stack configuration: ${stackPath}`);
-	const evaluator = new ConfigEvaluator({environmentVariables: process.env as Record<string, string>, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true, allowedPaths});
+	const evaluator = evaluatorFor();
 	const blocks: any[] = [];
 	const visit = (node: any): void => {
 		if (node.type === 'block' && (node.value === 'unit' || node.value === 'stack')) blocks.push(node);
@@ -695,7 +697,7 @@ async function renderConfig(argv: string[]): Promise<number> {
 		process.stdout.write(`${JSON.stringify(parsed)}\n`);
 		return 0;
 	}
-	const evaluator = new ConfigEvaluator({environmentVariables: process.env as Record<string, string>, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true, allowedPaths});
+	const evaluator = evaluatorFor();
 	const result = await evaluator.evaluateRenderedConfig(realConfig, content, root);
 	process.stdout.write(`${JSON.stringify(runtimeValueToPlain(result))}\n`);
 	return 0;
@@ -709,14 +711,124 @@ function generatedEntries(value: unknown): Array<[string, Record<string, unknown
 	});
 }
 
-async function materializeGeneratedFiles(configPath: string, content: string, workDir: string): Promise<void> {
-	const evaluator = new ConfigEvaluator({
+/**
+ * The outputs of a unit this one declares a `dependency` on.
+ *
+ * `dependency.<name>.outputs.<x>` is how one unit reads another, and it is
+ * the ordinary way a Terragrunt workspace is wired: the step that provisions
+ * reads what the step that planned produced. Without this the reference threw
+ * "Dependency has no evaluated outputs" and no configuration using one could
+ * be run at all -- the hook existed and nothing supplied it.
+ *
+ * Resolved the way terragrunt resolves it: find the named block, evaluate its
+ * `config_path`, and ask OpenTofu for that unit's outputs. A unit that has
+ * not been applied has none, and saying so names the step to run rather than
+ * failing on a missing attribute several levels deeper.
+ */
+/**
+ * The OpenTofu or Terraform binary a dependency's outputs are read with.
+ *
+ * Validation has no `--tf-path` of its own -- it is not running anything --
+ * so it follows the same environment variables terragrunt reads, and falls
+ * back to the same default.
+ */
+/**
+ * An evaluator configured the way every command needs one.
+ *
+ * The options were spelled out at eleven call sites. That is how
+ * `resolveDependency` came to be supplied at two of them and missing at the
+ * rest: a unit reading `dependency.<name>.outputs` evaluated in one command
+ * and failed in another, for no reason a reader could see.
+ */
+function evaluatorFor(options: {
+	terraformCommand?: string;
+	terraformCliArgs?: string[];
+	experiments?: string[];
+	tfPath?: string;
+} = {}): ConfigEvaluator {
+	const tfPath = options.tfPath ?? tfPathForDependencies();
+	return new ConfigEvaluator({
 		environmentVariables: process.env as Record<string, string>,
-		terraformCommand: '',
-		terraformCliArgs: [],
+		terraformCommand: options.terraformCommand ?? '',
+		terraformCliArgs: options.terraformCliArgs ?? [],
+		...(options.experiments ? {experiments: options.experiments} : {}),
 		workspaceTrusted: true,
-		allowedPaths
+		allowedPaths,
+		resolveDependency: (from, name) => dependencyOutputs(from, name, tfPath),
 	});
+}
+
+function tfPathForDependencies(): string {
+	return process.env.TG_TF_PATH ?? process.env.TERRAGRUNT_TFPATH ?? 'tofu';
+}
+
+async function dependencyOutputs(
+	configPath: string,
+	name: string,
+	tfPath: string
+): Promise<RuntimeValue<ValueType> | undefined> {
+	const content = await fs.readFile(configPath, 'utf8');
+	const ast: any = parse(content, {grammarSource: configPath, tracer: {trace() {}}});
+	let target: string | undefined;
+	const visit = async (node: any): Promise<void> => {
+		if (target) return;
+		if (node.type === 'block' && node.value === 'dependency') {
+			const label = node.children?.find((child: any) => child.type === 'parameter');
+			if (label && String(label.value) === name) {
+				const attribute = node.children?.find(
+					(child: any) => child.type === 'attribute' && child.value === 'config_path'
+				);
+				const valueNode = attribute?.children?.find((child: any) => child.type !== 'attribute_identifier');
+				if (!valueNode) throw new Error(`dependency "${name}" in ${configPath} is missing config_path`);
+				// Read as a literal, not evaluated. Evaluating an expression in
+				// this file re-enters evaluation of the whole unit -- including
+				// the `dependency.<name>.outputs` reference that called this --
+				// and the recursion surfaces as the very error it is resolving.
+				//
+				// `config_path` is a path to a sibling unit. An interpolated one
+				// is refused rather than guessed at, because a path this cannot
+				// read is a dependency it would silently fail to find.
+				const literal = String(valueNode.value ?? '');
+				if (!literal) {
+					throw new Error(
+						`dependency "${name}" in ${configPath} has a config_path this cannot read ` +
+						'without evaluating the unit it belongs to. Write it as a literal path.'
+					);
+				}
+				target = path.resolve(path.dirname(configPath), literal);
+			}
+		}
+		for (const child of node.children ?? []) await visit(child);
+	};
+	await visit(ast);
+	if (!target) return undefined;
+
+	const result = spawnSync(tfPath, ['output', '-json'], {cwd: target, encoding: 'utf8'});
+	if (result.status !== 0) {
+		throw new Error(
+			`dependency "${name}" has no outputs to read from ${target}.\n` +
+			`Apply that unit first. ${(result.stderr || '').trim().split('\n')[0]}`
+		);
+	}
+	// `output -json` gives {name: {value, type, sensitive}}; a dependency reads
+	// the values.
+	const raw = JSON.parse(result.stdout || '{}') as Record<string, {value: unknown}>;
+	const outputs = new Map<string, RuntimeValue<ValueType>>();
+	for (const [key, entry] of Object.entries(raw)) {
+		outputs.set(key, convertToRuntimeValue(entry.value));
+	}
+	return makeObjectValue(new Map([['outputs', makeObjectValue(outputs)]]));
+}
+
+async function materializeGeneratedFiles(
+	configPath: string,
+	content: string,
+	workDir: string,
+	tfPath: string
+): Promise<void> {
+	// A generate block may interpolate a dependency's outputs, so rendering one
+	// needs the same resolution running a unit does.
+	const evaluator = evaluatorFor({tfPath});
 	const rendered = runtimeValueToPlain(await evaluator.evaluateRenderedConfig(configPath, content, workDir)) as Record<string, unknown>;
 	const generate = generatedEntries(rendered.generate);
 	for (const [name, entry] of generate) {
@@ -1071,7 +1183,7 @@ async function scaffoldLocal(argv: string[]): Promise<number> {
 		}
 	};
 	await walk(moduleDir);
-	const evaluator = new ConfigEvaluator({environmentVariables: process.env as Record<string, string>, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true, allowedPaths});
+	const evaluator = evaluatorFor();
 	const discovered: ScaffoldVariable[] = [];
 	for (const file of files.sort()) {
 		const content = await fs.readFile(file, 'utf8');
@@ -1141,7 +1253,7 @@ async function catalogJSONL(argv: string[]): Promise<number> {
 	if (!experiment) throw new Error("non-interactive catalog formats require usage of the 'catalog-format' experiment");
 	const configPath = path.join(workingDir, 'terragrunt.hcl');
 	const content = await fs.readFile(configPath, 'utf8');
-	const evaluator = new ConfigEvaluator({environmentVariables: process.env as Record<string, string>, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true, allowedPaths});
+	const evaluator = evaluatorFor();
 	const rendered = runtimeValueToPlain(await evaluator.evaluateRenderedConfig(configPath, content, workingDir)) as Record<string, unknown>;
 	const catalog = rendered.catalog;
 	if (catalog === null || typeof catalog !== 'object' || Array.isArray(catalog)) throw new Error('catalog configuration is required');
@@ -1199,7 +1311,7 @@ async function backendCommand(argv: string[]): Promise<number> {
 		const destinationPath = path.join(destination, 'terragrunt.hcl');
 		const sourceContent = await fs.readFile(sourcePath, 'utf8');
 		const destinationContent = await fs.readFile(destinationPath, 'utf8');
-		const evaluator = new ConfigEvaluator({environmentVariables: process.env as Record<string, string>, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true, allowedPaths});
+		const evaluator = evaluatorFor();
 		const sourceRendered = runtimeValueToPlain(await evaluator.evaluateRenderedConfig(sourcePath, sourceContent, workingDir)) as Record<string, unknown>;
 		const destinationRendered = runtimeValueToPlain(await evaluator.evaluateRenderedConfig(destinationPath, destinationContent, workingDir)) as Record<string, unknown>;
 		const sourceState = sourceRendered.remote_state as Record<string, unknown> | undefined;
@@ -1210,7 +1322,7 @@ async function backendCommand(argv: string[]): Promise<number> {
 	}
 	const configPath = path.join(workingDir, 'terragrunt.hcl');
 	const content = await fs.readFile(configPath, 'utf8');
-	const evaluator = new ConfigEvaluator({environmentVariables: process.env as Record<string, string>, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true, allowedPaths});
+	const evaluator = evaluatorFor();
 	const rendered = runtimeValueToPlain(await evaluator.evaluateRenderedConfig(configPath, content, workingDir)) as Record<string, unknown>;
 	const remoteState = rendered.remote_state as Record<string, unknown> | undefined;
 	if (!remoteState || typeof remoteState.backend !== 'string') throw new Error('remote_state.backend is required for backend operations');
@@ -1243,7 +1355,7 @@ async function executeTerraformCommand(argv: string[]): Promise<number> {
 		for (const item of diagnostics) process.stderr.write(`${item.range.filename}: ${item.summary}: ${item.detail}\n`);
 		return 1;
 	}
-	const discovered = await dependencyOrderedFiles(configFiles, executionWorkingDir);
+	const discovered = await dependencyOrderedFiles(configFiles);
 	let selected: string[];
 	if (options.all) selected = discovered;
 	else {
@@ -1262,8 +1374,12 @@ async function executeTerraformCommand(argv: string[]): Promise<number> {
 			validateJSONShape(parsed, path.basename(configFile));
 			rendered = parsed as Record<string, unknown>;
 		} else {
-		await materializeGeneratedFiles(configFile, content, executionWorkingDir);
-			const evaluator = new ConfigEvaluator({environmentVariables: process.env as Record<string, string>, terraformCommand: options.command, terraformCliArgs: options.args, workspaceTrusted: true, allowedPaths});
+		await materializeGeneratedFiles(configFile, content, executionWorkingDir, options.tfPath);
+			const evaluator = evaluatorFor({
+				terraformCommand: options.command,
+				terraformCliArgs: options.args,
+				tfPath: options.tfPath,
+			});
 			rendered = runtimeValueToPlain(await evaluator.evaluateRenderedConfig(configFile, content, executionWorkingDir)) as Record<string, unknown>;
 		}
 		await runHooks(rendered, 'before_hook', options.command, unitDir, executionWorkingDir);
@@ -1345,13 +1461,7 @@ async function inheritedInlineFunctions(
 	content: string,
 	workDir: string
 ): Promise<Map<string, FunctionDefinition>> {
-	const evaluator = new ConfigEvaluator({
-		environmentVariables: process.env as Record<string, string>,
-		terraformCommand: '',
-		terraformCliArgs: [],
-		workspaceTrusted: true,
-		allowedPaths
-	});
+	const evaluator = evaluatorFor();
 	try {
 		return await evaluator.collectInheritedInlineFunctions(filePath, content, workDir);
 	} catch {
@@ -1380,14 +1490,12 @@ async function validateFile(filePath: string, workDir: string, experiments: stri
 	const diagnostics = document.getDiagnostics().map(item => diagnostic(filePath, content, item));
 	if (diagnostics.length > 0) return diagnostics;
 	if (path.basename(filePath) === 'terragrunt.values.hcl') return [];
-	const evaluator = new ConfigEvaluator({
-		environmentVariables: process.env as Record<string, string>,
-		terraformCommand: '',
-		terraformCliArgs: [],
-		experiments,
-		workspaceTrusted: true,
-		allowedPaths
-	});
+	// A unit that reads `dependency.<name>.outputs` cannot be evaluated without
+	// them, and validation evaluates the unit. Terragrunt resolves them here
+	// too: pointed at a workspace whose dependency was not applied it reaches
+	// into that directory and complains about what it finds there, which is
+	// only possible if it went looking.
+	const evaluator = evaluatorFor({experiments});
 	const result = await evaluator.evaluateUnit(filePath, content, workDir);
 	if (result.valid) return [];
 	return [{
@@ -1398,7 +1506,7 @@ async function validateFile(filePath: string, workDir: string, experiments: stri
 	}];
 }
 
-async function dependencyOrderedFiles(files: string[], workDir: string): Promise<string[]> {
+async function dependencyOrderedFiles(files: string[]): Promise<string[]> {
 	const byDirectory = new Map<string, string>();
 	for (const file of files) byDirectory.set(path.dirname(await fs.realpath(file)), file);
 	const dependencies = new Map<string, string[]>();
@@ -1409,19 +1517,31 @@ async function dependencyOrderedFiles(files: string[], workDir: string): Promise
 		}
 		const content = await fs.readFile(file, 'utf8');
 		const ast: any = parse(content, {grammarSource: file, tracer: {trace() {}}});
-		const evaluator = new ConfigEvaluator({environmentVariables: process.env as Record<string, string>, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true, allowedPaths});
 		const refs: string[] = [];
 		const visit = async (node: any): Promise<void> => {
 			if (node.type === 'block' && node.value === 'dependency') {
 				const attribute = node.children?.find((child: any) => child.type === 'attribute' && child.value === 'config_path');
 				const valueNode = attribute?.children?.find((child: any) => child.type !== 'attribute_identifier');
 				if (!valueNode) throw new Error(`dependency in ${file} is missing config_path`);
-				const value = await evaluator.evaluateAtPosition(file, content, workDir, offsetPosition(content, valueNode.location.start.offset));
-				if (!value || value.type !== 'string') throw new Error(`dependency config_path in ${file} must evaluate to a string`);
-				const targetDir = path.resolve(path.dirname(file), String(value.value));
-				const targetFile = byDirectory.get(await fs.realpath(targetDir));
-				if (!targetFile) throw new Error(`dependency config_path does not identify a discovered unit: ${value.value}`);
-				refs.push(targetFile);
+				// The literal, not an evaluation of it: evaluating an expression
+				// in this file re-enters evaluation of the unit, including the
+				// `dependency.<name>.outputs` reference, and deadlocks on the
+				// very thing being resolved.
+				const literal = String(valueNode.value ?? '');
+				if (!literal) throw new Error(`dependency config_path in ${file} must be a literal path`);
+				const targetDir = path.resolve(path.dirname(file), literal);
+				let resolvedDir: string;
+				try {
+					resolvedDir = await fs.realpath(targetDir);
+				} catch {
+					throw new Error(`dependency config_path in ${file} names a directory that does not exist: ${literal}`);
+				}
+				const targetFile = byDirectory.get(resolvedDir);
+				// A dependency OUTSIDE the set being run is not an error. This
+				// function orders the units of one run, and a unit that was
+				// applied earlier is read from its state rather than ordered
+				// alongside. Refusing here made every partial run impossible.
+				if (targetFile) refs.push(targetFile);
 			}
 			for (const child of node.children ?? []) await visit(child);
 		};
