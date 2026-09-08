@@ -388,7 +388,13 @@ function parseExecutionArgs(argv: string[]): ExecutionOptions & {command: string
 	}
 	const command = argv[index];
 	if (!command || command.startsWith('-')) throw new Error('A Terraform/OpenTofu command is required');
-	const args = argv.slice(index + 1).filter(argument => argument !== '--all' && argument !== '-a');
+	// Flags belonging to this tool are dropped wherever they appear, not only
+	// before the command. Scripts write `run-all apply
+	// --terragrunt-non-interactive`, so the flag lands AFTER the command, and
+	// forwarding it to OpenTofu makes it reject the whole invocation.
+	const args = argv.slice(index + 1)
+		.filter(argument => argument !== '--all' && argument !== '-a')
+		.filter(argument => !isPassthroughFlag(argument));
 	return {workingDir, tfPath, command, args, all};
 }
 
