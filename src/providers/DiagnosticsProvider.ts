@@ -1,6 +1,7 @@
 import type { Diagnostic } from 'vscode-languageserver';
 import { DiagnosticSeverity } from 'vscode-languageserver';
 
+import { readTypeConstraint, tokenToNode } from '../inline-functions';
 import type { AttributeDefinition, BlockDefinition, FunctionDefinition, Token, ValueType } from '../model';
 import type { ParsedDocument } from '../ParsedDocument';
 import type { Schema } from '../Schema';
@@ -16,15 +17,51 @@ export class DiagnosticsProvider {
 		const uri = document.getUri();
 		const rootBlocks = this.schema.getRootBlockDefinitions(uri);
 		const rootAttributes = this.schema.getRootAttributeDefinitions(uri);
+		const inlineFunctions = document.getInlineFunctions();
+
+		this.validateInlineFunctions(root, diagnostics);
 
 		for (const token of root.children) {
 			if (token.type === 'block') this.validateBlock(token, rootBlocks, diagnostics);
 			if (token.type === 'assignment') this.validateRootAttribute(token, uri, rootAttributes, diagnostics);
-			this.validateFunctions(token, diagnostics);
+			this.validateFunctions(token, inlineFunctions, diagnostics);
 		}
 
 		this.validateOccurrences(root.children.filter(token => token.type === 'block'), rootBlocks, diagnostics);
 		return diagnostics;
+	}
+
+	/**
+	 * Reports inline function definitions the evaluator would reject: a name
+	 * already taken by a built-in, a name defined twice, or a parameter carrying
+	 * a type annotation the language does not support.
+	 */
+	private validateInlineFunctions(root: Token, diagnostics: Diagnostic[]): void {
+		const seen = new Set<string>();
+		for (const token of root.children) {
+			if (token.type !== 'inline_function') continue;
+			const name = token.getDisplayText();
+
+			if (this.schema.getFunctionDefinition(name)) {
+				diagnostics.push(this.diagnostic(token, `Inline function "${name}" shadows a built-in function`));
+			} else if (seen.has(name)) {
+				diagnostics.push(this.diagnostic(token, `Inline function "${name}" is defined more than once`));
+			}
+			seen.add(name);
+
+			for (const parameter of token.children.filter(child => child.type === 'inline_param')) {
+				const typeNode = parameter.children.find(child => child.type === 'param_type')?.children[0];
+				if (!typeNode) continue;
+				try {
+					readTypeConstraint(tokenToNode(typeNode));
+				} catch (error) {
+					diagnostics.push(this.diagnostic(
+						parameter,
+						`Inline function "${name}" parameter "${parameter.getDisplayText()}": ${error instanceof Error ? error.message : String(error)}`
+					));
+				}
+			}
+		}
 	}
 
 	private validateRootAttribute(
@@ -148,14 +185,22 @@ export class DiagnosticsProvider {
 		}
 	}
 
-	private validateFunctions(token: Token, diagnostics: Diagnostic[]): void {
+	private validateFunctions(
+		token: Token,
+		inlineFunctions: Map<string, FunctionDefinition>,
+		diagnostics: Diagnostic[]
+	): void {
+		// A JavaScript body is not HCL: nothing inside it is a function call in
+		// this language, so it is not descended into.
+		if (token.type === 'js_body') return;
+
 		if (token.type === 'function_call') {
 			const name = token.getDisplayText();
-			const definition = this.schema.getFunctionDefinition(name);
+			const definition = inlineFunctions.get(name) ?? this.schema.getFunctionDefinition(name);
 			if (!definition) diagnostics.push(this.diagnostic(token, `Unknown function: ${name}`));
 			else this.validateFunctionArguments(token, definition, diagnostics);
 		}
-		for (const child of token.children) this.validateFunctions(child, diagnostics);
+		for (const child of token.children) this.validateFunctions(child, inlineFunctions, diagnostics);
 	}
 
 	private validateFunctionArguments(token: Token, definition: FunctionDefinition, diagnostics: Diagnostic[]): void {
@@ -166,7 +211,8 @@ export class DiagnosticsProvider {
 			diagnostics.push(this.diagnostic(token, `Function "${definition.name}" requires at least ${required} argument${required === 1 ? '' : 's'}`));
 		}
 		if (!variadic && arguments_.length > definition.parameters.length) {
-			diagnostics.push(this.diagnostic(token, `Function "${definition.name}" accepts at most ${definition.parameters.length} arguments`));
+			const most = definition.parameters.length;
+			diagnostics.push(this.diagnostic(token, `Function "${definition.name}" accepts at most ${most} argument${most === 1 ? '' : 's'}`));
 		}
 	}
 

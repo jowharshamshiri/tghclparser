@@ -16,6 +16,40 @@ export class HoverProvider {
 			value: content
 		};
 	}
+	/**
+	 * Documents an inline function: its synthesized signature, its parameters,
+	 * and the JavaScript body as authored, so hovering a call site shows what
+	 * the function actually does without navigating to it.
+	 */
+	private getInlineFunctionDocumentation(definition: FunctionDefinition, doc: ParsedDocument): string[] {
+		const contents: string[] = [
+			`## ${this.schema.getFunctionSignature(definition)}`,
+			'',
+			'*Inline function defined in this configuration.*',
+			''
+		];
+
+		if (definition.parameters.length > 0) {
+			contents.push('### Parameters', '');
+			for (const parameter of definition.parameters) {
+				const typeStr = parameter.types.map(type => `\`${this.formatValueType(type)}\``).join(' | ');
+				contents.push(
+					`**${parameter.name}** ${parameter.required ? '(required)' : '(optional)'}`,
+					`- *Type:* ${typeStr}${parameter.variadic ? ' (variadic)' : ''}`,
+					''
+				);
+			}
+			contents.push('---', '');
+		}
+
+		const body = doc.getInlineFunctionBody(definition.name);
+		if (body !== undefined) {
+			contents.push('### Body', '', '```javascript', body.trim(), '```');
+		}
+
+		return contents;
+	}
+
 	private getFunctionDocumentation(funcDef: FunctionDefinition): string[] {
 		const contents: string[] = [
 			`## ${funcDef.name}()`,
@@ -377,10 +411,45 @@ export class HoverProvider {
 			}
 
 			case 'function_identifier': {
+				const inlineDef = doc.getInlineFunctions().get(value);
+				if (inlineDef) {
+					contents = this.getInlineFunctionDocumentation(inlineDef, doc);
+					return this.createTrustedMarkdownContent(contents.join('\n'));
+				}
 				const funcDef = this.schema.getFunctionDefinition(value);
 				if (funcDef) {
 					contents = this.getFunctionDocumentation(funcDef);
 					return this.createTrustedMarkdownContent(contents.join('\n'));
+				}
+				break;
+			}
+
+			case 'inline_function': {
+				const definition = doc.getInlineFunctions().get(value);
+				if (definition) {
+					contents = this.getInlineFunctionDocumentation(definition, doc);
+					return this.createTrustedMarkdownContent(contents.join('\n'));
+				}
+				break;
+			}
+
+			case 'inline_param': {
+				const owner = token.parent;
+				if (owner?.type === 'inline_function') {
+					const definition = doc.getInlineFunctions().get(owner.getDisplayText());
+					const parameter = definition?.parameters.find(candidate => candidate.name === value);
+					if (parameter) {
+						contents = [
+							`# Parameter: ${parameter.name}`,
+							'',
+							parameter.description ?? '',
+							'',
+							`- **Type**: ${parameter.types.map(type => this.formatValueType(type)).join(' | ')}`,
+							`- **Required**: ${parameter.required}`,
+							...(parameter.variadic ? ['- **Variadic**: true'] : [])
+						].filter(Boolean);
+						return this.createTrustedMarkdownContent(contents.join('\n'));
+					}
 				}
 				break;
 			}

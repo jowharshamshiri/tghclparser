@@ -3,7 +3,7 @@ import * as path from 'node:path';
 
 import { URI } from 'vscode-uri';
 
-import type { FunctionContext, TerragruntConfig, Token } from './model';
+import type { FunctionContext, FunctionDefinition, TerragruntConfig, Token } from './model';
 import { createDependencyConfig, createIncludeConfig, TreeNode } from './model';
 import { ParsedDocument } from './ParsedDocument';
 import { Schema } from './Schema';
@@ -106,6 +106,12 @@ export class Workspace {
 
 			return resolvedPath;
 		}));
+
+		// Inline functions are inherited through includes, so a document's
+		// diagnostics can only settle once the configurations it includes have
+		// been parsed. Supplying them here re-runs diagnostics with calls to
+		// inherited functions resolved.
+		await this.applyInheritedInlineFunctions(doc, includePaths);
 
 		// Explicit stack components are graph edges even before `terragrunt stack generate`
 		// materializes their target files.
@@ -325,6 +331,49 @@ export class Workspace {
 		if (hasUnit) return URI.file(unitPath).toString();
 		if (hasStack) return URI.file(stackPath).toString();
 		throw new Error(`Dependency path ${resolvedPath} contains neither terragrunt.hcl nor terragrunt.stack.hcl`);
+	}
+
+	/**
+	 * Supplies a document with the inline functions it inherits through its
+	 * includes, walking the include chain transitively. Nearer declarations win,
+	 * so a definition found in a directly included configuration is not replaced
+	 * by one of the same name further up the chain. Already-visited URIs are
+	 * skipped, so a cyclic include graph terminates rather than recursing
+	 * forever.
+	 */
+	private async applyInheritedInlineFunctions(doc: ParsedDocument, includePaths: string[]): Promise<void> {
+		if (includePaths.length === 0) return;
+
+		const inherited = new Map<string, FunctionDefinition>();
+		const visited = new Set<string>([doc.getUri()]);
+		const queue = [...includePaths];
+
+		while (queue.length > 0) {
+			const includeUri = queue.shift()!;
+			if (visited.has(includeUri)) continue;
+			visited.add(includeUri);
+
+			const included = await this.getParsedDocument(includeUri);
+			if (!included) continue;
+
+			for (const [name, definition] of included.getOwnInlineFunctions()) {
+				if (!inherited.has(name)) inherited.set(name, definition);
+			}
+
+			const includedAst = included.getAST();
+			if (!includedAst) continue;
+			for (const nested of included.findIncludeBlocks(includedAst)) {
+				try {
+					queue.push(await this.resolveIncludePath(nested.path, includeUri));
+				} catch {
+					// An include this document cannot resolve is reported by the
+					// include processing that owns that document; it contributes
+					// no inherited functions here.
+				}
+			}
+		}
+
+		doc.setInheritedInlineFunctions(inherited);
 	}
 
 	public async resolveIncludePath(pathToken: Token, sourceUri: string): Promise<string> {

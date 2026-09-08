@@ -53,6 +53,7 @@ export class CompletionsProvider {
 
 		if (expression) {
 			const partial = context.beforeCursor.match(/[\w.]*$/)?.[0] ?? '';
+			completions.push(...this.inlineFunctionItems(partial, document));
 			completions.push(...this.functionItems(partial));
 			completions.push(...this.namespaceItems(partial, documentText));
 		}
@@ -247,6 +248,25 @@ export class CompletionsProvider {
 			case 'object': return `{\n\t\${${index}}\n}`;
 			default: return `\${${index}}`;
 		}
+	}
+
+	/**
+	 * Functions declared in the document being edited. They sort ahead of
+	 * built-ins because a name defined in the file at hand is the more likely
+	 * intent, and because a definition can never share a built-in's name.
+	 */
+	private inlineFunctionItems(partial: string, document: ParsedDocument): CompletionItem[] {
+		return [...document.getInlineFunctions().values()]
+			.filter(func => func.name.startsWith(partial))
+			.map(func => ({
+				label: func.name,
+				kind: CompletionItemKind.Function,
+				detail: this.schema.getFunctionSignature(func),
+				documentation: { kind: MarkupKind.Markdown, value: func.description },
+				insertText: this.schema.generateFunctionSnippet(func),
+				insertTextFormat: InsertTextFormat.Snippet,
+				sortText: `1-${func.name}`
+			}));
 	}
 
 	private functionItems(partial: string): CompletionItem[] {

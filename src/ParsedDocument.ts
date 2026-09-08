@@ -3,7 +3,8 @@ import path from 'node:path';
 import type { CompletionItem, Diagnostic, DocumentLink, MarkupContent, Position } from 'vscode-languageserver';
 import { URI } from 'vscode-uri';
 
-import type { FunctionContext, ResolvedReference, RuntimeValue, TerragruntConfig, TokenType, ValueType } from './model';
+import { readInlineFunction, synthesizeDefinition, tokenToNode } from './inline-functions';
+import type { FunctionContext, FunctionDefinition, ResolvedReference, RuntimeValue, TerragruntConfig, TokenType, ValueType } from './model';
 import { Token } from './model';
 import { parse as tg_parse, SyntaxError } from './parser';
 import type { ParserTracerEvent } from './parser';
@@ -25,6 +26,8 @@ export class ParsedDocument {
 	private diagnosticsProvider: DiagnosticsProvider;
 	private linkProvider: LinkProvider;
 	private stateManager: StateManager;
+	/** Inline functions inherited through includes; see setInheritedInlineFunctions. */
+	private inheritedInlineFunctions: Map<string, FunctionDefinition> = new Map();
 
 	private parserTracer() {
 		const maximumEvents = Math.max(100_000, this.content.length * 250);
@@ -741,12 +744,83 @@ export class ParsedDocument {
 	parseNode(node: any, parent: Token | null = null): Token {
 		const token = new Token(node.id, node.type as TokenType, node.value ?? null, node.location);
 		token.parent = parent;
+		if (node.variadic === true) token.variadic = true;
 
 		if (node.children) {
 			token.children = node.children.map((child: any) => this.parseNode(child, token));
 		}
 
 		return token;
+	}
+
+	/**
+	 * Inline functions visible to this document: those it declares, plus those
+	 * inherited from configurations it includes. Inherited definitions are
+	 * supplied by {@link setInheritedInlineFunctions}, because resolving an
+	 * include requires reading files and diagnostics are produced synchronously.
+	 * A definition in this document overrides an inherited one of the same name,
+	 * matching how child configuration overrides included configuration.
+	 */
+	public getInlineFunctions(): Map<string, FunctionDefinition> {
+		const definitions = new Map(this.inheritedInlineFunctions);
+		for (const [name, definition] of this.getOwnInlineFunctions()) definitions.set(name, definition);
+		return definitions;
+	}
+
+	/** Inline functions declared by this document itself, keyed by name. */
+	public getOwnInlineFunctions(): Map<string, FunctionDefinition> {
+		const definitions = new Map<string, FunctionDefinition>();
+		const root = this.tokens[0];
+		if (!root) return definitions;
+		for (const token of root.children) {
+			if (token.type !== 'inline_function') continue;
+			const name = token.getDisplayText();
+			if (name === '' || definitions.has(name)) continue;
+			try {
+				definitions.set(name, synthesizeDefinition(readInlineFunction(tokenToNode(token), this.uri, null)));
+			} catch {
+				// A definition the evaluator will reject (an unsupported type
+				// annotation, a missing body) contributes no metadata. The
+				// diagnostic for it is raised by validateInlineFunctions.
+			}
+		}
+		return definitions;
+	}
+
+	/**
+	 * Supplies the inline functions this document inherits through its includes,
+	 * then recomputes diagnostics so that calls to inherited functions are no
+	 * longer reported as unknown. Callers that can resolve includes — the
+	 * workspace and the command line — provide these; a document analyzed on its
+	 * own simply has none.
+	 */
+	public setInheritedInlineFunctions(definitions: Map<string, FunctionDefinition>): void {
+		this.inheritedInlineFunctions = new Map(definitions);
+		if (this.ast !== null) {
+			this.diagnostics = this.diagnosticsProvider.getDiagnostics(this);
+		}
+	}
+
+	/** True when this document includes another configuration. */
+	public hasIncludes(): boolean {
+		const root = this.tokens[0];
+		if (!root) return false;
+		return root.children.some(token => token.type === 'block' && token.getDisplayText() === 'include');
+	}
+
+	/** The JavaScript source of an inline function declared in this document. */
+	public getInlineFunctionBody(name: string): string | undefined {
+		const token = this.getInlineFunctionToken(name);
+		if (!token) return undefined;
+		const body = token.children.find(child => child.type === 'js_body');
+		return body ? String(body.value ?? '') : undefined;
+	}
+
+	/** The `inline_function` token declaring `name` in this document. */
+	public getInlineFunctionToken(name: string): Token | undefined {
+		const root = this.tokens[0];
+		if (!root) return undefined;
+		return root.children.find(token => token.type === 'inline_function' && token.getDisplayText() === name);
 	}
 
 	private parseContent() {

@@ -73,6 +73,13 @@ export type TokenType =
 	| 'map_comprehension'
 	| 'function_call'
 
+	// Inline function definitions
+	| 'inline_function'
+	| 'inline_param'
+	| 'param_type'
+	| 'param_default'
+	| 'js_body'
+
 	// Constructors
 	| 'type_constructor'
 	| 'collection_constructor'
@@ -150,6 +157,8 @@ export class Token {
 	children: Token[];
 	parent: Token | null;
 	decorators?: TokenDecorator[];
+	/** Set on inline_param tokens declared as `...rest`. */
+	variadic?: boolean;
 
 	constructor(
 		id: number,
