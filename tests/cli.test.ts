@@ -480,8 +480,12 @@ describe('CLI configuration discovery', function () {
 		].join('\n');
 		await fs.writeFile(path.join(consumer, 'terragrunt.hcl'), unit);
 
+		// A real `tofu` here, not a stub: the dependency's outputs are read by
+		// running `output -json` in its directory, so a stub that prints its
+		// arguments would leave nothing to read and the test would pass for
+		// the wrong reason.
 		const result = spawnSync(
-			process.execPath, [cli, 'init', '--working-dir', consumer, '--tf-path', '/bin/echo'],
+			process.execPath, [cli, 'init', '--working-dir', consumer],
 			{cwd: consumer, encoding: 'utf8'}
 		);
 		const output = `${result.stdout}${result.stderr}`;
@@ -489,6 +493,54 @@ describe('CLI configuration discovery', function () {
 		// The generated file proves the value crossed the boundary, rather than
 		// the reference merely not throwing.
 		expect(await fs.readFile(path.join(consumer, 'seen.tf'), 'utf8')).to.contain('forty-two');
+
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
+	it('passes the inputs block to OpenTofu, which is what inputs is for', async () => {
+		// Terragrunt evaluates `inputs` and exports each entry as TF_VAR_<name>.
+		// That is how a unit receives what its configuration computed -- a
+		// dependency's outputs, a value from a plan file. Evaluating the block
+		// and then not passing it left every variable without a default unset,
+		// so OpenTofu stopped and asked for it: "No value for required
+		// variable", on a configuration that plainly supplied one.
+		//
+		// Checked against terragrunt 0.67.1, which prints the same value.
+		const cli = path.resolve('dist/cli.cjs');
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-inputs-')));
+		await fs.mkdir(path.join(root, '.git'));
+		await fs.writeFile(path.join(root, 'terragrunt.hcl'), 'locals {\n  x = 1\n}\n');
+		const unit = path.join(root, 'unit');
+		await fs.mkdir(unit);
+		await fs.writeFile(path.join(unit, 'terragrunt.hcl'), [
+			'include "root" {',
+			'  path = find_in_parent_folders("terragrunt.hcl")',
+			'}',
+			'',
+			'inputs = {',
+			'  greeting = "hello-from-inputs"',
+			'  numbers  = [1, 2, 3]',
+			'}'
+		].join('\n'));
+		await fs.writeFile(path.join(unit, 'main.tf'), [
+			'variable "greeting" { type = string }',
+			'variable "numbers" { type = list(number) }',
+			'output "seen" { value = var.greeting }',
+			'output "count" { value = length(var.numbers) }'
+		].join('\n'));
+
+		const init = spawnSync('tofu', ['init', '-input=false'], {cwd: unit, encoding: 'utf8'});
+		if (init.error) { await fs.rm(root, {recursive: true, force: true}); return; }  // no tofu here
+
+		const result = spawnSync(
+			process.execPath, [cli, 'apply', '-auto-approve', '--working-dir', unit],
+			{cwd: unit, encoding: 'utf8'}
+		);
+		const output = `${result.stdout}${result.stderr}`;
+		expect(output).to.not.contain('No value for required variable');
+		expect(output).to.contain('hello-from-inputs');
+		// A list has to arrive as JSON, or OpenTofu rejects the type.
+		expect(output).to.contain('count = 3');
 
 		await fs.rm(root, {recursive: true, force: true});
 	});

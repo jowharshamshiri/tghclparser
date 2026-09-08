@@ -394,10 +394,51 @@ function parseExecutionArgs(argv: string[]): ExecutionOptions & {command: string
 	// before the command. Scripts write `run-all apply
 	// --terragrunt-non-interactive`, so the flag lands AFTER the command, and
 	// forwarding it to OpenTofu makes it reject the whole invocation.
-	const args = argv.slice(index + 1)
-		.filter(argument => argument !== '--all' && argument !== '-a')
-		.filter(argument => !isPassthroughFlag(argument));
+	// Flags that take a VALUE have to consume that value too, or the path is
+	// forwarded to OpenTofu as a positional argument. Terragrunt accepts its
+	// own flags on either side of the command and consumes them; forwarding
+	// them produced "Failed to parse command-line flags" from tofu on an
+	// invocation terragrunt accepts.
+	const tail = argv.slice(index + 1);
+	const args: string[] = [];
+	for (let position = 0; position < tail.length; position++) {
+		const argument = tail[position];
+		if (argument === '--all' || argument === '-a') continue;
+		if (isPassthroughFlag(argument)) continue;
+		const valued = valuedExecutionFlag(argument);
+		if (valued) {
+			// `--flag value` consumes the next argument; `--flag=value` is one.
+			if (!argument.includes('=')) position++;
+			if (valued === 'working-dir') {
+				const value = argument.includes('=') ? argument.split('=').slice(1).join('=') : tail[position];
+				if (!value) throw new Error('--working-dir requires a path');
+				workingDir = path.resolve(value);
+			} else if (valued === 'tf-path') {
+				const value = argument.includes('=') ? argument.split('=').slice(1).join('=') : tail[position];
+				if (!value) throw new Error('--tf-path requires a path');
+				tfPath = value;
+			}
+			continue;
+		}
+		args.push(argument);
+	}
 	return {workingDir, tfPath, command, args, all};
+}
+
+/**
+ * Whether an argument is one of this tool's flags that carries a value.
+ *
+ * Named rather than pattern-matched, because the answer decides whether the
+ * NEXT argument is a value to consume or a flag for OpenTofu, and guessing
+ * either way corrupts the invocation. The `--terragrunt-` spellings are
+ * accepted alongside the current ones, as everywhere else.
+ */
+function valuedExecutionFlag(argument: string): 'working-dir' | 'tf-path' | undefined {
+	const bare = argument.split('=')[0];
+	const name = bare.startsWith('--terragrunt-') ? `--${bare.slice('--terragrunt-'.length)}` : bare;
+	if (name === '--working-dir') return 'working-dir';
+	if (name === '--tf-path' || name === '--tfpath') return 'tf-path';
+	return undefined;
 }
 
 function parseFormatArgs(argv: string[]): FormatOptions | 'help' {
@@ -838,7 +879,17 @@ async function materializeGeneratedFiles(
 		if (typeof contents !== 'string') throw new Error(`generate "${name}" requires string contents`);
 		const root = await fs.realpath(workDir);
 		const target = path.resolve(path.dirname(configPath), relativePath);
-		const relative = path.relative(root, target);
+		// Both sides through realpath, or the comparison is between two
+		// spellings of the same place. On macOS /var is a symlink to
+		// /private/var, so a working directory under $TMPDIR resolved on one
+		// side and not the other, and every generated file looked like an
+		// escape from a directory it was sitting inside.
+		//
+		// The target may not exist yet -- it is what is about to be written --
+		// so its DIRECTORY is resolved and the name appended.
+		const targetDirectory = await fs.realpath(path.dirname(target));
+		const resolvedTarget = path.join(targetDirectory, path.basename(target));
+		const relative = path.relative(root, resolvedTarget);
 		if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error(`Generated file is outside the working directory: ${target}`);
 		const exists = await pathExists(target);
 		const ifExists = typeof entry.if_exists === 'string' ? entry.if_exists : 'overwrite_terragrunt';
@@ -1386,7 +1437,8 @@ async function executeTerraformCommand(argv: string[]): Promise<number> {
 		const result = spawnSync(executable, [options.command, ...options.args], {
 			cwd: unitDir,
 			stdio: 'inherit',
-			shell: false
+			shell: false,
+			env: {...process.env, ...inputVariables(rendered.inputs)}
 		});
 		if (result.error) throw new Error(`Unable to execute ${options.tfPath}: ${result.error.message}`);
 		if (result.signal) throw new Error(`${options.tfPath} terminated by ${result.signal}`);
@@ -1397,6 +1449,30 @@ async function executeTerraformCommand(argv: string[]): Promise<number> {
 		await runHooks(rendered, 'after_hook', options.command, unitDir, executionWorkingDir);
 	}
 	return 0;
+}
+
+/**
+ * The `inputs` block, as the variables OpenTofu reads.
+ *
+ * This is what `inputs` is FOR. Terragrunt evaluates the block and exports
+ * each entry as `TF_VAR_<name>`, which is how a unit receives what its
+ * configuration computed -- a dependency's outputs, a value from the plan, a
+ * path derived from the workspace. Evaluating the block and then not passing
+ * it meant every variable without a default was simply unset: OpenTofu
+ * stopped and asked for it interactively, or refused.
+ *
+ * Non-string values are JSON, which is the encoding OpenTofu expects for a
+ * `TF_VAR_` holding a list, a map or an object. A string is passed as itself:
+ * JSON would wrap it in quotes that become part of the value.
+ */
+function inputVariables(inputs: unknown): Record<string, string> {
+	if (inputs === null || typeof inputs !== 'object' || Array.isArray(inputs)) return {};
+	const variables: Record<string, string> = {};
+	for (const [name, value] of Object.entries(inputs as Record<string, unknown>)) {
+		if (value === undefined) continue;
+		variables[`TF_VAR_${name}`] = typeof value === 'string' ? value : JSON.stringify(value);
+	}
+	return variables;
 }
 
 async function collectFiles(root: string): Promise<string[]> {
