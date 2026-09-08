@@ -397,4 +397,39 @@ describe('CLI configuration discovery', function () {
 		expect(result.stdout).to.contain('Usage: tghclp');
 		await fs.rm(root, {recursive: true, force: true});
 	});
+
+	it('accepts the legacy --terragrunt- spellings of flags it honours, and no others', async () => {
+		// Terragrunt renamed these when it dropped the prefix, and scripts still
+		// pass the old names -- one deployment here has twenty-one occurrences
+		// of `--terragrunt-non-interactive`. Refusing them would make swapping
+		// the executable a rewrite of every caller.
+		//
+		// Only flags actually honoured are aliased. A legacy flag accepted and
+		// then ignored is worse than one refused: the caller believes it took
+		// effect.
+		const cli = path.resolve('dist/cli.cjs');
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-legacy-'));
+		await fs.writeFile(path.join(root, 'terragrunt.hcl'), 'locals { x = 1 }\n');
+		const run = (flag: string) => spawnSync(
+			process.execPath, [cli, 'hcl', 'validate', '--working-dir', root, flag], {encoding: 'utf8'}
+		);
+
+		for (const flag of [
+			'--non-interactive', '--terragrunt-non-interactive',
+			'--no-color', '--terragrunt-no-color',
+			'--no-tips', '--terragrunt-no-tips'
+		]) {
+			const result = run(flag);
+			expect(`${result.stdout}${result.stderr}`).to.not.contain('Unknown option', flag);
+		}
+
+		// A legacy flag with no equivalent here is still refused, rather than
+		// accepted and quietly dropped.
+		for (const flag of ['--terragrunt-download-dir', '--terragrunt-debug', '--terragrunt-nonsense']) {
+			const result = run(flag);
+			expect(`${result.stdout}${result.stderr}`).to.contain('Unknown option', flag);
+		}
+
+		await fs.rm(root, {recursive: true, force: true});
+	});
 });

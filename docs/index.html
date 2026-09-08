@@ -444,8 +444,11 @@ publishDiagnostics(fileUri, document.getDiagnostics());</code></pre></div>
           <thead><tr><th>Option</th><th>Meaning</th></tr></thead>
           <tbody>
             <tr><td>--allow-path &lt;dir&gt;</td><td>Permit configurations to read this directory, which is otherwise refused for being outside the workspace root. Repeatable.</td></tr>
+            <tr><td>--non-interactive</td><td>Accepted and ignored; nothing here prompts. Also accepted as <code>--terragrunt-non-interactive</code>.</td></tr>
+            <tr><td>--no-color, --no-tips</td><td>Accepted and ignored. Also accepted under their <code>--terragrunt-</code> spellings.</td></tr>
           </tbody>
         </table>
+        <p>Terragrunt renamed those flags when it dropped the prefix, and scripts still pass the old names, so both spellings are accepted. Only flags this honours are aliased: a legacy flag with no equivalent here — <code>--terragrunt-download-dir</code>, say — is refused rather than accepted and quietly dropped, because a caller that believes a flag took effect is worse off than one told it did not.</p>
         <p>The workspace boundary comes from this tool's other life as a language server, where a configuration is opened before anyone has vouched for it. Terragrunt has no such boundary, so a layout it accepts can be one this refuses — a deployment plan kept in a sibling checkout, for instance. Name each such directory rather than widening the root, which would have to reach an ancestor broad enough to stop being a boundary at all.</p>
         <div class="code-block"><pre><code>tghclp --allow-path /srv/plans init</code></pre></div>
 
