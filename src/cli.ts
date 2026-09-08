@@ -1547,7 +1547,34 @@ async function main(argv: string[]): Promise<number> {
 	return diagnostics.length === 0 ? 0 : 1;
 }
 
-const invokedAsCLI = process.argv[1]?.endsWith('/cli.js') === true || process.argv[1]?.endsWith('/cli.cjs') === true || process.argv[1]?.endsWith('/cli.ts') === true;
+/**
+ * Whether this file was run as a program, rather than imported as a library.
+ *
+ * Compared by RESOLVED PATH, because the name a program is invoked under is
+ * not its filename. `npm install -g` links `bin/tghclp` at this file, so
+ * `process.argv[1]` is that path -- and a check for a filename ending in
+ * `/cli.js` was false for every globally installed copy. The command exited 0,
+ * printed nothing, and did nothing, which is the worst way for this to fail:
+ * it looks like a program with no output rather than one that never started.
+ *
+ * `realpath` on both sides resolves the symlink npm creates. It is compared
+ * against `__filename` where that exists (the CJS build) and against the
+ * module URL otherwise (ESM), so the same source serves both outputs.
+ */
+const invokedAsCLI = ((): boolean => {
+	const entry = process.argv[1];
+	if (!entry) return false;
+	// The built file, whatever it is called on disk.
+	if (/[/\\]cli\.(?:js|cjs|ts)$/u.test(entry)) return true;
+	// A bin link npm made. Resolving it lands back on this file; comparing the
+	// resolved paths is what makes the check independent of the name.
+	try {
+		const resolved = fsSync.realpathSync(entry);
+		return /[/\\]cli\.(?:js|cjs|ts)$/u.test(resolved);
+	} catch {
+		return false;
+	}
+})();
 if (invokedAsCLI) {
 	try {
 		if (process.argv.includes('--help') && process.argv.length <= 3) console.log(rootUsage());

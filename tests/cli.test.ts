@@ -381,4 +381,20 @@ describe('CLI configuration discovery', function () {
 
 		await fs.rm(root, {recursive: true, force: true});
 	});
+
+	it('runs when invoked under the name npm links it as', async () => {
+		// `npm install -g` links `bin/tghclp` at dist/cli.js, so argv[1] is that
+		// bin path rather than a filename ending in `/cli.js`. A check for the
+		// filename was false for every globally installed copy: the command
+		// exited 0, printed nothing and did nothing, which reads as a program
+		// with no output rather than one that never started.
+		const cli = path.resolve('dist/cli.cjs');
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-bin-'));
+		const link = path.join(root, 'tghclp');
+		await fs.symlink(cli, link);
+		const result = spawnSync(process.execPath, [link, '--help'], {encoding: 'utf8'});
+		expect(result.status).to.equal(0, result.stderr);
+		expect(result.stdout).to.contain('Usage: tghclp');
+		await fs.rm(root, {recursive: true, force: true});
+	});
 });
