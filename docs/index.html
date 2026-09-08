@@ -21,7 +21,7 @@
       <a class="brand" href="#overview" data-page-link>
         <span class="brand-mark">tg</span>
         <span>tghclparser</span>
-        <span class="brand-version">v1.153</span>
+        <span class="brand-version">v1.157</span>
       </a>
       <nav class="top-nav" aria-label="Primary navigation">
         <a href="#tutorial-first-parse" data-page-link>Tutorial</a>
@@ -49,6 +49,7 @@
       </div>
       <div class="sidebar-section">
         <p class="sidebar-label">How-to guides</p>
+        <a href="#how-to-replace-terragrunt" data-page-link>Replace terragrunt</a>
         <a href="#how-to-validate-ci" data-page-link>Validate in CI</a>
         <a href="#how-to-workspace-graph" data-page-link>Build a workspace graph</a>
         <a href="#how-to-language-features" data-page-link>Add language features</a>
@@ -64,7 +65,7 @@
         <a href="#explanation-architecture" data-page-link>How the toolkit fits together</a>
         <a href="#explanation-trust" data-page-link>Trust and evaluation</a>
       </div>
-      <p class="sidebar-meta">Docs for <strong>1.153.1029</strong><br>MIT · Community supported</p>
+      <p class="sidebar-meta">Docs for <strong>1.157.1084</strong><br>MIT · Community supported</p>
     </aside>
 
     <main class="content" id="main">
@@ -72,7 +73,7 @@
         <div class="hero-copy">
           <p class="eyebrow">Terragrunt language tooling</p>
           <h1>Understand HCL before you run it.</h1>
-          <p class="lede">Parse, validate, evaluate, and navigate Terragrunt 1.x configurations from a command line or a TypeScript application.</p>
+          <p class="lede">A drop-in replacement for the <code>terragrunt</code> command, and the parser behind it. Run OpenTofu or Terraform through Terragrunt 1.x configurations, or parse, validate, evaluate and navigate them from a TypeScript application.</p>
           <div class="hero-actions">
             <a class="button primary" href="#tutorial-first-parse">Start the tutorial →</a>
             <a class="button" href="#reference-api">Browse the API</a>
@@ -107,7 +108,7 @@ inputs = {
           <p>The documentation separates learning, task instructions, technical facts, and background so each page does one job clearly.</p>
           <div class="path-grid">
             <a class="path-card" href="#tutorial-first-parse"><span class="card-kicker">Learn</span><h3>Follow a first parse</h3><p>Install the package, parse one file, inspect tokens, and read diagnostics.</p></a>
-            <a class="path-card" href="#how-to-validate-ci"><span class="card-kicker">Do</span><h3>Solve a specific task</h3><p>Add CI validation, graph a workspace, or embed editor features.</p></a>
+            <a class="path-card" href="#how-to-replace-terragrunt"><span class="card-kicker">Do</span><h3>Solve a specific task</h3><p>Replace terragrunt, add CI validation, graph a workspace, or embed editor features.</p></a>
             <a class="path-card" href="#reference-cli"><span class="card-kicker">Look up</span><h3>Check exact details</h3><p>Find commands, options, classes, methods, types, and supported files.</p></a>
             <a class="path-card" href="#explanation-architecture"><span class="card-kicker">Understand</span><h3>See the architecture</h3><p>Learn why syntax, schema, workspace context, and evaluation stay separate.</p></a>
           </div>
@@ -187,7 +188,46 @@ for (const token of document.getTokens()) printToken(token);</code></pre></div>
 
         <h2>What you learned</h2>
         <p>You created a <code>Workspace</code>, parsed content into a <code>ParsedDocument</code>, read syntax and schema diagnostics, and traversed the token tree. Those same objects underpin completions, hovers, links, dependency graphs, and evaluation.</p>
-        <div class="next-page"><span></span><a href="#how-to-language-features">Next: Add language features →</a></div>
+        <div class="next-page"><span></span><a href="#how-to-replace-terragrunt">Next: Replace terragrunt →</a></div>
+      </article>
+
+      <article class="doc-page" id="how-to-replace-terragrunt" data-title="Replace terragrunt with tghclp" data-kind="How-to guide">
+        <p class="eyebrow">How-to guide</p>
+        <h1 tabindex="-1">Replace terragrunt with tghclp</h1>
+        <p class="lede">Run your existing Terragrunt configurations through <code>tghclp</code> instead, without changing them.</p>
+
+        <h2>Install</h2>
+        <div class="code-block"><pre><code>npm install -g tghclparser</code></pre></div>
+        <p>The package installs one executable, <code>tghclp</code>. It needs OpenTofu or Terraform on the path, the same as terragrunt does.</p>
+
+        <h2>Substitute the command</h2>
+        <p>Configurations are unchanged. Only the executable differs.</p>
+        <div class="code-block"><pre><code><span class="code-comment"># before</span>
+terragrunt init
+terragrunt plan
+terragrunt run-all apply
+
+<span class="code-comment"># after</span>
+tghclp init
+tghclp plan
+tghclp apply --all</code></pre></div>
+        <p>Note the last line: where terragrunt spells the whole-graph run <code>run-all &lt;command&gt;</code>, this spells it <code>&lt;command&gt; --all</code>.</p>
+
+        <h2>Check a configuration before you rely on it</h2>
+        <p>Validation is a separate command, so a configuration can be checked without running anything:</p>
+        <div class="code-block"><pre><code>tghclp hcl validate --working-dir ./infrastructure</code></pre></div>
+        <p>Where a configuration reads a file outside the workspace root — a deployment plan in a sibling checkout, say — name that directory. Terragrunt has no such boundary and will not have needed this.</p>
+        <div class="code-block"><pre><code>tghclp --allow-path /srv/plans plan</code></pre></div>
+
+        <h2>Do not share a directory mid-migration</h2>
+        <p>Each tool signs the files its <code>generate</code> blocks write, and refuses to overwrite a file bearing the other's signature. That protects hand-written files, but it means a working directory already generated into by terragrunt will refuse a <code>tghclp</code> run until those files are removed:</p>
+        <div class="code-block"><pre><code>rm -f gen_*.tf gen_*.tfvars
+tghclp init</code></pre></div>
+        <p>Delete only files a <code>generate</code> block produces. Anything a person wrote is refused for the same reason and should stay.</p>
+
+        <h2>Where behaviour is established</h2>
+        <p>Compatibility is checked by running the same configuration through both executables and comparing what each produces — the generated files, the evaluated values, the refusals — rather than by reading the documentation and assuming agreement. A difference is a bug here, and worth reporting.</p>
+        <div class="next-page"><a href="#tutorial-first-parse">← Tutorial</a><a href="#how-to-validate-ci">Next: Validate in CI →</a></div>
       </article>
 
       <article class="doc-page" id="how-to-validate-ci" data-title="Validate Terragrunt HCL in CI" data-kind="How-to guide">
@@ -242,7 +282,7 @@ jobs:
           <li>Treat the exit status—not the presence of standard output—as authoritative.</li>
           <li>Upload JSON output as an artifact only when a later job needs it.</li>
         </ul>
-        <div class="next-page"><a href="#tutorial-first-parse">← Tutorial</a><a href="#how-to-workspace-graph">Next: Build a graph →</a></div>
+        <div class="next-page"><a href="#how-to-replace-terragrunt">← Replace terragrunt</a><a href="#how-to-workspace-graph">Next: Build a graph →</a></div>
       </article>
 
       <article class="doc-page" id="how-to-workspace-graph" data-title="Build a workspace dependency graph" data-kind="How-to guide">
@@ -335,10 +375,25 @@ publishDiagnostics(fileUri, document.getDiagnostics());</code></pre></div>
       <article class="doc-page" id="reference-cli" data-title="Command-line reference" data-kind="Reference">
         <p class="eyebrow">Reference</p>
         <h1 tabindex="-1">Command line</h1>
-        <p class="lede">The <code>tghclp</code> executable validates, discovers, formats, evaluates, scaffolds, and orchestrates Terragrunt configurations.</p>
+        <p class="lede">The <code>tghclp</code> executable validates, discovers, formats, evaluates, scaffolds, and orchestrates Terragrunt configurations. It is a drop-in replacement for the <code>terragrunt</code> command.</p>
 
         <h2>Synopsis</h2>
         <div class="code-block"><pre><code>tghclp [global options] &lt;command&gt; [options]</code></pre></div>
+
+        <h2>Terragrunt equivalents</h2>
+        <p>Each command below does what the <code>terragrunt</code> command beside it does. Substituting one executable for the other requires no change to a configuration.</p>
+        <table class="reference-table">
+          <thead><tr><th>tghclp</th><th>terragrunt</th></tr></thead>
+          <tbody>
+            <tr><td>tghclp init</td><td>terragrunt init</td></tr>
+            <tr><td>tghclp plan</td><td>terragrunt plan</td></tr>
+            <tr><td>tghclp apply</td><td>terragrunt apply</td></tr>
+            <tr><td>tghclp apply --all</td><td>terragrunt run-all apply</td></tr>
+            <tr><td>tghclp run -- &lt;command&gt;</td><td>terragrunt run -- &lt;command&gt;</td></tr>
+            <tr><td>tghclp hcl validate</td><td>terragrunt hcl validate</td></tr>
+            <tr><td>tghclp stack generate</td><td>terragrunt stack generate</td></tr>
+          </tbody>
+        </table>
         <table class="reference-table">
           <thead><tr><th>Command</th><th>Purpose</th></tr></thead>
           <tbody>
@@ -384,12 +439,35 @@ publishDiagnostics(fileUri, document.getDiagnostics());</code></pre></div>
           </tbody>
         </table>
 
+        <h2>Global options</h2>
+        <table class="reference-table">
+          <thead><tr><th>Option</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td>--allow-path &lt;dir&gt;</td><td>Permit configurations to read this directory, which is otherwise refused for being outside the workspace root. Repeatable.</td></tr>
+          </tbody>
+        </table>
+        <p>The workspace boundary comes from this tool's other life as a language server, where a configuration is opened before anyone has vouched for it. Terragrunt has no such boundary, so a layout it accepts can be one this refuses — a deployment plan kept in a sibling checkout, for instance. Name each such directory rather than widening the root, which would have to reach an ancestor broad enough to stop being a boundary at all.</p>
+        <div class="code-block"><pre><code>tghclp --allow-path /srv/plans init</code></pre></div>
+
         <h2>Execution behavior</h2>
         <p><code>run</code> and OpenTofu shortcut commands validate the selected configuration before starting the executable. Use <code>--tf-path &lt;path&gt;</code> to select a binary; the default is <code>tofu</code>, or the value of <code>TG_TF_PATH</code> / <code>TERRAGRUNT_TFPATH</code>.</p>
+        <table class="reference-table">
+          <thead><tr><th>Option</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td>--all, -a</td><td>Run every discovered unit in dependency order, as terragrunt's <code>run-all</code> does. Without it, a directory holding more than one unit is an error rather than a guess.</td></tr>
+            <tr><td>--working-dir &lt;path&gt;</td><td>Directory holding the configuration to run.</td></tr>
+            <tr><td>--tf-path &lt;path&gt;</td><td>The OpenTofu or Terraform executable to invoke.</td></tr>
+          </tbody>
+        </table>
         <div class="code-block"><pre><code>tghclp run --working-dir ./infrastructure/app -- plan
 tghclp plan --working-dir ./infrastructure/app
+tghclp apply --all --working-dir ./infrastructure
 tghclp run --tf-path terraform --working-dir ./app -- apply</code></pre></div>
         <p>The executable is spawned without a shell. Arguments are passed directly.</p>
+
+        <h2>Generated files</h2>
+        <p>A <code>generate</code> block writes its file with a signature line naming this tool. <code>if_exists = "overwrite_terragrunt"</code> then means what it says — overwrite a file <em>this tool</em> generated — and a file without that signature is refused rather than destroyed.</p>
+        <p>The signature is deliberately not terragrunt's own. Each tool refuses a file bearing the other's mark, so a directory generated into by one is not silently taken over by the other, and the message says which tool wrote what.</p>
         <div class="next-page"><a href="#how-to-language-features">← Language features</a><a href="#reference-api">Next: API reference →</a></div>
       </article>
 

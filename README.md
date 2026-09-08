@@ -1,8 +1,18 @@
 # Terragrunt HCL Parser
 
-Parser and language-service toolkit for the Terragrunt 1.x HCL language. Version 1 follows the current Terragrunt regime and intentionally does not accept removed or deprecated compatibility syntax.
+A **drop-in replacement for the `terragrunt` CLI**, and the parser and language-service toolkit for the Terragrunt 1.x HCL language that underpins it. Version 1 follows the current Terragrunt regime and intentionally does not accept removed or deprecated compatibility syntax.
 
-It powers the [Terragrunt HCL Language Server](https://marketplace.visualstudio.com/items?itemName=BahramJoharshamshiri.hcl-lsp) VS Code extension and is published as a standalone [npm package](https://www.npmjs.com/package/tghclparser).
+The `tghclp` command runs OpenTofu or Terraform through Terragrunt configurations — includes, dependencies, `generate` blocks, explicit stacks — in place of `terragrunt` itself:
+
+```sh
+tghclp init            # terragrunt init
+tghclp plan            # terragrunt plan
+tghclp apply --all     # terragrunt run-all apply
+```
+
+Compatibility is established by running the same configuration through both and comparing what each produces, rather than by reading the documentation and assuming agreement. Where the two disagree, that is a bug here.
+
+It also powers the [Terragrunt HCL Language Server](https://marketplace.visualstudio.com/items?itemName=BahramJoharshamshiri.hcl-lsp) VS Code extension and is published as a standalone [npm package](https://www.npmjs.com/package/tghclparser).
 
 Read the [tghclparser documentation](https://jowharshamshiri.github.io/tghclparser/) for a guided tutorial, task-focused how-to guides, command and API reference, and architectural explanation.
 

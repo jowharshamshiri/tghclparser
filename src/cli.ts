@@ -119,6 +119,8 @@ function rootUsage(): string {
 		'',
 		'OpenTofu shortcuts:',
 		'  apply destroy force-unlock import init output plan refresh show state test validate',
+		'    --all, -a         run the dependency graph rather than one unit,',
+		'                      as terragrunt\'s `run-all` does',
 		'',
 		'Global options:',
 		'  --allow-path <dir>  let configurations read this directory, which is',
