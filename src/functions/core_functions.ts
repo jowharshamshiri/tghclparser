@@ -185,7 +185,15 @@ export const coreFunctionGroup = {
             const fallback = args[1]?.type === 'string' ? String(args[1].value) : undefined;
             
 			const currentDir = context.terragruntDir ?? path.dirname(URI.parse(context.document.uri).fsPath);
-			const foundDir = await findParentWithFile(currentDir, fileToFind, context, true);
+			// PARENT folders, so the search starts one level up. Starting here
+			// matched the file doing the searching: the near-universal call is
+			// `find_in_parent_folders("terragrunt.hcl")` from a unit's own
+			// terragrunt.hcl, which resolved to itself, so the unit included
+			// itself and evaluation recursed until the process was killed.
+			// A filename unique to the parent resolved fine, which is why this
+			// survived: it only bites when the two names agree, which is the
+			// case every real configuration hits.
+			const foundDir = await findParentWithFile(currentDir, fileToFind, context, false);
                 
 			if (!foundDir) {
 				if (fallback !== undefined) {

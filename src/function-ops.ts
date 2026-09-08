@@ -62,6 +62,15 @@ function deserializeArgs(value: unknown): RuntimeValue<ValueType>[] {
 	return value.map(entry => deserializeRuntimeValue(entry as SerializedRuntimeValue));
 }
 
+/**
+ * Reads the serialized call arguments out of a function operation's dry context.
+ * Operations built with {@link FunctionOperation.inline} receive the raw
+ * contexts and use this to recover typed arguments.
+ */
+export function readArgs(dry: DryContext): RuntimeValue<ValueType>[] {
+	return deserializeArgs(dry.getRequired<unknown>(FUNCTION_ARGS_KEY));
+}
+
 export class FunctionOperation implements Op<RuntimeValue<ValueType> | undefined> {
 	private readonly opMetadata: OpMetadata;
 

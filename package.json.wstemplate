@@ -2,7 +2,7 @@
 	"name": "tghclparser",
 	"type": "module",
 	"version": "{{ project.version }}",
-	"description": "Parser for .hcl files developed to be used as a vscode language server.",
+	"description": "A drop-in replacement for the terragrunt CLI, and the HCL parser and language server behind it. Runs OpenTofu/Terraform through Terragrunt configurations — includes, dependencies, generate blocks, stacks — and matches terragrunt's own behaviour, checked against it rather than against the documentation.",
 	"author": {
 		"name": "Bahram Shamshiri",
 		"email": "jowharshamshiri@gmail.com"
@@ -16,13 +16,26 @@
 		"type": "git",
 		"url": "https://github.com/jowharshamshiri/tghclparser.git"
 	},
+	"homepage": "https://github.com/jowharshamshiri/tghclparser#readme",
+	"bugs": {
+		"url": "https://github.com/jowharshamshiri/tghclparser/issues"
+	},
 	"keywords": [
-		"vscode",
-		"language-server",
-		"parser",
-		"hcl",
+		"terragrunt",
+		"terragrunt-alternative",
+		"terragrunt-replacement",
+		"drop-in-replacement",
+		"opentofu",
 		"terraform",
-		"terragrunt"
+		"infrastructure-as-code",
+		"iac",
+		"hcl",
+		"hcl2",
+		"parser",
+		"cli",
+		"language-server",
+		"lsp",
+		"vscode"
 	],
 	"exports": {
 		".": {
@@ -75,6 +88,7 @@
 		"chai": "5.1.2",
 		"@eslint/js": "^9.39.0",
 		"eslint": "^9.39.0",
+		"globals": "^17.12.0",
 		"lint-staged": "^16.2.0",
 		"mocha": "^11.7.0",
 		"peggy": "^4.2.0",

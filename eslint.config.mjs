@@ -1,4 +1,5 @@
 import eslint from '@eslint/js'
+import globals from 'globals'
 import tseslint from 'typescript-eslint'
 
 export default tseslint.config(
@@ -23,6 +24,20 @@ export default tseslint.config(
       'no-control-regex': 'off',
       'no-empty': 'off',
       'no-useless-escape': 'off',
+    },
+  },
+  {
+    // The documentation site's script runs in a browser, not in Node, so
+    // `document`, `window` and `localStorage` are defined where it runs.
+    // Without this it was linted against Node's globals and every use of them
+    // was an error -- thirty-six of them, which failed `prepublishOnly` and so
+    // blocked publishing entirely.
+    //
+    // Declared rather than ignored: the file is real code that ships with the
+    // package's documentation, and an ignored file is one nothing checks.
+    files: ['docs/**/*.js'],
+    languageOptions: {
+      globals: globals.browser,
     },
   },
 )

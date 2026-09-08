@@ -1,6 +1,9 @@
 {
   let heredocMarkerStack = [];
   let nextId = 1;
+  // End offsets of the JavaScript bodies currently being consumed, innermost
+  // last. See InlineFunctionBody.
+  let jsBodyEndStack = [];
 
   function pushHeredocMarker(marker) {
     heredocMarkerStack.push(marker);
@@ -66,6 +69,195 @@
       seen.add(name);
     }
   }
+
+  // Scans a JavaScript function body beginning at `start`, the offset of the
+  // first character after the opening brace, and returns the offset of the last
+  // character belonging to the body — that is, one before the matching closing
+  // brace. For an empty body this is `start - 1`, so that the caller
+  // consumes nothing. Brace depth is tracked through string literals, template
+  // literals (including nested substitutions, which may themselves
+  // contain braces and strings), regular expression literals, and both comment
+  // forms, so that a brace appearing inside any of those does not terminate the
+  // body.
+  //
+  // Returns -1 when the body is unterminated, letting the caller fail the match
+  // and report a located parse error rather than silently consuming the rest of
+  // the file.
+  // Brace characters are referenced by code point throughout this scanner:
+  // Peggy delimits grammar code blocks by counting braces without regard for
+  // string literals, so a literal brace character here would truncate the
+  // block.
+  function scanJsBody(source, start) {
+    const OPEN_BRACE = 123;
+    const CLOSE_BRACE = 125;
+    const BACKTICK = 96;
+    const DOLLAR = 36;
+    const BACKSLASH = 92;
+    const SLASH = 47;
+    const STAR = 42;
+    const DOUBLE_QUOTE = 34;
+    const SINGLE_QUOTE = 39;
+    const NEWLINE = 10;
+    const RETURN = 13;
+    const OPEN_BRACKET = 91;
+    const CLOSE_BRACKET = 93;
+    const CLOSE_PAREN = 41;
+    const REGEX_PRECEDING_KEYWORDS = [
+      'return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void',
+      'throw', 'case', 'do', 'else', 'yield', 'await'
+    ];
+
+    // Tracks the nesting of substitutions inside template literals. Each
+    // entry is the brace depth at which the enclosing template resumes.
+    const templateStack = [];
+    let depth = 1;
+    let index = start;
+
+    // Scans a template literal from `position`, which is the offset just after
+    // an opening backtick or after the closing brace of a substitution.
+    // Returns the offset to resume the outer scan from, or -1 when the template
+    // is unterminated. Entering a substitution raises `depth` and records the
+    // depth at which the template resumes.
+    const scanTemplate = position => {
+      let scan = position;
+      while (scan < source.length) {
+        const code = source.charCodeAt(scan);
+        if (code === BACKSLASH) { scan += 2; continue; }
+        if (code === BACKTICK) return scan + 1;
+        if (code === DOLLAR && source.charCodeAt(scan + 1) === OPEN_BRACE) {
+          templateStack.push(depth);
+          depth += 1;
+          return scan + 2;
+        }
+        scan += 1;
+      }
+      return -1;
+    };
+
+    // Determines whether a `/` at `position` opens a regular expression literal
+    // rather than acting as a division operator, by inspecting the previous
+    // significant character.
+    const regexAllowed = position => {
+      let scan = position - 1;
+      while (scan >= start) {
+        const code = source.charCodeAt(scan);
+        if (code === 32 || code === 9 || code === NEWLINE || code === RETURN) {
+          scan -= 1;
+          continue;
+        }
+        if (code === CLOSE_PAREN || code === CLOSE_BRACKET || code === CLOSE_BRACE) return false;
+        const previous = source[scan];
+        if (/[A-Za-z0-9_$]/.test(previous)) {
+          // Keywords may be followed by a regex; identifiers and literals may not.
+          const wordEnd = scan + 1;
+          let wordStart = scan;
+          while (wordStart >= start && /[A-Za-z0-9_$]/.test(source[wordStart])) wordStart -= 1;
+          return REGEX_PRECEDING_KEYWORDS.includes(source.slice(wordStart + 1, wordEnd));
+        }
+        return true;
+      }
+      return true;
+    };
+
+    while (index < source.length) {
+      const code = source.charCodeAt(index);
+
+      if (code === BACKSLASH) {
+        index += 2;
+        continue;
+      }
+
+      if (code === SLASH && source.charCodeAt(index + 1) === SLASH) {
+        const newlineIndex = source.indexOf('\n', index);
+        if (newlineIndex === -1) return -1;
+        index = newlineIndex + 1;
+        continue;
+      }
+
+      if (code === SLASH && source.charCodeAt(index + 1) === STAR) {
+        const closeIndex = source.indexOf('*/', index + 2);
+        if (closeIndex === -1) return -1;
+        index = closeIndex + 2;
+        continue;
+      }
+
+      if (code === SLASH && regexAllowed(index)) {
+        let scan = index + 1;
+        let inClass = false;
+        let terminated = false;
+        while (scan < source.length) {
+          const inner = source.charCodeAt(scan);
+          if (inner === BACKSLASH) { scan += 2; continue; }
+          if (inner === NEWLINE || inner === RETURN) break;
+          if (inner === OPEN_BRACKET) inClass = true;
+          else if (inner === CLOSE_BRACKET) inClass = false;
+          else if (inner === SLASH && !inClass) { terminated = true; scan += 1; break; }
+          scan += 1;
+        }
+        if (terminated) {
+          // Consume trailing regex flags.
+          while (scan < source.length && /[a-z]/.test(source[scan])) scan += 1;
+          index = scan;
+          continue;
+        }
+        // Not a regex after all; treat it as a division operator.
+        index += 1;
+        continue;
+      }
+
+      if (code === DOUBLE_QUOTE || code === SINGLE_QUOTE) {
+        let scan = index + 1;
+        let terminated = false;
+        while (scan < source.length) {
+          const inner = source.charCodeAt(scan);
+          if (inner === BACKSLASH) { scan += 2; continue; }
+          if (inner === NEWLINE || inner === RETURN) break;
+          if (inner === code) { terminated = true; scan += 1; break; }
+          scan += 1;
+        }
+        if (!terminated) return -1;
+        index = scan;
+        continue;
+      }
+
+      if (code === BACKTICK) {
+        const resumed = scanTemplate(index + 1);
+        if (resumed === -1) return -1;
+        index = resumed;
+        continue;
+      }
+
+      if (code === OPEN_BRACE) {
+        depth += 1;
+        index += 1;
+        continue;
+      }
+
+      if (code === CLOSE_BRACE) {
+        depth -= 1;
+        index += 1;
+        if (templateStack.length > 0 && depth === templateStack[templateStack.length - 1]) {
+          // Closing a substitution: resume scanning the template body.
+          templateStack.pop();
+          const resumed = scanTemplate(index);
+          if (resumed === -1) return -1;
+          index = resumed;
+          continue;
+        }
+        if (depth === 0) {
+          // `index` sits just past the closing brace, so `index - 1` is the
+          // brace itself and `index - 2` is the body's last character. The
+          // caller consumes body characters while `offset() <= result`.
+          return index - 2;
+        }
+        continue;
+      }
+
+      index += 1;
+    }
+
+    return -1;
+  }
 }
 
 Start = _ statements:Statement* _ !. {
@@ -73,9 +265,99 @@ Start = _ statements:Statement* _ !. {
   return makeNode('root', null, location(), statements);
 }
 
-Statement = statement:(RootAssignment / Block) _ {
+Statement = statement:(InlineFunction / RootAssignment / Block) _ {
   return statement;
 }
+
+// A JavaScript function defined inline in a configuration:
+//
+//   function state_key(environment, component = "app") {
+//     return `${environment}/${component}/terraform.tfstate`;
+//   }
+//
+// The signature declares parameters positionally using JavaScript conventions;
+// the body is raw JavaScript captured verbatim so that it can be compiled and
+// so that runtime errors map back to their original source positions.
+InlineFunction =
+  _ "function" ![a-zA-Z0-9_\-] _ name:Identifier _
+  "(" _ params:InlineFunctionParams? _ ")" _
+  body:InlineFunctionBody {
+    const parameters = params || [];
+    const seen = new Set();
+    let seenOptional = false;
+    let seenVariadic = false;
+    for (const parameter of parameters) {
+      // Must match TG_BINDING_NAME in Evaluator.ts: a parameter of that name
+      // would shadow the configuration binding and silently discard the
+      // caller's argument.
+      if (parameter.value === 'tg') {
+        throw new Error(
+          `Parameter "tg" in function "${name}" collides with the configuration binding of the same name`
+        );
+      }
+      if (seen.has(parameter.value)) {
+        throw new Error(`Duplicate parameter "${parameter.value}" in function "${name}"`);
+      }
+      seen.add(parameter.value);
+      if (seenVariadic) {
+        throw new Error(`Parameter "${parameter.value}" in function "${name}" follows a variadic parameter`);
+      }
+      const isVariadic = parameter.variadic === true;
+      const hasDefault = (parameter.children || []).some(child => child.type === 'param_default');
+      if (isVariadic) {
+        if (hasDefault) {
+          throw new Error(`Variadic parameter "${parameter.value}" in function "${name}" cannot have a default`);
+        }
+        seenVariadic = true;
+        continue;
+      }
+      if (hasDefault) seenOptional = true;
+      else if (seenOptional) {
+        throw new Error(`Required parameter "${parameter.value}" in function "${name}" follows an optional parameter`);
+      }
+    }
+    return makeNode('inline_function', name, location(), [...parameters, body]);
+  }
+
+InlineFunctionParams = first:InlineFunctionParam rest:(_ "," _ InlineFunctionParam)* (_ ",")? {
+  return [first, ...rest.map(entry => entry[3])];
+}
+
+InlineFunctionParam =
+  variadic:"..."? _ name:Identifier _
+  type:(":" _ TypeConstraint)? _
+  def:("=" _ Expression)? {
+    const node = makeNode('inline_param', name, location(), [
+      ...(type ? [makeNode('param_type', null, location(), [type[2]])] : []),
+      ...(def ? [makeNode('param_default', null, location(), [def[2]])] : [])
+    ]);
+    node.variadic = variadic === '...';
+    return node;
+  }
+
+// Captures the JavaScript body between its outermost braces.
+//
+// PEG rules consume input only by matching, so the body is consumed one
+// character at a time by `InlineFunctionBodyChar`, which uses a predicate to
+// stop exactly at the matching close brace located by `scanJsBody`. The scan
+// runs once per body: the opening brace records the end offset on
+// `jsBodyEndStack`, and the closing brace pops it. The stack accommodates a
+// nested `function` definition appearing inside a JavaScript body — the inner
+// body pushes and pops its own entry without disturbing the outer one.
+InlineFunctionBody =
+  "{" &{
+    const end = scanJsBody(input, offset());
+    if (end === -1) return false;
+    jsBodyEndStack.push(end);
+    return true;
+  }
+  body:$(InlineFunctionBodyChar*)
+  "}" {
+    jsBodyEndStack.pop();
+    return makeNode('js_body', body, location());
+  }
+
+InlineFunctionBodyChar = !{ return offset() > jsBodyEndStack[jsBodyEndStack.length - 1]; } .
 
 RootAssignment = _ name:RootAssignmentIdentifier _ "=" _ value:(ComprehensionExpression / RootValue / Boolean / StringLiteral) {
   return makeNode('assignment', name.value, location(), [name, value]);
@@ -448,8 +730,9 @@ Heredoc = "<<" trim:"-"? marker:beginMarker newline content:heredocContent endMa
 heredocContent = parts:(
     (!endMarkerLine (
       InterpolatedExpr /
-      "$$" "{" { return text(); } /
-      "\r" { return text(); } /
+      "$$" "{" { return "\x24" + String.fromCharCode(123); } /
+      "%%" "{" { return "%" + String.fromCharCode(123); } /
+          "\r" { return text(); } /
       [^\r] { return text(); }
     ))
 )* {
@@ -520,7 +803,8 @@ QuotedString = '"' chars:DoubleStringChar* '"' {
 }
 
 DoubleStringChar =
-  "$$" "{" { return text(); } /
+  "$$" "{" { return "\x24" + String.fromCharCode(123); } /
+  "%%" "{" { return "%" + String.fromCharCode(123); } /
   InterpolatedExpr /
   EscapedChar /
   [^"\\]
