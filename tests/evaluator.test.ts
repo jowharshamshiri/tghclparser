@@ -337,4 +337,50 @@ describe('semantic configuration evaluation', () => {
 		assert.match(String(plain.value), /a = \$\{foo\.bar\}/u, 'the interpolation escape is reduced in a heredoc');
 		assert.match(String(plain.value), /b = %\{if y\}/u, 'and so is the directive escape');
 	});
+
+	it('resolves file() against the declaring file, not the including unit', async () => {
+		// Two directories that answer different questions, and terragrunt keeps
+		// them apart: `file("x.yml")` written in a root config resolves next to
+		// THAT file, while `get_terragrunt_dir()` reports the unit being
+		// rendered. Rendering an inherited generate block with both pointed at
+		// the unit made the same relative path name a different file, silently
+		// -- the kind of divergence that makes this unusable as a drop-in.
+		//
+		// Checked against terragrunt 0.67.1, which reads the root-relative file
+		// and still reports the unit's own directory.
+		const os = await import('node:os');
+		const fs = await import('node:fs/promises');
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-filedir-')));
+		try {
+			await fs.mkdir(path.join(root, '.git'));
+			await fs.writeFile(path.join(root, 'beside.yml'), 'value: "FROM-ROOT-DIR"\n');
+			await fs.writeFile(path.join(root, 'terragrunt.hcl'), [
+				'generate "g" {',
+				'  path      = "out.tf"',
+				'  if_exists = "overwrite_terragrunt"',
+				'  contents  = "${yamldecode(file("beside.yml")).value}|${basename(get_terragrunt_dir())}"',
+				'}'
+			].join('\n'));
+			const unitDir = path.join(root, 'unit');
+			await fs.mkdir(unitDir);
+			// A DIFFERENT file of the same name beside the unit: if resolution
+			// used the unit's directory, this is what would be read.
+			await fs.writeFile(path.join(unitDir, 'beside.yml'), 'value: "FROM-UNIT-DIR"\n');
+			const unitPath = path.join(unitDir, 'terragrunt.hcl');
+			const unit = 'include "root" {\n  path = find_in_parent_folders("terragrunt.hcl")\n}\n';
+			await fs.writeFile(unitPath, unit);
+
+			const rendered = runtimeValueToPlain(
+				await evaluator.evaluateRenderedConfig(unitPath, unit, unitDir)
+			) as Record<string, unknown>;
+			const generate = rendered.generate as Record<string, Record<string, unknown>>;
+			assert.equal(
+				generate.g.contents,
+				'FROM-ROOT-DIR|unit',
+				'file() reads the root-relative file; get_terragrunt_dir() still reports the unit'
+			);
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
 });

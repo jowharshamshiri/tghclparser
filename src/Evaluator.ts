@@ -102,6 +102,18 @@ interface Scope {
 	 * a second one.
 	 */
 	generate: Map<string, Map<string, TNode>>;
+	/**
+	 * The directory of the unit being rendered, when that is not this file's.
+	 *
+	 * Set only while a `generate` block inherited through an include is
+	 * evaluated. The two directories answer different questions and terragrunt
+	 * keeps them apart: `file("../x.yml")` resolves against the file the
+	 * expression is WRITTEN IN, while `get_terragrunt_dir()` reports the unit
+	 * being rendered. Overriding `dir` for both made an inherited block read a
+	 * file next to the unit instead of the one next to the root config -- the
+	 * same relative path silently naming a different file.
+	 */
+	unitDir?: string;
 	blocks: TNode[];
 	comprehension: Array<Map<string, RuntimeValue<ValueType>>>;
 	/** Inline functions declared by this file, by name. */
@@ -740,8 +752,12 @@ export class ConfigEvaluator {
 					await fs.access(target);
 				}
 			},
-			terragruntDir: scope.dir,
-			originalTerragruntDir: scope.dir,
+			// `workingDirectory` above stays this FILE's directory, because
+			// that is what a relative `file()` resolves against. These two
+			// report the unit being rendered, which differs only for a
+			// `generate` block inherited through an include.
+			terragruntDir: scope.unitDir ?? scope.dir,
+			originalTerragruntDir: scope.unitDir ?? scope.dir,
 			includeDir: scope.includes.size > 0 ? [...scope.includes.values()][0].dir : undefined,
 			repoRoot,
 			readTerragruntConfig: async (relativePath: string) => {
@@ -814,7 +830,7 @@ export class ConfigEvaluator {
 			// config of its own to answer the second one with.
 			const scope: Scope = from === result
 				? from.scope
-				: { ...from.scope, dir: result.scope.dir, includes: result.scope.includes };
+				: { ...from.scope, unitDir: result.scope.dir, includes: result.scope.includes };
 			for (const [label, attributes] of from.scope.generate) {
 				const rendered = new Map<string, RuntimeValue<ValueType>>();
 				for (const [name, node] of attributes) {
