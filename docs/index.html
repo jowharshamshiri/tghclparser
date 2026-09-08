@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Documentation for tghclparser, the Terragrunt HCL parser, evaluator, CLI, and language-service toolkit.">
+  <meta name="description" content="tghclparser: a drop-in replacement for the terragrunt CLI, written in TypeScript. Run OpenTofu through Terragrunt configurations, or import the same parser, evaluator and workspace graph as a library.">
   <meta name="theme-color" content="#15334a">
-  <title>tghclparser documentation</title>
+  <title>tghclparser — a TypeScript terragrunt replacement</title>
   <link rel="stylesheet" href="assets/styles.css">
   <script>
     const savedTheme = localStorage.getItem('tghclp-theme');
@@ -71,46 +71,47 @@
     <main class="content" id="main">
       <article class="doc-page hero" id="overview" data-title="Overview" data-kind="Start">
         <div class="hero-copy">
-          <p class="eyebrow">Terragrunt language tooling</p>
-          <h1>Understand HCL before you run it.</h1>
-          <p class="lede">A drop-in replacement for the <code>terragrunt</code> command, and the parser behind it. Run OpenTofu or Terraform through Terragrunt 1.x configurations, or parse, validate, evaluate and navigate them from a TypeScript application.</p>
+          <p class="eyebrow">A terragrunt replacement, in TypeScript</p>
+          <h1>Run Terragrunt configurations. Or read them yourself.</h1>
+          <p class="lede">Substitute <code>tghclp</code> for the <code>terragrunt</code> command and your configurations run unchanged. Because it is a library first, the same parser, evaluator and workspace graph are importable — so a configuration is something your own tooling can read, not only something a binary executes.</p>
           <div class="hero-actions">
-            <a class="button primary" href="#tutorial-first-parse">Start the tutorial →</a>
-            <a class="button" href="#reference-api">Browse the API</a>
+            <a class="button primary" href="#how-to-replace-terragrunt">Replace terragrunt →</a>
+            <a class="button" href="#reference-cli">Command reference</a>
           </div>
         </div>
         <div class="terminal" aria-label="tghclparser example">
-          <div class="terminal-bar"><span class="terminal-dot"></span><span class="terminal-dot"></span><span class="terminal-dot"></span><span class="terminal-title">terragrunt.hcl</span></div>
-          <pre><code><span class="code-comment"># Parse with source-aware tokens</span>
-<span class="code-key">locals</span> {
-  region = <span class="code-value">"eu-west-1"</span>
-}
+          <div class="terminal-bar"><span class="terminal-dot"></span><span class="terminal-dot"></span><span class="terminal-dot"></span><span class="terminal-title">shell</span></div>
+          <pre><code><span class="code-comment"># the same configurations, a different executable</span>
+npm install -g tghclparser
 
-<span class="code-key">dependency</span> <span class="code-value">"network"</span> {
-  config_path = <span class="code-value">"../network"</span>
-}
+tghclp init
+tghclp plan
+tghclp apply --all      <span class="code-comment"># terragrunt run-all apply</span>
 
-inputs = {
-  region = local.region
-  vpc_id = dependency.network.outputs.vpc_id
-}</code></pre>
+<span class="code-comment"># and the same evaluation, as a library</span>
+<span class="code-key">import</span> { Workspace } <span class="code-key">from</span> <span class="code-value">'tghclparser'</span></code></pre>
         </div>
 
         <section style="grid-column:1/-1">
           <div class="feature-grid">
-            <div class="feature-card"><span class="card-kicker">Parse</span><h2>Source-aware token tree</h2><p>Keep ranges, relationships, values, and decorators for editor-grade navigation.</p></div>
-            <div class="feature-card"><span class="card-kicker">Understand</span><h2>Terragrunt-aware schema</h2><p>Recognize unit, stack, values, and autoinclude files under the current language regime.</p></div>
-            <div class="feature-card"><span class="card-kicker">Connect</span><h2>Workspace graph</h2><p>Follow includes, dependencies, reads, explicit stack components, and state outputs.</p></div>
-            <div class="feature-card"><span class="card-kicker">Assist</span><h2>Language-service providers</h2><p>Produce diagnostics, completions, hover information, and document links.</p></div>
+            <div class="feature-card"><span class="card-kicker">Replace</span><h2>The same commands</h2><p><code>init</code>, <code>plan</code>, <code>apply</code>, <code>destroy</code>, stacks, hooks and backend bootstrap. <code>run-all</code> is spelled <code>--all</code>; nothing else about a configuration changes.</p></div>
+            <div class="feature-card"><span class="card-kicker">Import</span><h2>A library, not just a binary</h2><p>The parser, evaluator and workspace graph are exported. Read a configuration from your own code instead of shelling out and parsing text back.</p></div>
+            <div class="feature-card"><span class="card-kicker">Install</span><h2>Wherever Node runs</h2><p>One npm dependency, no Go toolchain and no platform binary to match. The same package serves CI, an editor extension and an application.</p></div>
+            <div class="feature-card"><span class="card-kicker">Check</span><h2>Behaviour compared, not assumed</h2><p>Compatibility is established by running the same configuration through both executables and comparing what each produces. A difference is a bug here.</p></div>
           </div>
 
-          <h2>Choose the path that matches your job</h2>
-          <p>The documentation separates learning, task instructions, technical facts, and background so each page does one job clearly.</p>
+          <h2>What is here</h2>
           <div class="path-grid">
-            <a class="path-card" href="#tutorial-first-parse"><span class="card-kicker">Learn</span><h3>Follow a first parse</h3><p>Install the package, parse one file, inspect tokens, and read diagnostics.</p></a>
-            <a class="path-card" href="#how-to-replace-terragrunt"><span class="card-kicker">Do</span><h3>Solve a specific task</h3><p>Replace terragrunt, add CI validation, graph a workspace, or embed editor features.</p></a>
-            <a class="path-card" href="#reference-cli"><span class="card-kicker">Look up</span><h3>Check exact details</h3><p>Find commands, options, classes, methods, types, and supported files.</p></a>
-            <a class="path-card" href="#explanation-architecture"><span class="card-kicker">Understand</span><h3>See the architecture</h3><p>Learn why syntax, schema, workspace context, and evaluation stay separate.</p></a>
+            <a class="path-card" href="#how-to-replace-terragrunt"><span class="card-kicker">How-to</span><h3>Replace terragrunt</h3><p>Install, substitute the command, and the one migration hazard worth knowing.</p></a>
+            <a class="path-card" href="#reference-cli"><span class="card-kicker">Reference</span><h3>Command line</h3><p>Every command, the terragrunt equivalent of each, and the options they take.</p></a>
+            <a class="path-card" href="#tutorial-first-parse"><span class="card-kicker">Tutorial</span><h3>Parse your first configuration</h3><p>Ten minutes: parse a file, inspect its tokens, read diagnostics.</p></a>
+            <a class="path-card" href="#reference-api"><span class="card-kicker">Reference</span><h3>JavaScript API</h3><p>The classes, methods and types the package exports.</p></a>
+            <a class="path-card" href="#how-to-validate-ci"><span class="card-kicker">How-to</span><h3>Validate in CI</h3><p>Fail a build on diagnostics, and keep the machine-readable results.</p></a>
+            <a class="path-card" href="#how-to-workspace-graph"><span class="card-kicker">How-to</span><h3>Build a workspace graph</h3><p>Follow includes, dependencies, reads and stack components.</p></a>
+            <a class="path-card" href="#how-to-language-features"><span class="card-kicker">How-to</span><h3>Add language features to an editor</h3><p>Diagnostics, completions, hovers and document links.</p></a>
+            <a class="path-card" href="#reference-files"><span class="card-kicker">Reference</span><h3>Supported files</h3><p>Which files are recognised, and the language regime version 1 follows.</p></a>
+            <a class="path-card" href="#explanation-architecture"><span class="card-kicker">Explanation</span><h3>How the toolkit fits together</h3><p>Why syntax, schema, workspace context and evaluation stay separate.</p></a>
+            <a class="path-card" href="#explanation-trust"><span class="card-kicker">Explanation</span><h3>Trust and evaluation</h3><p>What evaluation may read, and the boundary it will not cross.</p></a>
           </div>
           <footer class="page-footer">tghclparser is community supported and is not affiliated with Gruntwork or the Terragrunt project.</footer>
         </section>

@@ -1,4 +1,4 @@
-# Terragrunt HCL Parser
+# tghclparser
 
 A **drop-in replacement for the `terragrunt` CLI**, and the parser and language-service toolkit for the Terragrunt 1.x HCL language that underpins it. Version 1 follows the current Terragrunt regime and intentionally does not accept removed or deprecated compatibility syntax.
 
@@ -11,6 +11,8 @@ tghclp apply --all     # terragrunt run-all apply
 ```
 
 Compatibility is established by running the same configuration through both and comparing what each produces, rather than by reading the documentation and assuming agreement. Where the two disagree, that is a bug here.
+
+Being TypeScript rather than a compiled binary, the same package is one npm dependency wherever Node runs — CI, an editor extension, an application — with no toolchain to install and no platform build to match. And the parser, evaluator and workspace graph it uses are exported, so a configuration is something your own code can read rather than something you shell out to and parse text back from.
 
 It also powers the [Terragrunt HCL Language Server](https://marketplace.visualstudio.com/items?itemName=BahramJoharshamshiri.hcl-lsp) VS Code extension and is published as a standalone [npm package](https://www.npmjs.com/package/tghclparser).
 
