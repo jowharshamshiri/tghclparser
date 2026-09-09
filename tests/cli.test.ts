@@ -545,3 +545,55 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(root, {recursive: true, force: true});
 	});
 });
+
+describe('CLI dependency graph', function () {
+	this.timeout(20000);
+
+	// Two units that both depend on a third produce a diamond. The tree is
+	// walked per path rather than per node, so `base` is reached twice and
+	// used to be declared twice with its edges repeated; a unit whose
+	// directory resolved to its parent's config also emitted an edge to
+	// itself. A graph is a set of nodes and edges, so neither may appear
+	// more than once and none may point at itself.
+	it('declares each unit once and never draws an edge to itself', async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-dag-'));
+		for (const unit of ['base', 'left', 'right', 'top']) {
+			await fs.mkdir(path.join(root, unit), {recursive: true});
+		}
+		await fs.writeFile(path.join(root, 'base', 'terragrunt.hcl'), 'inputs = {}\n');
+		for (const unit of ['left', 'right']) {
+			await fs.writeFile(
+				path.join(root, unit, 'terragrunt.hcl'),
+				'dependency "base" {\n  config_path = "../base"\n}\n\ninputs = {}\n'
+			);
+		}
+		await fs.writeFile(
+			path.join(root, 'top', 'terragrunt.hcl'),
+			'dependency "left" {\n  config_path = "../left"\n}\n\n' +
+			'dependency "right" {\n  config_path = "../right"\n}\n\ninputs = {}\n'
+		);
+
+		const cli = path.resolve('dist/cli.cjs');
+		const result = spawnSync(process.execPath, [cli, 'dag', 'graph', '--working-dir', root], {encoding: 'utf8'});
+		expect(result.status, result.stderr).to.equal(0);
+
+		const lines = result.stdout.split('\n').map(line => line.trim()).filter(Boolean);
+		const declarations = lines.filter(line => !line.includes('->') && line.endsWith(';'));
+		const edges = lines.filter(line => line.includes('->'));
+
+		expect(new Set(declarations).size).to.equal(declarations.length);
+		expect(new Set(edges).size).to.equal(edges.length);
+		for (const edge of edges) {
+			const [from, to] = edge.split('->').map(side => side.replace(/;$/, '').trim());
+			expect(from, `self-edge: ${edge}`).to.not.equal(to);
+		}
+
+		// The diamond is still described: both sides reach base.
+		const named = (unit: string) => edges.some(edge => edge.includes(`${path.sep}${unit}"`));
+		expect(named('base'), result.stdout).to.equal(true);
+		expect(named('left'), result.stdout).to.equal(true);
+		expect(named('right'), result.stdout).to.equal(true);
+
+		await fs.rm(root, {recursive: true, force: true});
+	});
+});

@@ -309,9 +309,27 @@ async function printDependencyGraph(workingDir: string): Promise<void> {
 		for (const child of node.children ?? []) visit(child, name);
 	};
 	visit(root);
+	// The tree is walked per path, not per node, so a unit reachable through
+	// more than one parent -- every unit that depends on `global`, say -- is
+	// pushed once per route and its edges repeat. A directory that resolves to
+	// the same config as its parent also produces an edge to itself. Both make
+	// the graph unreadable and neither says anything: dedupe, and drop the
+	// self-edges.
+	const declared = new Set<string>();
+	const edges = new Set<string>();
 	process.stdout.write('digraph {\n');
-	for (const node of nodes) process.stdout.write(`\t${JSON.stringify(node.name)} ;\n`);
-	for (const node of nodes) if (node.parent) process.stdout.write(`\t${JSON.stringify(node.parent)} -> ${JSON.stringify(node.name)} ;\n`);
+	for (const node of nodes) {
+		if (declared.has(node.name)) continue;
+		declared.add(node.name);
+		process.stdout.write(`\t${JSON.stringify(node.name)} ;\n`);
+	}
+	for (const node of nodes) {
+		if (!node.parent || node.parent === node.name) continue;
+		const edge = `\t${JSON.stringify(node.parent)} -> ${JSON.stringify(node.name)} ;\n`;
+		if (edges.has(edge)) continue;
+		edges.add(edge);
+		process.stdout.write(edge);
+	}
 	process.stdout.write('}\n');
 }
 
