@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {discoverConfigs} from '../src/cli';
+import {parseArgs} from '../src/cli';
 import {stackGenerate} from '../src/cli';
 import {spawn, spawnSync} from 'node:child_process';
 import {createServer} from 'node:http';
@@ -407,30 +408,32 @@ describe('CLI configuration discovery', function () {
 		// Only flags actually honoured are aliased. A legacy flag accepted and
 		// then ignored is worse than one refused: the caller believes it took
 		// effect.
-		const cli = path.resolve('dist/cli.cjs');
-		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-legacy-'));
-		await fs.writeFile(path.join(root, 'terragrunt.hcl'), 'locals { x = 1 }\n');
-		const run = (flag: string) => spawnSync(
-			process.execPath, [cli, 'hcl', 'validate', '--working-dir', root, flag], {encoding: 'utf8'}
-		);
-
+		// Called directly rather than through nine spawned processes. This is
+		// pure argument parsing, and a full Node run per flag took 7.6 seconds
+		// against a 10-second timeout on an idle machine -- so the test failed
+		// whenever anything else was running. A flaky test is worse than a
+		// missing one: it teaches its readers to re-run rather than to look.
 		for (const flag of [
 			'--non-interactive', '--terragrunt-non-interactive',
 			'--no-color', '--terragrunt-no-color',
 			'--no-tips', '--terragrunt-no-tips'
 		]) {
-			const result = run(flag);
-			expect(`${result.stdout}${result.stderr}`).to.not.contain('Unknown option', flag);
+			expect(() => parseArgs([flag]), flag).to.not.throw();
 		}
 
 		// A legacy flag with no equivalent here is still refused, rather than
 		// accepted and quietly dropped.
 		for (const flag of ['--terragrunt-download-dir', '--terragrunt-debug', '--terragrunt-nonsense']) {
-			const result = run(flag);
-			expect(`${result.stdout}${result.stderr}`).to.contain('Unknown option', flag);
+			expect(() => parseArgs([flag]), flag).to.throw(/Unknown option/);
 		}
 
-		await fs.rm(root, {recursive: true, force: true});
+		// The two spellings are equivalent, not merely both accepted. An alias
+		// that parsed and then set nothing would satisfy the checks above
+		// while doing nothing at all -- which is the failure the comment above
+		// says this test exists to prevent.
+		expect(parseArgs(['--terragrunt-non-interactive'])).to.deep.equal(parseArgs(['--non-interactive']));
+		expect(parseArgs(['--terragrunt-no-color'])).to.deep.equal(parseArgs(['--no-color']));
+		expect(parseArgs(['--terragrunt-no-tips'])).to.deep.equal(parseArgs(['--no-tips']));
 	});
 
 	it('reads a dependency\'s outputs, which is how one unit uses another', async () => {

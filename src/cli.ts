@@ -14,7 +14,7 @@ import { ParsedDocument } from './ParsedDocument';
 import { Workspace } from './Workspace';
 import { parse } from './parser';
 
-interface CLIOptions {
+export interface CLIOptions {
 	json: boolean;
 	showConfigPath: boolean;
 	experiments: string[];
@@ -182,7 +182,17 @@ function discoveryUsage(command: string): string {
 	].join('\n');
 }
 
-function parseArgs(argv: string[]): CLIOptions | 'help' {
+/**
+ * Exported so its behaviour can be tested by calling it.
+ *
+ * This is pure argument parsing -- no I/O, no subprocess -- and it was
+ * covered by spawning nine `hcl validate` processes and reading their
+ * stderr. That took 7.6 seconds against a 10-second timeout on an idle
+ * machine, so the test failed whenever anything else was running. A flaky
+ * test is worse than a missing one: it trains its readers to re-run rather
+ * than to look.
+ */
+export function parseArgs(argv: string[]): CLIOptions | 'help' {
 	const options: CLIOptions = { json: false, showConfigPath: false, experiments: [], workingDir: process.cwd(), paths: [], noHidden: false, dependencies: false, dag: false };
 	for (let index = 0; index < argv.length; index++) {
 		const argument = argv[index];
