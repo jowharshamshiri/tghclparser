@@ -97,6 +97,33 @@ Discovery skips generated and dependency-cache directories and reports paths rel
 
 Experiment-gated language features must be enabled explicitly, for example `--experiment deep-merge`; the command fails when such a feature is used without its explicit switch.
 
+## Dependencies and mock outputs
+
+`dependency.<name>.outputs.<x>` is resolved by reading the dependency's outputs from its own directory, so the unit it names must have been applied.
+
+A unit that has not been applied has no outputs to give, and that is ordinary during a teardown: `destroy` runs in reverse dependency order, so a unit is destroyed before the ones depending on it. `mock_outputs` supplies stand-in values for exactly that case.
+
+```hcl
+dependency "planning" {
+  config_path = "../planning"
+
+  mock_outputs = {
+    area_file_path = "../teardown/empty-area.json"
+  }
+  mock_outputs_allowed_terraform_commands = ["destroy", "plan", "validate"]
+}
+```
+
+Three rules, which differ from Terragrunt's defaults on purpose:
+
+- **`mock_outputs_allowed_terraform_commands` is required.** Terragrunt treats an omitted list as *every* command, which lets an invented value reach an `apply` and be written to real infrastructure. Here a unit that declares mocks names the commands that may see them; one that does not is refused.
+- **A mock never shadows a real output.** Mocks fill in what the dependency does not have; a value it does have always wins, so a stale mock cannot quietly replace one.
+- **Mock values are literals.** A mock stands in for a unit that has not been applied, so it cannot reference one. Strings, numbers, booleans, null, and lists and objects of those; anything else is refused by name.
+
+Note that a mocked path may still be read during evaluation — a module doing `jsondecode(file(var.path))` in a top-level local does so whatever the command — so a mock standing in for a file should name a real, minimal one rather than a path to nothing.
+
+Reading an output that only a disallowed mock would have supplied reports which dependency, which output, where it looked, which commands its mocks are allowed for, and which command is running.
+
 ## Development
 
 Install dependencies in this directory. The grammar source is `grammar.peggy`; `src/parser.js` is the checked-in generated parser used by consumers. The test suite contains behavior assertions for includes, completions, file-kind validation, stack references, autoincludes, and workspace graph construction.
