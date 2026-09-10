@@ -806,14 +806,18 @@ function evaluatorFor(options: {
 	tfPath?: string;
 } = {}): ConfigEvaluator {
 	const tfPath = options.tfPath ?? tfPathForDependencies();
+	const terraformCommand = options.terraformCommand ?? '';
 	return new ConfigEvaluator({
 		environmentVariables: process.env as Record<string, string>,
-		terraformCommand: options.terraformCommand ?? '',
+		terraformCommand,
 		terraformCliArgs: options.terraformCliArgs ?? [],
 		...(options.experiments ? {experiments: options.experiments} : {}),
 		workspaceTrusted: true,
 		allowedPaths,
-		resolveDependency: (from, name) => dependencyOutputs(from, name, tfPath),
+		// The command decides whether a dependency's mock_outputs may be seen,
+		// so it has to reach the resolver. Without it every evaluation looked
+		// like the same command and a mock could not be scoped at all.
+		resolveDependency: (from, name) => dependencyOutputs(from, name, tfPath, terraformCommand),
 	});
 }
 
@@ -821,60 +825,204 @@ function tfPathForDependencies(): string {
 	return process.env.TG_TF_PATH ?? process.env.TERRAGRUNT_TFPATH ?? 'tofu';
 }
 
-async function dependencyOutputs(
-	configPath: string,
-	name: string,
-	tfPath: string
-): Promise<RuntimeValue<ValueType> | undefined> {
-	const content = await fs.readFile(configPath, 'utf8');
-	const ast: any = parse(content, {grammarSource: configPath, tracer: {trace() {}}});
-	let target: string | undefined;
-	const visit = async (node: any): Promise<void> => {
-		if (target) return;
+/**
+ * A literal value out of a `mock_outputs` block.
+ *
+ * Mock outputs stand in for a unit that has not been applied, so they cannot
+ * themselves reference a dependency -- that is the circularity they exist to
+ * break. They are static data, and this reads them as such: strings, numbers,
+ * booleans, null, and lists and objects of the same.
+ *
+ * Anything else is refused by name rather than guessed at. A mock that
+ * quietly evaluated to the wrong thing would be an invented value flowing
+ * into a real command with nothing to say it was invented.
+ */
+function literalFromNode(node: any, where: string): unknown {
+	switch (node.type) {
+		case 'string_lit': return String(node.value ?? '');
+		case 'number_lit': return Number(node.value);
+		case 'boolean_lit': return Boolean(node.value);
+		case 'null_lit': return null;
+		case 'array_lit':
+			return (node.children ?? []).map((child: any) => literalFromNode(child, where));
+		case 'object': {
+			const result: Record<string, unknown> = {};
+			for (const attribute of node.children ?? []) {
+				if (attribute.type !== 'attribute') continue;
+				const value = (attribute.children ?? []).find(
+					(child: any) => child.type !== 'attribute_identifier'
+				);
+				if (!value) throw new Error(`${where}: attribute "${String(attribute.value)}" has no value`);
+				result[String(attribute.value)] = literalFromNode(value, where);
+			}
+			return result;
+		}
+		default:
+			throw new Error(
+				`${where} must be a literal value, and this is a ${node.type}. ` +
+				'A mock stands in for a unit that has not been applied, so it cannot ' +
+				'reference one.'
+			);
+	}
+}
+
+/** A literal attribute of a block, or undefined when the block omits it. */
+function literalAttribute(block: any, attributeName: string, where: string): unknown {
+	const attribute = (block.children ?? []).find(
+		(child: any) => child.type === 'attribute' && child.value === attributeName
+	);
+	if (!attribute) return undefined;
+	const value = (attribute.children ?? []).find(
+		(child: any) => child.type !== 'attribute_identifier'
+	);
+	if (!value) throw new Error(`${where} "${attributeName}" has no value`);
+	return literalFromNode(value, `${where} "${attributeName}"`);
+}
+
+/** The `dependency "<name>"` block in a parsed config, or undefined. */
+function findDependencyBlock(ast: any, name: string): any {
+	let found: any;
+	const visit = (node: any): void => {
+		if (found) return;
 		if (node.type === 'block' && node.value === 'dependency') {
 			const label = node.children?.find((child: any) => child.type === 'parameter');
 			if (label && String(label.value) === name) {
-				const attribute = node.children?.find(
-					(child: any) => child.type === 'attribute' && child.value === 'config_path'
-				);
-				const valueNode = attribute?.children?.find((child: any) => child.type !== 'attribute_identifier');
-				if (!valueNode) throw new Error(`dependency "${name}" in ${configPath} is missing config_path`);
-				// Read as a literal, not evaluated. Evaluating an expression in
-				// this file re-enters evaluation of the whole unit -- including
-				// the `dependency.<name>.outputs` reference that called this --
-				// and the recursion surfaces as the very error it is resolving.
-				//
-				// `config_path` is a path to a sibling unit. An interpolated one
-				// is refused rather than guessed at, because a path this cannot
-				// read is a dependency it would silently fail to find.
-				const literal = String(valueNode.value ?? '');
-				if (!literal) {
-					throw new Error(
-						`dependency "${name}" in ${configPath} has a config_path this cannot read ` +
-						'without evaluating the unit it belongs to. Write it as a literal path.'
-					);
-				}
-				target = path.resolve(path.dirname(configPath), literal);
+				found = node;
+				return;
 			}
 		}
-		for (const child of node.children ?? []) await visit(child);
+		for (const child of node.children ?? []) visit(child);
 	};
-	await visit(ast);
-	if (!target) return undefined;
+	visit(ast);
+	return found;
+}
+
+async function dependencyOutputs(
+	configPath: string,
+	name: string,
+	tfPath: string,
+	terraformCommand: string
+): Promise<RuntimeValue<ValueType> | undefined> {
+	const content = await fs.readFile(configPath, 'utf8');
+	const ast: any = parse(content, {grammarSource: configPath, tracer: {trace() {}}});
+	const block = findDependencyBlock(ast, name);
+	if (!block) return undefined;
+
+	const where = `dependency "${name}" in ${configPath}`;
+
+	const configAttribute = block.children?.find(
+		(child: any) => child.type === 'attribute' && child.value === 'config_path'
+	);
+	const valueNode = configAttribute?.children?.find((child: any) => child.type !== 'attribute_identifier');
+	if (!valueNode) throw new Error(`${where} is missing config_path`);
+	// Read as a literal, not evaluated. Evaluating an expression in this file
+	// re-enters evaluation of the whole unit -- including the
+	// `dependency.<name>.outputs` reference that called this -- and the
+	// recursion surfaces as the very error it is resolving.
+	//
+	// `config_path` is a path to a sibling unit. An interpolated one is refused
+	// rather than guessed at, because a path this cannot read is a dependency
+	// it would silently fail to find.
+	const literal = String(valueNode.value ?? '');
+	if (!literal) {
+		throw new Error(
+			`${where} has a config_path this cannot read without evaluating the ` +
+			'unit it belongs to. Write it as a literal path.'
+		);
+	}
+	const target = path.resolve(path.dirname(configPath), literal);
+
+	// What this unit says to use when the dependency has no outputs to give.
+	//
+	// `mock_outputs_allowed_terraform_commands` is not optional in practice
+	// and is not defaulted here: terragrunt's own default is every command,
+	// which means a mocked value can reach an `apply` and be written to real
+	// infrastructure. A unit that wants mocks says which commands may see
+	// them.
+	const mocks = literalAttribute(block, 'mock_outputs', where);
+	const allowedRaw = literalAttribute(block, 'mock_outputs_allowed_terraform_commands', where);
+	if (mocks !== undefined && allowedRaw === undefined) {
+		throw new Error(
+			`${where} declares mock_outputs without ` +
+			'mock_outputs_allowed_terraform_commands. Name the commands that may ' +
+			'see invented values -- usually ["destroy", "plan", "validate"] -- so ' +
+			'an apply cannot write one to real infrastructure.'
+		);
+	}
+	if (mocks !== undefined && (typeof mocks !== 'object' || mocks === null || Array.isArray(mocks))) {
+		throw new Error(`${where}: mock_outputs must be an object of output names to values.`);
+	}
+	if (allowedRaw !== undefined && !Array.isArray(allowedRaw)) {
+		throw new Error(
+			`${where}: mock_outputs_allowed_terraform_commands must be a list of command names.`
+		);
+	}
+	const allowed = (allowedRaw as unknown[] | undefined)?.map(entry => String(entry)) ?? [];
+	const mocksApply = mocks !== undefined && allowed.includes(terraformCommand);
 
 	const result = spawnSync(tfPath, ['output', '-json'], {cwd: target, encoding: 'utf8'});
 	if (result.status !== 0) {
+		// No state at all: the unit has never been applied. That is the case
+		// mocks exist for -- a destroy of a workspace whose later steps were
+		// never stood up must not need outputs from a unit that produced none.
+		if (mocksApply) return mockedOutputs(mocks as Record<string, unknown>);
 		throw new Error(
 			`dependency "${name}" has no outputs to read from ${target}.\n` +
-			`Apply that unit first. ${(result.stderr || '').trim().split('\n')[0]}`
+			`Apply that unit first${
+				mocks === undefined
+					? ', or give the dependency mock_outputs and ' +
+					  'mock_outputs_allowed_terraform_commands for the commands that can ' +
+					  'run without it.'
+					: `. Its mock_outputs are allowed only for: ${allowed.join(', ') || '(none)'}.`
+			} ${(result.stderr || '').trim().split('\n')[0]}`
 		);
 	}
+
 	// `output -json` gives {name: {value, type, sensitive}}; a dependency reads
 	// the values.
 	const raw = JSON.parse(result.stdout || '{}') as Record<string, {value: unknown}>;
 	const outputs = new Map<string, RuntimeValue<ValueType>>();
 	for (const [key, entry] of Object.entries(raw)) {
 		outputs.set(key, convertToRuntimeValue(entry.value));
+	}
+	// A unit that has never been applied is this case, not the one above:
+	// `tofu output -json` prints {} and exits 0 when there is no state, so the
+	// "never applied" path arrives here with an empty map rather than as an
+	// error. Mocks fill what is missing and never shadow what is real, so a
+	// value that exists is always preferred to one that was invented.
+	if (mocksApply) {
+		for (const [key, value] of Object.entries(mocks as Record<string, unknown>)) {
+			if (!outputs.has(key)) outputs.set(key, convertToRuntimeValue(value));
+		}
+	} else if (mocks !== undefined) {
+		// A mock is declared, this command may not see it, and the real output
+		// it would have stood in for is not there either. Saying so here beats
+		// "Missing attribute" from the evaluator, which names the symptom and
+		// hides the decision that caused it.
+		//
+		// Raised rather than left to the reference: the unit is about to read
+		// one of these, and a `destroy` that proceeds on the strength of an
+		// output nobody produced is exactly the undefined state mocks are
+		// scoped to prevent.
+		const absent = Object.keys(mocks as Record<string, unknown>).filter(key => !outputs.has(key));
+		if (absent.length > 0) {
+			throw new Error(
+				`dependency "${name}" has no ${absent.join(', ')} to read from ${target}, ` +
+				`and its mock_outputs are allowed only for: ${allowed.join(', ') || '(none)'} ` +
+				`-- not ${terraformCommand || '(no command)'}.\n` +
+				'Apply that unit, or add this command to ' +
+				'mock_outputs_allowed_terraform_commands if an invented value is ' +
+				'safe for it.'
+			);
+		}
+	}
+	return makeObjectValue(new Map([['outputs', makeObjectValue(outputs)]]));
+}
+
+function mockedOutputs(mocks: Record<string, unknown>): RuntimeValue<ValueType> {
+	const outputs = new Map<string, RuntimeValue<ValueType>>();
+	for (const [key, value] of Object.entries(mocks)) {
+		outputs.set(key, convertToRuntimeValue(value));
 	}
 	return makeObjectValue(new Map([['outputs', makeObjectValue(outputs)]]));
 }
@@ -883,11 +1031,16 @@ async function materializeGeneratedFiles(
 	configPath: string,
 	content: string,
 	workDir: string,
-	tfPath: string
+	tfPath: string,
+	terraformCommand: string
 ): Promise<void> {
 	// A generate block may interpolate a dependency's outputs, so rendering one
-	// needs the same resolution running a unit does.
-	const evaluator = evaluatorFor({tfPath});
+	// needs the same resolution running a unit does -- including the command,
+	// which decides whether a dependency's mock_outputs may be seen. Without
+	// it this rendered under an empty command, so a generate block reading a
+	// mocked output failed on the one path that most needs it: a destroy of a
+	// unit whose dependency was never applied.
+	const evaluator = evaluatorFor({tfPath, terraformCommand});
 	const rendered = runtimeValueToPlain(await evaluator.evaluateRenderedConfig(configPath, content, workDir)) as Record<string, unknown>;
 	const generate = generatedEntries(rendered.generate);
 	for (const [name, entry] of generate) {
@@ -1419,7 +1572,7 @@ async function executeTerraformCommand(argv: string[]): Promise<number> {
 	if (await pathExists(stackPath)) await stackGenerate(['--working-dir', options.workingDir]);
 	const configFiles = (await collectFiles(executionWorkingDir)).filter(file => path.basename(file) === 'terragrunt.hcl' || path.basename(file) === 'terragrunt.hcl.json');
 	if (configFiles.length === 0) throw new Error(`No Terragrunt HCL files found under ${executionWorkingDir}`);
-	const diagnostics = (await Promise.all(configFiles.map(file => validateFile(file, executionWorkingDir, [])))).flat();
+	const diagnostics = (await Promise.all(configFiles.map(file => validateFile(file, executionWorkingDir, [], options.command)))).flat();
 	if (diagnostics.length > 0) {
 		for (const item of diagnostics) process.stderr.write(`${item.range.filename}: ${item.summary}: ${item.detail}\n`);
 		return 1;
@@ -1443,7 +1596,7 @@ async function executeTerraformCommand(argv: string[]): Promise<number> {
 			validateJSONShape(parsed, path.basename(configFile));
 			rendered = parsed as Record<string, unknown>;
 		} else {
-		await materializeGeneratedFiles(configFile, content, executionWorkingDir, options.tfPath);
+		await materializeGeneratedFiles(configFile, content, executionWorkingDir, options.tfPath, options.command);
 			const evaluator = evaluatorFor({
 				terraformCommand: options.command,
 				terraformCliArgs: options.args,
@@ -1563,7 +1716,25 @@ async function inheritedInlineFunctions(
 	}
 }
 
-async function validateFile(filePath: string, workDir: string, experiments: string[]): Promise<DiagnosticOutput[]> {
+/**
+ * `terraformCommand` is required rather than defaulted.
+ *
+ * Validation evaluates the unit, which resolves its dependencies, which is
+ * where `mock_outputs_allowed_terraform_commands` is honoured. The run path
+ * validates every unit before executing anything and passed no command, so
+ * the gate saw "" and never matched -- a `destroy` of a workspace whose
+ * dependency had never been applied failed in pre-flight validation, before
+ * it destroyed anything, with an error naming a missing attribute rather
+ * than the unapplied unit.
+ *
+ * A default would have hidden that. The caller knows the command; it says so.
+ */
+async function validateFile(
+	filePath: string,
+	workDir: string,
+	experiments: string[],
+	terraformCommand: string
+): Promise<DiagnosticOutput[]> {
 	const content = await fs.readFile(filePath, 'utf8');
 	if (filePath.endsWith('.json')) {
 		try { validateJSONShape(JSON.parse(content), path.basename(filePath)); return []; }
@@ -1589,7 +1760,7 @@ async function validateFile(filePath: string, workDir: string, experiments: stri
 	// too: pointed at a workspace whose dependency was not applied it reaches
 	// into that directory and complains about what it finds there, which is
 	// only possible if it went looking.
-	const evaluator = evaluatorFor({experiments});
+	const evaluator = evaluatorFor({experiments, terraformCommand});
 	const result = await evaluator.evaluateUnit(filePath, content, workDir);
 	if (result.valid) return [];
 	return [{
@@ -1778,7 +1949,7 @@ async function main(argv: string[]): Promise<number> {
 	const roots = parsed.paths.length > 0 ? parsed.paths.map(target => path.resolve(parsed.workingDir, target)) : [parsed.workingDir];
 	const files = (await Promise.all(roots.map(collectFiles))).flat().sort();
 	if (files.length === 0) throw new Error(`No Terragrunt HCL files found under ${parsed.workingDir}`);
-	const diagnostics = (await Promise.all(files.map(file => validateFile(file, parsed.workingDir, parsed.experiments)))).flat();
+	const diagnostics = (await Promise.all(files.map(file => validateFile(file, parsed.workingDir, parsed.experiments, 'validate')))).flat();
 	if (parsed.showConfigPath) {
 		if (diagnostics.length > 0) {
 			const paths = [...new Set(diagnostics.map(item => item.range.filename))];

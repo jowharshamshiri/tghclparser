@@ -497,6 +497,197 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(root, {recursive: true, force: true});
 	});
 
+	// A workspace whose dependency was never applied, which is the shape
+	// mock_outputs exists for: `consumer` reads an output of `producer`, and
+	// `producer` has no state and so no outputs to give.
+	async function workspaceWithUnappliedDependency(
+		consumerBody: string[]
+	): Promise<{root: string; consumer: string}> {
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-mock-')));
+		await fs.mkdir(path.join(root, '.git'));
+		await fs.writeFile(path.join(root, 'terragrunt.hcl'), 'locals {\n  marker = "root"\n}\n');
+
+		const producer = path.join(root, 'producer');
+		await fs.mkdir(producer);
+		await fs.writeFile(
+			path.join(producer, 'terragrunt.hcl'),
+			'include "root" {\n  path = find_in_parent_folders("terragrunt.hcl")\n}\n'
+		);
+		await fs.writeFile(path.join(producer, 'main.tf'), 'output "answer" {\n  value = "real"\n}\n');
+
+		const consumer = path.join(root, 'consumer');
+		await fs.mkdir(consumer);
+		await fs.writeFile(path.join(consumer, 'main.tf'), 'variable "seen" {\n  type = string\n  default = ""\n}\n');
+		await fs.writeFile(path.join(consumer, 'terragrunt.hcl'), consumerBody.join('\n'));
+		return {root, consumer};
+	}
+
+	const dependencyBlock = (mock: string[], allowed?: string) => [
+		'include "root" {',
+		'  path = find_in_parent_folders("terragrunt.hcl")',
+		'}',
+		'',
+		'dependency "producer" {',
+		'  config_path = "../producer"',
+		'',
+		...mock,
+		...(allowed === undefined ? [] : [`  mock_outputs_allowed_terraform_commands = ${allowed}`]),
+		'}',
+		'',
+		'inputs = {',
+		'  seen = dependency.producer.outputs.answer',
+		'}'
+	];
+
+	it('uses mock_outputs when the dependency has never been applied', async () => {
+		// The failure this is for, seen on a real estate: `destroy --all` on a
+		// workspace whose Kubernetes steps were never stood up stopped at the
+		// first unit in reverse order with
+		//   Missing attribute "kube_inventory_file_path" on "kube_planning_step"
+		// having destroyed nothing. The unit it could not read held zero
+		// resources: there was nothing to destroy and no way to say so.
+		//
+		// Terragrunt answers that with mock_outputs, and tghclp implemented
+		// none of it -- the attributes parsed and were then ignored, so writing
+		// them into the workspace changed nothing at all.
+		const cli = path.resolve('dist/cli.cjs');
+		const made = await workspaceWithUnappliedDependency(
+			dependencyBlock(['  mock_outputs = {', '    answer = "invented"', '  }'], '["destroy", "validate"]')
+		);
+
+		const result = spawnSync(
+			process.execPath, [cli, 'destroy', '--working-dir', made.consumer, '-auto-approve'],
+			{cwd: made.consumer, encoding: 'utf8'}
+		);
+		const output = `${result.stdout}${result.stderr}`;
+		expect(output).to.not.contain('Missing attribute "answer"');
+		expect(output).to.not.contain('has no outputs to read');
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
+	it('refuses a mock the running command is not allowed to see', async () => {
+		// The half that matters more. A mock is an invented value, and letting
+		// an apply see one writes it to real infrastructure.
+		const cli = path.resolve('dist/cli.cjs');
+		const made = await workspaceWithUnappliedDependency(
+			dependencyBlock(['  mock_outputs = {', '    answer = "invented"', '  }'], '["destroy"]')
+		);
+
+		const result = spawnSync(
+			process.execPath, [cli, 'apply', '--working-dir', made.consumer, '-auto-approve'],
+			{cwd: made.consumer, encoding: 'utf8'}
+		);
+		const output = `${result.stdout}${result.stderr}`;
+		expect(result.status).to.not.equal(0);
+		expect(output).to.contain('mock_outputs are allowed only for');
+		expect(output).to.contain('not apply');
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
+	it('refuses mock_outputs that do not say which commands may see them', async () => {
+		// Terragrunt's default for an omitted list is every command, so a
+		// mocked value can reach an apply. That default is not carried here: a
+		// unit that wants mocks names the commands, and one that does not is
+		// stopped rather than given the most permissive reading.
+		const cli = path.resolve('dist/cli.cjs');
+		const made = await workspaceWithUnappliedDependency(
+			dependencyBlock(['  mock_outputs = {', '    answer = "invented"', '  }'])
+		);
+
+		const result = spawnSync(
+			process.execPath, [cli, 'destroy', '--working-dir', made.consumer, '-auto-approve'],
+			{cwd: made.consumer, encoding: 'utf8'}
+		);
+		const output = `${result.stdout}${result.stderr}`;
+		expect(result.status).to.not.equal(0);
+		// The phrase that only the missing-list refusal produces. Asserting
+		// merely on the attribute name passed even with the check removed,
+		// because the "not allowed for this command" error names it too --
+		// the test could not tell the two apart.
+		expect(output).to.contain('declares mock_outputs without');
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
+	it('refuses a mock value that is not a literal', async () => {
+		// A mock stands in for a unit that has not been applied, so it cannot
+		// reference one. Reading these literally is also what keeps resolving a
+		// dependency from re-entering evaluation of the unit that asked, so an
+		// expression is refused by name rather than silently becoming
+		// something else.
+		const cli = path.resolve('dist/cli.cjs');
+		const made = await workspaceWithUnappliedDependency(
+			dependencyBlock(
+				['  mock_outputs = {', '    answer = dependency.producer.outputs.answer', '  }'],
+				'["destroy"]'
+			)
+		);
+
+		const result = spawnSync(
+			process.execPath, [cli, 'destroy', '--working-dir', made.consumer, '-auto-approve'],
+			{cwd: made.consumer, encoding: 'utf8'}
+		);
+		const output = `${result.stdout}${result.stderr}`;
+		expect(result.status).to.not.equal(0);
+		expect(output).to.contain('must be a literal value');
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
+	it('never lets a mock shadow an output the dependency really has', async () => {
+		// A dependency that HAS been applied wins. Mocks fill gaps; they do not
+		// override. The reverse would be a stale mock quietly replacing a real
+		// value for as long as nobody compared the two.
+		const cli = path.resolve('dist/cli.cjs');
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-mockreal-')));
+		await fs.mkdir(path.join(root, '.git'));
+		await fs.writeFile(path.join(root, 'terragrunt.hcl'), 'locals {\n  marker = "root"\n}\n');
+
+		const producer = path.join(root, 'producer');
+		await fs.mkdir(producer);
+		await fs.writeFile(
+			path.join(producer, 'terragrunt.hcl'),
+			'include "root" {\n  path = find_in_parent_folders("terragrunt.hcl")\n}\n'
+		);
+		await fs.writeFile(path.join(producer, 'main.tf'), 'output "answer" {\n  value = "real"\n}\n');
+		const tofu = spawnSync('tofu', ['init', '-input=false'], {cwd: producer, encoding: 'utf8'});
+		if (tofu.error) { await fs.rm(root, {recursive: true, force: true}); return; }  // no tofu here
+		spawnSync('tofu', ['apply', '-auto-approve'], {cwd: producer, encoding: 'utf8'});
+
+		const consumer = path.join(root, 'consumer');
+		await fs.mkdir(consumer);
+		await fs.writeFile(path.join(consumer, 'terragrunt.hcl'), [
+			'include "root" {',
+			'  path = find_in_parent_folders("terragrunt.hcl")',
+			'}',
+			'',
+			'dependency "producer" {',
+			'  config_path = "../producer"',
+			'',
+			'  mock_outputs = {',
+			'    answer = "invented"',
+			'  }',
+			'  mock_outputs_allowed_terraform_commands = ["init", "destroy", "validate"]',
+			'}',
+			'',
+			'generate "seen" {',
+			'  path      = "seen.tf"',
+			'  if_exists = "overwrite_terragrunt"',
+			'  contents  = "# ${dependency.producer.outputs.answer}"',
+			'}'
+		].join('\n'));
+
+		spawnSync(
+			process.execPath, [cli, 'init', '--working-dir', consumer],
+			{cwd: consumer, encoding: 'utf8'}
+		);
+		// The applied value, even though this command is on the allowed list
+		// and the mock defines the same name.
+		const generated = await fs.readFile(path.join(consumer, 'seen.tf'), 'utf8');
+		expect(generated).to.contain('real');
+		expect(generated).to.not.contain('invented');
+
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
 	it('passes the inputs block to OpenTofu, which is what inputs is for', async () => {
 		// Terragrunt evaluates `inputs` and exports each entry as TF_VAR_<name>.
 		// That is how a unit receives what its configuration computed -- a
