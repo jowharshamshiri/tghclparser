@@ -9,6 +9,12 @@ import { ParsedDocument } from './ParsedDocument';
 import { Schema } from './Schema';
 import { expandTerragruntGlob } from './functions/terragrunt_glob';
 
+/**
+ * A read path that cannot be known without evaluating the configuration, such as one interpolating a local whose value
+ * comes from another file. The lineage graph drops that single edge rather than failing the whole document.
+ */
+class UnresolvableReadPath extends Error {}
+
 export class Workspace {
 	private documents: Map<string, ParsedDocument>;
 	private configMap: Map<string, TerragruntConfig>;
@@ -22,10 +28,12 @@ export class Workspace {
 		this.workspaceRoot = null;
 	}
 
-	private async updateConfigMap(doc: ParsedDocument, processedPaths = new Set<string>()): Promise<void> {
+	/** `unitDir` is the unit whose lineage is being walked; includes resolve their paths for it, not their own. */
+	private async updateConfigMap(doc: ParsedDocument, processedPaths = new Set<string>(), unitDir?: string): Promise<void> {
 		const uri = doc.getUri();
 		if (processedPaths.has(uri)) return;
 		processedPaths.add(uri);
+		const resolveFrom = unitDir ?? path.dirname(URI.parse(uri).fsPath);
 
 		const ast = doc.getAST();
 		if (!ast) return;
@@ -77,7 +85,7 @@ export class Workspace {
 		// Process includes
 		const includes = doc.findIncludeBlocks(ast);
 		const includePaths = await Promise.all(includes.map(async inc => {
-			const resolvedPath = await this.resolveIncludePath(inc.path, uri);
+			const resolvedPath = await this.resolveIncludePath(inc.path, uri, resolveFrom);
 			if (!await this.fileExists(URI.parse(resolvedPath).fsPath)) {
 				throw new Error(`Included configuration not found: ${URI.parse(resolvedPath).fsPath}`);
 			}
@@ -159,7 +167,14 @@ export class Workspace {
 		const dependencyEntries = await doc.findDependencyBlocks(ast);
 		const dependencyPaths: string[] = [];
 		for (const dep of dependencyEntries) {
-			const resolvedPath = await this.resolveDependencyPath(dep.path, uri);
+			let resolvedPath: string;
+			try {
+				resolvedPath = await this.resolveDependencyPath(dep.path, uri);
+			} catch (error) {
+				// A config_path built from a value this file cannot see costs one graph edge, not the whole document's lineage.
+				if (error instanceof UnresolvableReadPath) continue;
+				throw error;
+			}
 			const exists = await this.fileExists(URI.parse(resolvedPath).fsPath);
 			let depConfig = this.configMap.get(resolvedPath);
 			let content = depConfig?.content ?? '';
@@ -191,7 +206,7 @@ export class Workspace {
 			if (ownerUri === uri) dependencyPaths.push(resolvedPath);
 		}
 
-		const readPaths = await this.resolveReadPaths(doc);
+		const readPaths = await this.resolveReadPaths(doc, resolveFrom);
 		for (const readUri of readPaths) {
 			let readConfig = this.configMap.get(readUri);
 			if (!readConfig) {
@@ -228,12 +243,17 @@ export class Workspace {
 		// HCL files consumed with read_terragrunt_config can themselves include or
 		// read other files. Preserve that transitive lineage instead of flattening it.
 		const readableHclPaths = readPaths.filter(readUri => path.extname(URI.parse(readUri).fsPath) === '.hcl');
-		for (const refUri of [...includePaths, ...dependencyPaths, ...readableHclPaths]) {
+		// Only includes inherit this unit; a read or dependency target is a config in its own right.
+		for (const refUri of includePaths) {
 			if (refUri && !processedPaths.has(refUri)) {
 				const refDoc = await this.getParsedDocument(refUri);
-				if (refDoc) {
-					await this.updateConfigMap(refDoc, processedPaths);
-				}
+				if (refDoc) await this.updateConfigMap(refDoc, processedPaths, resolveFrom);
+			}
+		}
+		for (const refUri of [...dependencyPaths, ...readableHclPaths]) {
+			if (refUri && !processedPaths.has(refUri)) {
+				const refDoc = await this.getParsedDocument(refUri);
+				if (refDoc) await this.updateConfigMap(refDoc, processedPaths);
 			}
 		}
 	}
@@ -347,6 +367,7 @@ export class Workspace {
 		const inherited = new Map<string, FunctionDefinition>();
 		const visited = new Set<string>([doc.getUri()]);
 		const queue = [...includePaths];
+		const unitDir = path.dirname(URI.parse(doc.getUri()).fsPath);
 
 		while (queue.length > 0) {
 			const includeUri = queue.shift()!;
@@ -364,7 +385,7 @@ export class Workspace {
 			if (!includedAst) continue;
 			for (const nested of included.findIncludeBlocks(includedAst)) {
 				try {
-					queue.push(await this.resolveIncludePath(nested.path, includeUri));
+					queue.push(await this.resolveIncludePath(nested.path, includeUri, unitDir));
 				} catch {
 					// An include this document cannot resolve is reported by the
 					// include processing that owns that document; it contributes
@@ -376,12 +397,14 @@ export class Workspace {
 		doc.setInheritedInlineFunctions(inherited);
 	}
 
-	public async resolveIncludePath(pathToken: Token, sourceUri: string): Promise<string> {
+	/** `unitDir` is the unit this resolution started from; it differs from the source file in an include chain. */
+	public async resolveIncludePath(pathToken: Token, sourceUri: string, unitDir?: string): Promise<string> {
 		const sourcePath = URI.parse(sourceUri).fsPath;
 		const sourceDir = path.dirname(sourcePath);
+		const resolveFrom = unitDir ?? sourceDir;
 
 		if (pathToken.type === 'function_call') {
-			const resolved = await this.evaluatePathFunction(pathToken, sourceDir, sourceUri);
+			const resolved = await this.evaluatePathFunction(pathToken, resolveFrom, sourceUri);
 			if (!path.isAbsolute(resolved)) throw new Error(`Include function returned a non-absolute path: ${resolved}`);
 			return URI.file(resolved).toString();
 		}
@@ -393,7 +416,7 @@ export class Workspace {
 					if (child.type === 'interpolation') {
 						const expression = child.children[0];
 						if (!expression) throw new Error('Empty include path interpolation');
-						return this.evaluatePathExpression(expression, sourceDir, sourceUri);
+						return this.evaluatePathExpression(expression, resolveFrom, sourceUri);
 					}
 					if (child.type === 'string_lit') return String(child.value);
 					throw new Error(`Unsupported include path segment: ${child.type}`);
@@ -417,6 +440,9 @@ export class Workspace {
 			case 'string_lit': {
 				return String(token.value);
 			}
+			case 'local_reference': {
+				return this.evaluateReadPath(token, sourceDir, sourceUri);
+			}
 			default: throw new Error(`Unsupported path interpolation expression: ${token.type}`);
 		}
 	}
@@ -438,6 +464,9 @@ export class Workspace {
 					uri: sourceUri,
 				content: '' // Not needed for path functions
 			},
+			// Without this `find_in_parent_folders` falls back to the document URI and starts one level above the file doing the
+			// searching.
+			terragruntDir: sourceDir,
 			fs: { access: async filePath => fs.access(filePath) }
 		};
 
@@ -455,7 +484,7 @@ export class Workspace {
 		return result.value;
 	}
 
-	private async resolveReadPaths(document: ParsedDocument): Promise<string[]> {
+	private async resolveReadPaths(document: ParsedDocument, unitDir?: string): Promise<string[]> {
 		const trackedFunctions = new Set([
 			'mark_as_read',
 			'mark_glob_as_read',
@@ -482,35 +511,89 @@ export class Workspace {
 
 		const sourceUri = document.getUri();
 		const sourceDir = path.dirname(URI.parse(sourceUri).fsPath);
+		// Path FUNCTIONS answer for the unit; a RELATIVE path is still written relative to the file it appears in, so
+		// `sourceDir` keeps that job.
+		const resolveFrom = unitDir ?? sourceDir;
 		const reads = new Set<string>();
 		for (const call of calls) {
 			const arguments_ = call.children.filter(child => child.type !== 'function_identifier');
 			const argument = arguments_[0];
 			if (!argument) throw new Error(`${call.value} requires a file path argument`);
 			if (call.value === 'mark_glob_as_read') {
-				const values = await Promise.all(arguments_.map(value => this.evaluateReadPath(value, sourceDir, sourceUri)));
-				for (const match of await expandTerragruntGlob(values, sourceDir)) reads.add(URI.file(match).toString());
+				let values: string[];
+				try {
+					values = await Promise.all(arguments_.map(value => this.evaluateReadPath(value, resolveFrom, sourceUri)));
+				} catch (error) {
+					if (error instanceof UnresolvableReadPath) continue;
+					throw error;
+				}
+				for (const match of await expandTerragruntGlob(values, resolveFrom)) reads.add(URI.file(match).toString());
 				continue;
 			}
-			const configuredPath = await this.evaluateReadPath(argument, sourceDir, sourceUri);
+			let configuredPath: string;
+			try {
+				configuredPath = await this.evaluateReadPath(argument, resolveFrom, sourceUri);
+			} catch (error) {
+				if (error instanceof UnresolvableReadPath) continue;
+				throw error;
+			}
 			if (call.value === 'mark_as_read' && !path.isAbsolute(configuredPath)) {
 				throw new Error(`mark_as_read requires an absolute path, got ${configuredPath}`);
 			}
-			const resolvedPath = path.isAbsolute(configuredPath) ? configuredPath : path.resolve(sourceDir, configuredPath);
+			// `resolveFrom`, because a path built from `get_path_to_repo_root()` counts levels up from the unit, not from the
+			// file it is written in.
+			const resolvedPath = path.isAbsolute(configuredPath) ? configuredPath : path.resolve(resolveFrom, configuredPath);
 			if (!await this.fileExists(resolvedPath)) throw new Error(`${call.value} target not found: ${resolvedPath}`);
 			reads.add(URI.file(resolvedPath).toString());
 		}
 		return [...reads].sort();
 	}
 
-	private async evaluateReadPath(token: Token, sourceDir: string, sourceUri: string): Promise<string> {
+	/** The value token of `local.<name>`, found in the locals block of the file the reference sits in. */
+	private findLocalDefinition(token: Token, name: string): Token | undefined {
+		let root: Token = token;
+		while (root.parent) root = root.parent;
+		let found: Token | undefined;
+		const visit = (candidate: Token): void => {
+			if (found) return;
+			if (candidate.type === 'block' && candidate.value === 'locals') {
+				for (const attribute of candidate.children) {
+					if (attribute.type !== 'attribute' || attribute.value !== name) continue;
+					found = attribute.children.find(child =>
+						child.type !== 'identifier' && child.type !== 'attribute_identifier');
+					if (found) return;
+				}
+			}
+			for (const child of candidate.children) visit(child);
+		};
+		visit(root);
+		return found;
+	}
+
+	private async evaluateReadPath(token: Token, sourceDir: string, sourceUri: string, seen: Set<string> = new Set()): Promise<string> {
 		if (token.type === 'string_lit') return String(token.value);
 		if (token.type === 'function_call') return this.evaluatePathFunction(token, sourceDir, sourceUri);
+		if (token.type === 'local_reference') {
+			const name = token.children
+				.find(child => child.type === 'access_chain')?.children
+				.find(child => child.type === 'reference_identifier')?.value;
+			if (typeof name !== 'string') throw new UnresolvableReadPath('Unsupported read path expression: local_reference');
+			if (seen.has(name)) throw new UnresolvableReadPath(`Local ${name} refers to itself in a read path`);
+			// An access chain past the name (`local.stage_vars.stage`) indexes into a value, which is not something a path walk
+			// can produce.
+			const chain = token.children.find(child => child.type === 'access_chain')?.children ?? [];
+			if (chain.filter(child => child.type === 'reference_identifier').length > 1) {
+				throw new UnresolvableReadPath(`local.${name} is indexed in a read path`);
+			}
+			const definition = this.findLocalDefinition(token, name);
+			if (!definition) throw new UnresolvableReadPath(`Could not resolve local.${name} in a read path`);
+			return this.evaluateReadPath(definition, sourceDir, sourceUri, new Set([...seen, name]));
+		}
 		if (token.type === 'interpolated_string') {
 			const parts = await Promise.all(token.children.map(async child => {
 				if (child.type === 'string_lit') return String(child.value);
 				if (child.type === 'interpolation' && child.children[0]) {
-					return this.evaluateReadPath(child.children[0], sourceDir, sourceUri);
+					return this.evaluateReadPath(child.children[0], sourceDir, sourceUri, seen);
 				}
 				throw new Error(`Unsupported read path segment: ${child.type}`);
 			}));

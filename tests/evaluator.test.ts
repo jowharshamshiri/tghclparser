@@ -383,4 +383,175 @@ describe('semantic configuration evaluation', () => {
 			await fs.rm(root, { recursive: true, force: true });
 		}
 	});
+
+	it('searches parent folders from the including unit, not from the included root', async () => {
+		const os = await import('node:os');
+		const fs = await import('node:fs/promises');
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-unitdir-'));
+		try {
+			await fs.writeFile(path.join(root, 'root.hcl'), [
+				'locals {',
+				'  account_vars = read_terragrunt_config(find_in_parent_folders("account.hcl"))',
+				'}'
+			].join('\n'));
+			const accountDir = path.join(root, 'live', 'prod');
+			const unitDir = path.join(accountDir, 'eu-west-2', 'app');
+			await fs.mkdir(unitDir, { recursive: true });
+			await fs.writeFile(path.join(accountDir, 'account.hcl'), 'locals {\n  account_id = "123456789012"\n}\n');
+
+			const unit = [
+				'include "root" {',
+				'  path   = find_in_parent_folders("root.hcl")',
+				'  expose = true',
+				'}',
+				'',
+				'inputs = {',
+				'  id = include.root.locals.account_vars.locals.account_id',
+				'}'
+			].join('\n');
+			const unitPath = path.join(unitDir, 'terragrunt.hcl');
+			await fs.writeFile(unitPath, unit);
+
+			const result = await evaluator.evaluateUnit(unitPath, unit, root);
+			assert.equal(result.valid, true, result.error);
+			assert.deepEqual(result.inputs ? runtimeValueToPlain(result.inputs) : undefined, {
+				id: '123456789012'
+			});
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it('resolves one local read by sibling expressions without reporting a cycle', async () => {
+		const os = await import('node:os');
+		const fs = await import('node:fs/promises');
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-concurrent-'));
+		try {
+			await fs.writeFile(path.join(root, 'account.hcl'), [
+				'locals {',
+				'  region  = "eu-west-2"',
+				'  account = "platform"',
+				'}'
+			].join('\n'));
+			const unit = [
+				'locals {',
+				'  account_vars = read_terragrunt_config("${get_terragrunt_dir()}/account.hcl").locals',
+				'}',
+				'',
+				'inputs = {',
+				'  tags = [',
+				'    "account:${local.account_vars.account}",',
+				'    "region:${local.account_vars.region}"',
+				'  ]',
+				'}'
+			].join('\n');
+			const unitPath = path.join(root, 'terragrunt.hcl');
+			await fs.writeFile(unitPath, unit);
+
+			const result = await evaluator.evaluateUnit(unitPath, unit, root);
+			assert.equal(result.valid, true, result.error);
+			assert.deepEqual(result.inputs ? runtimeValueToPlain(result.inputs) : undefined, {
+				tags: ['account:platform', 'region:eu-west-2']
+			});
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it('still reports a local that genuinely refers to itself', async () => {
+		const os = await import('node:os');
+		const fs = await import('node:fs/promises');
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-realcycle-'));
+		try {
+			const unit = [
+				'locals {',
+				'  a = local.b',
+				'  b = local.a',
+				'}',
+				'',
+				'inputs = { value = local.a }'
+			].join('\n');
+			const unitPath = path.join(root, 'terragrunt.hcl');
+			await fs.writeFile(unitPath, unit);
+
+			const result = await evaluator.evaluateUnit(unitPath, unit, root);
+			assert.equal(result.valid, false);
+			assert.match(result.error ?? '', /Cycle detected in locals/u);
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it('exposes the whole locals map of an include addressed without a name', async () => {
+		const os = await import('node:os');
+		const fs = await import('node:fs/promises');
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-barelocals-'));
+		try {
+			await fs.writeFile(path.join(root, 'shared.hcl'), [
+				'locals {',
+				'  site    = "datadoghq.eu"',
+				'  regions = ["eu-west-2"]',
+				'}'
+			].join('\n'));
+			const unit = [
+				'include "shared" {',
+				'  path   = find_in_parent_folders("shared.hcl")',
+				'  expose = true',
+				'}',
+				'',
+				'locals {',
+				'  shared_vars = include.shared.locals',
+				'}',
+				'',
+				'inputs = {',
+				'  site = local.shared_vars.site',
+				'}'
+			].join('\n');
+			const unitDir = path.join(root, 'unit');
+			await fs.mkdir(unitDir);
+			const unitPath = path.join(unitDir, 'terragrunt.hcl');
+			await fs.writeFile(unitPath, unit);
+
+			const result = await evaluator.evaluateUnit(unitPath, unit, root);
+			assert.equal(result.valid, true, result.error);
+			assert.deepEqual(result.inputs ? runtimeValueToPlain(result.inputs) : undefined, {
+				site: 'datadoghq.eu'
+			});
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it('evaluates the hovered expression when another part of the file cannot be evaluated', async () => {
+		const os = await import('node:os');
+		const fs = await import('node:fs/promises');
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-hover-'));
+		try {
+			const unit = [
+				'dependency "unapplied" {',
+				'  config_path = "../unapplied"',
+				'}',
+				'',
+				'locals {',
+				'  region = "eu-west-2"',
+				'}',
+				'',
+				'inputs = {',
+				'  from_dependency = dependency.unapplied.outputs.id',
+				'}'
+			].join('\n');
+			const unitDir = path.join(root, 'unit');
+			await fs.mkdir(unitDir);
+			const unitPath = path.join(unitDir, 'terragrunt.hcl');
+			await fs.writeFile(unitPath, unit);
+
+			const whole = await evaluator.evaluateUnit(unitPath, unit, root);
+			assert.equal(whole.valid, false, 'the whole-file evaluation must still fail');
+
+			const hovered = await evaluator.evaluateAtPosition(unitPath, unit, root, { line: 5, character: 13 });
+			assert.deepEqual(hovered, { type: 'string', value: 'eu-west-2' });
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
 });

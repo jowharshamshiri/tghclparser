@@ -233,4 +233,85 @@ dependency "network" {
 		const app = graph?.children.find(node => node.name.endsWith(path.join('live', 'app', 'terragrunt.hcl')));
 		expect(app?.children.map(node => [node.type, path.basename(node.name)])).to.deep.equal([['read', 'shared.yaml']]);
 	});
+
+	it('reads a path named by a local instead of by a literal', async () => {
+		const unitDirectory = path.join(directory, 'live', 'app');
+		await fs.mkdir(unitDirectory, { recursive: true });
+		await fs.writeFile(path.join(directory, 'secrets.yaml'), 'api_key: value');
+		await fs.writeFile(path.join(unitDirectory, 'terragrunt.hcl'), `locals {
+  secrets_file = "secrets.yaml"
+  secrets      = read_terragrunt_config(find_in_parent_folders(local.secrets_file))
+}`);
+		const workspace = new Workspace();
+		workspace.setWorkspaceRoot(URI.file(directory).toString());
+
+		const graph = await workspace.refreshDependencyTree();
+		const app = graph?.children.find(node => node.name.endsWith(path.join('live', 'app', 'terragrunt.hcl')));
+		expect(app?.children.map(node => [node.type, path.basename(node.name)])).to.deep.equal([['read', 'secrets.yaml']]);
+	});
+
+	it('searches parent folders from the unit when walking an include chain', async () => {
+		const unitDirectory = path.join(directory, 'live', 'prod', 'app');
+		await fs.mkdir(unitDirectory, { recursive: true });
+		await fs.writeFile(path.join(directory, 'root.hcl'), `locals {
+  stage_vars = read_terragrunt_config(find_in_parent_folders("stage.hcl"))
+}`);
+		await fs.writeFile(path.join(directory, 'live', 'prod', 'stage.hcl'), 'locals { stage = "prod" }');
+		await fs.writeFile(path.join(unitDirectory, 'terragrunt.hcl'), `include "root" {
+  path = find_in_parent_folders("root.hcl")
+}`);
+		const workspace = new Workspace();
+		workspace.setWorkspaceRoot(URI.file(directory).toString());
+
+		const graph = await workspace.refreshDependencyTree();
+		const app = graph?.children.find(node => node.name.endsWith(path.join('live', 'prod', 'app', 'terragrunt.hcl')));
+		expect(app?.children.map(node => path.basename(node.name))).to.include('root.hcl');
+	});
+
+	it('resolves a repository-relative read path against the unit that asked for it', async () => {
+		// The unit is nested deeper than the repository root is on disk, so resolving from the wrong base runs off the
+		// filesystem root and clamps rather than landing on a path that happens to exist.
+		const deepRoot = path.join(directory, 'repo');
+		const unitDirectory = path.join(deepRoot, ...Array.from({ length: 12 }, (_, index) => `level${index}`));
+		await fs.mkdir(unitDirectory, { recursive: true });
+		await fs.mkdir(path.join(deepRoot, '.git'));
+		await fs.mkdir(path.join(deepRoot, 'live'), { recursive: true });
+		await fs.writeFile(path.join(deepRoot, 'live', 'global.hcl'), 'locals { org = "platform" }');
+		await fs.writeFile(path.join(deepRoot, 'root.hcl'), `locals {
+  global = read_terragrunt_config("\${get_path_to_repo_root()}/live/global.hcl")
+}`);
+		await fs.writeFile(path.join(unitDirectory, 'terragrunt.hcl'), `include "root" {
+  path = find_in_parent_folders("root.hcl")
+}`);
+		const workspace = new Workspace();
+		workspace.setWorkspaceRoot(URI.file(deepRoot).toString());
+
+		const graph = await workspace.refreshDependencyTree();
+		const app = graph?.children.find(node => node.name.endsWith(path.join('level11', 'terragrunt.hcl')));
+		const root = app?.children.find(node => path.basename(node.name) === 'root.hcl');
+		expect(root?.children.map(node => path.basename(node.name))).to.include('global.hcl');
+	});
+
+	it('keeps the rest of the lineage when one read path cannot be known statically', async () => {
+		const unitDirectory = path.join(directory, 'live', 'app');
+		await fs.mkdir(unitDirectory, { recursive: true });
+		await fs.writeFile(path.join(directory, 'stage.hcl'), 'locals { stage = "prod" }');
+		await fs.writeFile(path.join(directory, 'shared.yaml'), 'owner: platform');
+		await fs.writeFile(path.join(unitDirectory, 'terragrunt.hcl'), `locals {
+  stage_vars = read_terragrunt_config(find_in_parent_folders("stage.hcl")).locals
+  shared     = mark_as_read("\${get_terragrunt_dir()}/../../shared.yaml")
+}
+
+dependency "other" {
+  config_path = "../\${local.stage_vars.stage}/other"
+}`);
+		const workspace = new Workspace();
+		workspace.setWorkspaceRoot(URI.file(directory).toString());
+
+		const graph = await workspace.refreshDependencyTree();
+		const app = graph?.children.find(node => node.name.endsWith(path.join('live', 'app', 'terragrunt.hcl')));
+		const read = app?.children.map(node => path.basename(node.name)) ?? [];
+		expect(read).to.include('stage.hcl');
+		expect(read).to.include('shared.yaml');
+	});
 });
