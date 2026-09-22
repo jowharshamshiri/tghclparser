@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -88,11 +89,9 @@ interface Scope {
 	dir: string;
 	workspaceRoot: string;
 	locals: Map<string, TNode>;
-	localCache: Map<string, RuntimeValue<ValueType> | 'pending'>;
+	localCache: Map<string, RuntimeValue<ValueType>>;
 	/** In-flight `resolveLocal` work, so concurrent readers of one local await it instead of reporting a cycle. */
 	localPending: Map<string, Promise<RuntimeValue<ValueType>>>;
-	/** Locals on the current evaluation path, which is what a genuine cycle re-enters. */
-	localStack: Set<string>;
 	includes: Map<string, IncludeRef>;
 	autoinclude: FileResult | null;
 	rootAttrs: Map<string, TNode>;
@@ -122,6 +121,11 @@ interface Scope {
 	comprehension: Array<Map<string, RuntimeValue<ValueType>>>;
 	/** Inline functions declared by this file, by name. */
 	functions: Map<string, InlineFunctionDefinition<Scope>>;
+}
+
+interface LocalResolution {
+	scope: Scope;
+	name: string;
 }
 
 const AUTOINCLUDE_FILES = new Set(['terragrunt.autoinclude.hcl', 'terragrunt.autoinclude.stack.hcl']);
@@ -235,6 +239,14 @@ export class ConfigEvaluator {
 	 * between "something recursed" and "this unit includes itself".
 	 */
 	private readonly includeChain: string[] = [];
+	/**
+	 * Local-resolution ancestry for each asynchronous evaluation chain.
+	 *
+	 * Scope-wide pending state cannot distinguish recursion from sibling
+	 * expressions awaiting the same local. Keeping ancestry in async context
+	 * preserves that distinction across every await.
+	 */
+	private readonly localResolutionPath = new AsyncLocalStorage<readonly LocalResolution[]>();
 	/** `options.allowedPaths` after realpath, resolved on first use. */
 	private allowedPathsResolved: string[] | undefined;
 
@@ -362,6 +374,7 @@ export class ConfigEvaluator {
 		const workspaceRoot = await this.resolveWorkspaceRoot(workDir);
 		const inherited = new Map<string, FunctionDefinition>();
 		const visited = new Set<string>([path.resolve(configPath)]);
+		const unitDir = path.dirname(configPath);
 
 		const own = new Set<string>();
 		for (const node of declaredInlineFunctions(parse(content, { grammarSource: configPath, tracer: { trace() {} } }))) {
@@ -371,7 +384,7 @@ export class ConfigEvaluator {
 		// Breadth-first over the include graph so that nearer declarations are
 		// recorded first and never replaced by a same-named one further along,
 		// matching the resolution order findInlineFunction uses.
-		const queue: string[] = await this.includeTargets(configPath, content, workspaceRoot);
+		const queue: string[] = await this.includeTargets(configPath, content, workspaceRoot, unitDir);
 
 		while (queue.length > 0) {
 			const target = queue.shift()!;
@@ -407,7 +420,7 @@ export class ConfigEvaluator {
 				}
 			}
 
-			queue.push(...await this.includeTargets(resolved, includedContent, workspaceRoot));
+			queue.push(...await this.includeTargets(resolved, includedContent, workspaceRoot, unitDir));
 		}
 
 		return inherited;
@@ -419,7 +432,12 @@ export class ConfigEvaluator {
 	 * be computed — `find_in_parent_folders("root.hcl")` is the common form — but
 	 * a path that cannot be resolved is skipped rather than failing the walk.
 	 */
-	private async includeTargets(filePath: string, content: string, workspaceRoot: string): Promise<string[]> {
+	private async includeTargets(
+		filePath: string,
+		content: string,
+		workspaceRoot: string,
+		unitDir = path.dirname(filePath)
+	): Promise<string[]> {
 		const targets: string[] = [];
 		let ast: TNode;
 		try {
@@ -434,11 +452,11 @@ export class ConfigEvaluator {
 			content,
 			ast,
 			dir,
+			unitDir,
 			workspaceRoot,
 			locals: new Map(),
 			localCache: new Map(),
 			localPending: new Map(),
-			localStack: new Set(),
 			includes: new Map(),
 			autoinclude: null,
 			rootAttrs: new Map(),
@@ -602,7 +620,6 @@ export class ConfigEvaluator {
 			locals: new Map(),
 			localCache: new Map(),
 			localPending: new Map(),
-			localStack: new Set(),
 			includes: new Map(),
 			autoinclude: null,
 			rootAttrs: new Map(),
@@ -759,7 +776,7 @@ export class ConfigEvaluator {
 		// genuinely require the repository root resolve it themselves and raise
 		// their own error, so resolving it eagerly here would fail evaluations
 		// that never ask for it.
-		const repoRoot = await this.findRepoRoot(scope.dir);
+		const repoRoot = await this.findRepoRoot(scope.unitDir ?? scope.dir);
 		return {
 			workingDirectory: scope.dir,
 			environmentVariables: this.options.environmentVariables,
@@ -781,16 +798,17 @@ export class ConfigEvaluator {
 				}
 			},
 			// `workingDirectory` above stays this FILE's directory, because
-			// that is what a relative `file()` resolves against. These two
-			// report the unit being rendered, which differs only for a
-			// `generate` block inherited through an include.
+			// that is what a relative `file()` resolves against. Directory-aware
+			// Terragrunt functions report the unit currently being rendered.
 			terragruntDir: scope.unitDir ?? scope.dir,
 			originalTerragruntDir: scope.unitDir ?? scope.dir,
 			includeDir: scope.includes.size > 0 ? [...scope.includes.values()][0].dir : undefined,
 			repoRoot,
 			readTerragruntConfig: async (relativePath: string) => {
 				this.assertTrusted('read_terragrunt_config');
-				const target = path.isAbsolute(relativePath) ? relativePath : path.resolve(scope.dir, relativePath);
+				const target = path.isAbsolute(relativePath)
+					? relativePath
+					: path.resolve(scope.unitDir ?? scope.dir, relativePath);
 				await this.assertPathAllowed(target, scope.workspaceRoot);
 				if (!(await pathExists(target))) return undefined;
 				const fileContent = await fs.readFile(target, 'utf8');
@@ -799,7 +817,9 @@ export class ConfigEvaluator {
 			},
 			readTFVarsFile: async (relativePath: string) => {
 				this.assertTrusted('read_tfvars_file');
-				const target = path.isAbsolute(relativePath) ? relativePath : path.resolve(scope.dir, relativePath);
+				const target = path.isAbsolute(relativePath)
+					? relativePath
+					: path.resolve(scope.unitDir ?? scope.dir, relativePath);
 				await this.assertPathAllowed(target, scope.workspaceRoot);
 				if (!(await pathExists(target))) return undefined;
 				const fileContent = await fs.readFile(target, 'utf8');
@@ -1004,33 +1024,33 @@ export class ConfigEvaluator {
 
 	private async resolveLocal(scope: Scope, name: string): Promise<RuntimeValue<ValueType>> {
 		const cached = scope.localCache.get(name);
-		// Checked before the in-flight map: a cycle re-enters while that promise is published, so awaiting it would deadlock
-		// instead of throwing.
-		if (scope.localStack.has(name)) throw new Error(`Cycle detected in locals involving "${name}"`);
-		// Already running but not on the path: sibling expressions reading one local are evaluated concurrently, which is not
-		// a cycle.
+		if (cached !== undefined) return cached;
+
+		const activePath = this.localResolutionPath.getStore() ?? [];
+		if (activePath.some(entry => entry.scope === scope && entry.name === name)) {
+			throw new Error(`Cycle detected in locals involving "${name}"`);
+		}
+
+		// A reader outside the active ancestry is concurrent, not recursive. It
+		// shares the published evaluation instead of starting duplicate work.
 		const inFlight = scope.localPending.get(name);
 		if (inFlight) return inFlight;
-		if (cached === 'pending') throw new Error(`Cycle detected in locals involving "${name}"`);
-		if (cached !== undefined) return cached;
+
 		const node = scope.locals.get(name);
 		if (!node) throw new Error(`Undefined local value "${name}"`);
-		scope.localCache.set(name, 'pending');
-		scope.localStack.add(name);
-		let evaluation: Promise<RuntimeValue<ValueType>>;
-		try {
-			evaluation = this.evalNode(node, scope);
-		} finally {
-			// Off the path once evalNode yields; later arrivals are concurrent readers, handled by the in-flight map.
-			scope.localStack.delete(name);
-		}
+		const evaluation = this.localResolutionPath.run(
+			[...activePath, { scope, name }],
+			() => this.evalNode(node, scope)
+		);
 		scope.localPending.set(name, evaluation);
 		try {
 			const value = await evaluation;
 			scope.localCache.set(name, value);
 			return value;
 		} finally {
-			scope.localPending.delete(name);
+			// Do not remove a newer evaluation if a rejected promise was retried
+			// before this finally block ran.
+			if (scope.localPending.get(name) === evaluation) scope.localPending.delete(name);
 		}
 	}
 
@@ -1075,12 +1095,10 @@ export class ConfigEvaluator {
 		const head = parts[0];
 		const result = include.result;
 		if (head === 'locals') {
-			// `include.<name>.locals` with no trailing name is the whole map. Locals already in flight are skipped rather than
-			// awaited: the including file reaches this while its own locals are still pending.
+			// `include.<name>.locals` with no trailing name is the whole map.
 			if (parts.length < 2) {
 				const all = new Map<string, RuntimeValue<ValueType>>();
 				for (const name of result.scope.locals.keys()) {
-					if (result.scope.localCache.get(name) === "pending") continue;
 					all.set(name, await this.resolveLocal(result.scope, name));
 				}
 				return makeObjectValue(all);
@@ -1651,8 +1669,12 @@ export class ConfigEvaluator {
 	 */
 	private async resolvableLocals(scope: Scope): Promise<Record<string, unknown>> {
 		const resolved: Record<string, unknown> = {};
+		const activePath = this.localResolutionPath.getStore() ?? [];
 		for (const name of scope.locals.keys()) {
-			if (scope.localCache.get(name) === 'pending') continue;
+			// A function can be called while one of its declaring scope's locals
+			// is being resolved. Do not eagerly recurse into that one merely to
+			// build the binding; guardedNamespace still fails if the body reads it.
+			if (activePath.some(entry => entry.scope === scope && entry.name === name)) continue;
 			resolved[name] = runtimeToPlain(await this.resolveLocal(scope, name));
 		}
 		return resolved;
@@ -1743,7 +1765,6 @@ function makeRootScope(filePath: string, content: string, workspaceRoot = path.d
 		locals: new Map(),
 		localCache: new Map(),
 		localPending: new Map(),
-		localStack: new Set(),
 		includes: new Map(),
 		autoinclude: null,
 		rootAttrs: new Map(),

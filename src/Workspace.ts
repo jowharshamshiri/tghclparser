@@ -15,9 +15,18 @@ import { expandTerragruntGlob } from './functions/terragrunt_glob';
  */
 class UnresolvableReadPath extends Error {}
 
+interface ConfigRelationships {
+	includes: string[];
+	dependencies: string[];
+	reads: string[];
+}
+
 export class Workspace {
 	private documents: Map<string, ParsedDocument>;
+	/** URI-level aggregate used by APIs that do not carry an originating unit. */
 	private configMap: Map<string, TerragruntConfig>;
+	/** Relationships resolved for each originating unit, then each source file. */
+	private configContexts: Map<string, Map<string, ConfigRelationships>>;
 	private workspaceRoot: string | null;
 	private schema: Schema = Schema.getInstance();
 	private configTreeRoot: TreeNode<TerragruntConfig> | undefined;
@@ -25,15 +34,17 @@ export class Workspace {
 	public constructor() {
 		this.documents = new Map();
 		this.configMap = new Map();
+		this.configContexts = new Map();
 		this.workspaceRoot = null;
 	}
 
-	/** `unitDir` is the unit whose lineage is being walked; includes resolve their paths for it, not their own. */
-	private async updateConfigMap(doc: ParsedDocument, processedPaths = new Set<string>(), unitDir?: string): Promise<void> {
+	/** `unitUri` is the unit whose lineage is being walked; includes resolve their paths for it, not their own. */
+	private async updateConfigMap(doc: ParsedDocument, processedContexts = new Set<string>(), unitUri = doc.getUri()): Promise<void> {
 		const uri = doc.getUri();
-		if (processedPaths.has(uri)) return;
-		processedPaths.add(uri);
-		const resolveFrom = unitDir ?? path.dirname(URI.parse(uri).fsPath);
+		const contextKey = `${unitUri}\0${uri}`;
+		if (processedContexts.has(contextKey)) return;
+		processedContexts.add(contextKey);
+		const resolveFrom = path.dirname(URI.parse(unitUri).fsPath);
 
 		const ast = doc.getAST();
 		if (!ast) return;
@@ -60,27 +71,6 @@ export class Workspace {
 			this.configMap.set(uri, currentConfig);
 		}
 		currentConfig.content = doc.getContent();
-		for (const previousTarget of [...currentConfig.includes, ...currentConfig.dependencies, ...currentConfig.reads]) {
-			const target = this.configMap.get(previousTarget);
-			if (!target) continue;
-			target.referencedBy = target.referencedBy.filter(reference => reference !== uri);
-			target.includedBy = target.includedBy.filter(reference => reference !== uri);
-			target.dependedOnBy = target.dependedOnBy.filter(reference => reference !== uri);
-			target.readBy = target.readBy.filter(reference => reference !== uri);
-			if (target.dependencyType === 'unit' || target.dependencyType === 'stack') {
-				for (const childUri of target.dependencies) {
-					const child = this.configMap.get(childUri);
-					if (child) child.referencedBy = child.referencedBy.filter(reference => reference !== target.uri);
-				}
-				target.dependencies = [];
-			}
-			if (!this.documents.has(previousTarget) && target.referencedBy.length === 0 && (target.dependencyType === 'unit' || target.dependencyType === 'stack')) {
-				this.configMap.delete(previousTarget);
-			}
-		}
-		currentConfig.includes = [];
-		currentConfig.dependencies = [];
-		currentConfig.reads = [];
 
 		// Process includes
 		const includes = doc.findIncludeBlocks(ast);
@@ -107,11 +97,6 @@ export class Workspace {
 				this.configMap.set(resolvedPath, includedConfig);
 			}
 
-			if (!includedConfig.referencedBy.includes(uri)) {
-				includedConfig.referencedBy.push(uri);
-			}
-			if (!includedConfig.includedBy.includes(uri)) includedConfig.includedBy.push(uri);
-
 			return resolvedPath;
 		}));
 
@@ -119,7 +104,7 @@ export class Workspace {
 		// diagnostics can only settle once the configurations it includes have
 		// been parsed. Supplying them here re-runs diagnostics with calls to
 		// inherited functions resolved.
-		await this.applyInheritedInlineFunctions(doc, includePaths);
+		await this.applyInheritedInlineFunctions(doc, includePaths, resolveFrom);
 
 		// Explicit stack components are graph edges even before `terragrunt stack generate`
 		// materializes their target files.
@@ -141,9 +126,9 @@ export class Workspace {
 						includes: [],
 						dependencies: [],
 						reads: [],
-						referencedBy: [uri],
+						referencedBy: [],
 						includedBy: [],
-						dependedOnBy: [uri],
+						dependedOnBy: [],
 						readBy: [],
 						sourcePath: source,
 						targetPath: URI.parse(targetUri).fsPath,
@@ -156,7 +141,6 @@ export class Workspace {
 					if (component.dependencyType !== block.value || component.parameterValue !== this.getDependencyName(block) || component.sourcePath !== source) {
 						throw new Error(`Conflicting generated stack component target: ${URI.parse(targetUri).fsPath}`);
 					}
-					if (!component.referencedBy.includes(uri)) component.referencedBy.push(uri);
 				}
 				componentPaths.push(targetUri);
 			}
@@ -166,10 +150,11 @@ export class Workspace {
 		// generated component, not to the stack file that declares the component.
 		const dependencyEntries = await doc.findDependencyBlocks(ast);
 		const dependencyPaths: string[] = [];
+		const ownedDependencies = new Map<string, string[]>();
 		for (const dep of dependencyEntries) {
 			let resolvedPath: string;
 			try {
-				resolvedPath = await this.resolveDependencyPath(dep.path, uri);
+				resolvedPath = await this.resolveDependencyPath(dep.path, uri, resolveFrom);
 			} catch (error) {
 				// A config_path built from a value this file cannot see costs one graph edge, not the whole document's lineage.
 				if (error instanceof UnresolvableReadPath) continue;
@@ -200,9 +185,9 @@ export class Workspace {
 			}
 			const ownerConfig = this.configMap.get(ownerUri);
 			if (!ownerConfig) throw new Error(`Dependency owner is missing from workspace graph: ${ownerUri}`);
-			if (!ownerConfig.dependencies.includes(resolvedPath)) ownerConfig.dependencies.push(resolvedPath);
-			if (!depConfig.referencedBy.includes(ownerUri)) depConfig.referencedBy.push(ownerUri);
-			if (!depConfig.dependedOnBy.includes(ownerUri)) depConfig.dependedOnBy.push(ownerUri);
+			const ownerDependencies = ownedDependencies.get(ownerUri) ?? [];
+			if (!ownerDependencies.includes(resolvedPath)) ownerDependencies.push(resolvedPath);
+			ownedDependencies.set(ownerUri, ownerDependencies);
 			if (ownerUri === uri) dependencyPaths.push(resolvedPath);
 		}
 
@@ -216,28 +201,27 @@ export class Workspace {
 					includes: [],
 					dependencies: [],
 					reads: [],
-					referencedBy: [uri],
+					referencedBy: [],
 					includedBy: [],
 					dependedOnBy: [],
-					readBy: [uri],
+					readBy: [],
 					sourcePath: URI.parse(uri).fsPath,
 					targetPath: URI.parse(readUri).fsPath,
 					dependencyType: 'read'
 				};
 				this.configMap.set(readUri, readConfig);
-			} else {
-				if (!readConfig.referencedBy.includes(uri)) readConfig.referencedBy.push(uri);
-				if (!readConfig.readBy.includes(uri)) readConfig.readBy.push(uri);
 			}
 		}
 
-		// Update current config
-		currentConfig.includes = includePaths.filter(Boolean);
-		currentConfig.dependencies = [
-			...dependencyPaths.filter((path): path is string => path !== undefined),
-			...componentPaths
-		];
-		currentConfig.reads = readPaths;
+		this.setContextRelationships(unitUri, uri, {
+			includes: includePaths,
+			dependencies: [...dependencyPaths, ...componentPaths],
+			reads: readPaths
+		});
+		for (const [ownerUri, dependencies] of ownedDependencies) {
+			if (ownerUri === uri) continue;
+			this.setContextRelationships(unitUri, ownerUri, { includes: [], dependencies, reads: [] });
+		}
 		this.configMap.set(uri, currentConfig);
 
 		// HCL files consumed with read_terragrunt_config can themselves include or
@@ -245,16 +229,107 @@ export class Workspace {
 		const readableHclPaths = readPaths.filter(readUri => path.extname(URI.parse(readUri).fsPath) === '.hcl');
 		// Only includes inherit this unit; a read or dependency target is a config in its own right.
 		for (const refUri of includePaths) {
-			if (refUri && !processedPaths.has(refUri)) {
+			if (refUri && !processedContexts.has(`${unitUri}\0${refUri}`)) {
 				const refDoc = await this.getParsedDocument(refUri);
-				if (refDoc) await this.updateConfigMap(refDoc, processedPaths, resolveFrom);
+				if (refDoc) await this.updateConfigMap(refDoc, processedContexts, unitUri);
 			}
 		}
 		for (const refUri of [...dependencyPaths, ...readableHclPaths]) {
-			if (refUri && !processedPaths.has(refUri)) {
+			if (refUri && !processedContexts.has(`${refUri}\0${refUri}`)) {
 				const refDoc = await this.getParsedDocument(refUri);
-				if (refDoc) await this.updateConfigMap(refDoc, processedPaths);
+				if (refDoc) await this.updateConfigMap(refDoc, processedContexts, refUri);
 			}
+		}
+	}
+
+	private setContextRelationships(
+		unitUri: string,
+		sourceUri: string,
+		relationships: ConfigRelationships
+	): void {
+		let unitContexts = this.configContexts.get(unitUri);
+		if (!unitContexts) {
+			unitContexts = new Map();
+			this.configContexts.set(unitUri, unitContexts);
+		}
+		unitContexts.set(sourceUri, {
+			includes: [...new Set(relationships.includes)].sort(),
+			dependencies: [...new Set(relationships.dependencies)].sort(),
+			reads: [...new Set(relationships.reads)].sort()
+		});
+	}
+
+	private relationshipsFor(unitUri: string, source: TerragruntConfig): ConfigRelationships {
+		const relationships = this.configContexts.get(unitUri)?.get(source.uri);
+		if (relationships) return relationships;
+
+		const extension = path.extname(URI.parse(source.uri).fsPath);
+		const nonHclRead = source.dependencyType === 'read' && extension !== '.hcl';
+		const ungeneratedComponent = (source.dependencyType === 'unit' || source.dependencyType === 'stack')
+			&& !this.documents.has(source.uri);
+		if (nonHclRead || ungeneratedComponent) return { includes: [], dependencies: [], reads: [] };
+
+		throw new Error(`Missing workspace context for ${source.uri} while evaluating ${unitUri}`);
+	}
+
+	/** Rebuild URI-level reverse indexes from every unit-specific resolution. */
+	private syncConfigRelationships(): void {
+		const activeUris = new Set<string>();
+		for (const unitContexts of this.configContexts.values()) {
+			for (const [sourceUri, relationships] of unitContexts) {
+				activeUris.add(sourceUri);
+				for (const targetUri of [
+					...relationships.includes,
+					...relationships.dependencies,
+					...relationships.reads
+				]) activeUris.add(targetUri);
+			}
+		}
+
+		for (const uri of [...this.configMap.keys()]) {
+			if (!activeUris.has(uri)) this.configMap.delete(uri);
+		}
+		for (const config of this.configMap.values()) {
+			config.includes = [];
+			config.dependencies = [];
+			config.reads = [];
+			config.referencedBy = [];
+			config.includedBy = [];
+			config.dependedOnBy = [];
+			config.readBy = [];
+		}
+
+		const connect = (
+			source: TerragruntConfig,
+			targetUri: string,
+			forward: 'includes' | 'dependencies' | 'reads',
+			reverse: 'includedBy' | 'dependedOnBy' | 'readBy'
+		): void => {
+			const target = this.configMap.get(targetUri);
+			if (!target) throw new Error(`Missing configuration ${targetUri} referenced from ${source.uri}`);
+			if (!source[forward].includes(targetUri)) source[forward].push(targetUri);
+			if (!target.referencedBy.includes(source.uri)) target.referencedBy.push(source.uri);
+			if (!target[reverse].includes(source.uri)) target[reverse].push(source.uri);
+		};
+
+		for (const unitContexts of this.configContexts.values()) {
+			for (const [sourceUri, relationships] of unitContexts) {
+				const source = this.configMap.get(sourceUri);
+				if (!source) throw new Error(`Missing configuration data for workspace context ${sourceUri}`);
+				for (const target of relationships.includes) connect(source, target, 'includes', 'includedBy');
+				for (const target of relationships.dependencies) connect(source, target, 'dependencies', 'dependedOnBy');
+				for (const target of relationships.reads) connect(source, target, 'reads', 'readBy');
+			}
+		}
+
+		for (const config of this.configMap.values()) {
+			config.includes.sort();
+			config.dependencies.sort();
+			config.reads.sort();
+			config.referencedBy.sort();
+			config.includedBy.sort();
+			config.dependedOnBy.sort();
+			config.readBy.sort();
 		}
 	}
 
@@ -312,9 +387,20 @@ export class Workspace {
 		}
 	}
 
-	public async resolveDependencyPath(pathToken: Token, sourceUri: string): Promise<string> {
+	private async findRepositoryRoot(startDir: string): Promise<string | undefined> {
+		let current = path.resolve(startDir);
+		while (true) {
+			if (await this.fileExists(path.join(current, '.git'))) return current;
+			const parent = path.dirname(current);
+			if (parent === current) return undefined;
+			current = parent;
+		}
+	}
+
+	public async resolveDependencyPath(pathToken: Token, sourceUri: string, unitDir?: string): Promise<string> {
 		const sourcePath = URI.parse(sourceUri).fsPath;
 		const sourceDir = path.dirname(sourcePath);
+		const resolveFrom = unitDir ?? sourceDir;
 
 		if (pathToken.type === 'reference') {
 			const namespace = pathToken.children.find(child => child.type === 'namespace')?.value;
@@ -332,12 +418,12 @@ export class Workspace {
 			return target;
 		}
 
-		const configPath = await this.resolvePathToken(pathToken, sourceDir, sourceUri);
+		const configPath = await this.resolvePathToken(pathToken, resolveFrom, sourceUri);
 
 		// Resolve the final path
 		const resolvedPath = path.isAbsolute(configPath) ?
 			configPath :
-			path.resolve(sourceDir, configPath);
+			path.resolve(resolveFrom, configPath);
 
 		// Explicit HCL paths are authoritative.
 		if (path.extname(resolvedPath) === '.hcl') {
@@ -361,14 +447,12 @@ export class Workspace {
 	 * skipped, so a cyclic include graph terminates rather than recursing
 	 * forever.
 	 */
-	private async applyInheritedInlineFunctions(doc: ParsedDocument, includePaths: string[]): Promise<void> {
+	private async applyInheritedInlineFunctions(doc: ParsedDocument, includePaths: string[], unitDir: string): Promise<void> {
 		if (includePaths.length === 0) return;
 
 		const inherited = new Map<string, FunctionDefinition>();
 		const visited = new Set<string>([doc.getUri()]);
 		const queue = [...includePaths];
-		const unitDir = path.dirname(URI.parse(doc.getUri()).fsPath);
-
 		while (queue.length > 0) {
 			const includeUri = queue.shift()!;
 			if (visited.has(includeUri)) continue;
@@ -432,21 +516,31 @@ export class Workspace {
 
 		throw new Error(`Unsupported include path expression: ${pathToken.type}`);
 	}
-	private async evaluatePathExpression(token: Token, sourceDir: string, sourceUri = URI.file(sourceDir).toString()): Promise<string> {
+	private async evaluatePathExpression(
+		token: Token,
+		sourceDir: string,
+		sourceUri = URI.file(sourceDir).toString(),
+		seen: ReadonlySet<string> = new Set()
+	): Promise<string> {
 		switch (token.type) {
 			case 'function_call': {
-				return this.evaluatePathFunction(token, sourceDir, sourceUri);
+				return this.evaluatePathFunction(token, sourceDir, sourceUri, seen);
 			}
 			case 'string_lit': {
 				return String(token.value);
 			}
 			case 'local_reference': {
-				return this.evaluateReadPath(token, sourceDir, sourceUri);
+				return this.evaluateReadPath(token, sourceDir, sourceUri, seen);
 			}
 			default: throw new Error(`Unsupported path interpolation expression: ${token.type}`);
 		}
 	}
-	private async evaluatePathFunction(token: Token, sourceDir: string, sourceUri = URI.file(sourceDir).toString()): Promise<string> {
+	private async evaluatePathFunction(
+		token: Token,
+		sourceDir: string,
+		sourceUri = URI.file(sourceDir).toString(),
+		seen: ReadonlySet<string> = new Set()
+	): Promise<string> {
 		const functionIdentifier = token.children.find(c => c.type === 'function_identifier');
 		const funcName = functionIdentifier?.value as string;
 
@@ -467,6 +561,7 @@ export class Workspace {
 			// Without this `find_in_parent_folders` falls back to the document URI and starts one level above the file doing the
 			// searching.
 			terragruntDir: sourceDir,
+			repoRoot: await this.findRepositoryRoot(sourceDir),
 			fs: { access: async filePath => fs.access(filePath) }
 		};
 
@@ -474,7 +569,7 @@ export class Workspace {
 			.filter(child => child.type !== 'function_identifier')
 			.map(async argument => ({
 				type: 'string' as const,
-				value: await this.evaluateReadPath(argument, sourceDir, sourceUri)
+				value: await this.evaluateReadPath(argument, sourceDir, sourceUri, seen)
 			})));
 
 		const result = await this.schema.getFunctionRegistry().evaluateFunction(funcName, args, context);
@@ -511,8 +606,8 @@ export class Workspace {
 
 		const sourceUri = document.getUri();
 		const sourceDir = path.dirname(URI.parse(sourceUri).fsPath);
-		// Path FUNCTIONS answer for the unit; a RELATIVE path is still written relative to the file it appears in, so
-		// `sourceDir` keeps that job.
+		// Terragrunt evaluates tracked read paths in the unit context, including
+		// bare relative paths authored in an included configuration.
 		const resolveFrom = unitDir ?? sourceDir;
 		const reads = new Set<string>();
 		for (const call of calls) {
@@ -540,8 +635,8 @@ export class Workspace {
 			if (call.value === 'mark_as_read' && !path.isAbsolute(configuredPath)) {
 				throw new Error(`mark_as_read requires an absolute path, got ${configuredPath}`);
 			}
-			// `resolveFrom`, because a path built from `get_path_to_repo_root()` counts levels up from the unit, not from the
-			// file it is written in.
+			// Both a bare relative read and a path built by a unit-relative
+			// function resolve from the originating unit.
 			const resolvedPath = path.isAbsolute(configuredPath) ? configuredPath : path.resolve(resolveFrom, configuredPath);
 			if (!await this.fileExists(resolvedPath)) throw new Error(`${call.value} target not found: ${resolvedPath}`);
 			reads.add(URI.file(resolvedPath).toString());
@@ -570,15 +665,20 @@ export class Workspace {
 		return found;
 	}
 
-	private async evaluateReadPath(token: Token, sourceDir: string, sourceUri: string, seen: Set<string> = new Set()): Promise<string> {
+	private async evaluateReadPath(
+		token: Token,
+		sourceDir: string,
+		sourceUri: string,
+		seen: ReadonlySet<string> = new Set()
+	): Promise<string> {
 		if (token.type === 'string_lit') return String(token.value);
-		if (token.type === 'function_call') return this.evaluatePathFunction(token, sourceDir, sourceUri);
+		if (token.type === 'function_call') return this.evaluatePathFunction(token, sourceDir, sourceUri, seen);
 		if (token.type === 'local_reference') {
 			const name = token.children
 				.find(child => child.type === 'access_chain')?.children
 				.find(child => child.type === 'reference_identifier')?.value;
-			if (typeof name !== 'string') throw new UnresolvableReadPath('Unsupported read path expression: local_reference');
-			if (seen.has(name)) throw new UnresolvableReadPath(`Local ${name} refers to itself in a read path`);
+			if (typeof name !== 'string') throw new Error('Malformed local reference in a read path');
+			if (seen.has(name)) throw new Error(`Local ${name} refers to itself in a read path`);
 			// An access chain past the name (`local.stage_vars.stage`) indexes into a value, which is not something a path walk
 			// can produce.
 			const chain = token.children.find(child => child.type === 'access_chain')?.children ?? [];
@@ -586,7 +686,7 @@ export class Workspace {
 				throw new UnresolvableReadPath(`local.${name} is indexed in a read path`);
 			}
 			const definition = this.findLocalDefinition(token, name);
-			if (!definition) throw new UnresolvableReadPath(`Could not resolve local.${name} in a read path`);
+			if (!definition) throw new Error(`Undefined local.${name} in a read path`);
 			return this.evaluateReadPath(definition, sourceDir, sourceUri, new Set([...seen, name]));
 		}
 		if (token.type === 'interpolated_string') {
@@ -615,6 +715,7 @@ export class Workspace {
 				await this.updateConfigMap(doc);
 			}
 		}
+		this.syncConfigRelationships();
 
 		// Second pass: verify that the graph is closed over every authored edge.
 		for (const [uri, config] of this.configMap.entries()) {
@@ -625,7 +726,12 @@ export class Workspace {
 			}
 		}
 		for (const config of this.configMap.values()) {
-			config.reading = this.collectReading(config.uri, new Set());
+			const reading = new Set<string>();
+			for (const [unitUri, contexts] of this.configContexts) {
+				if (!contexts.has(config.uri)) continue;
+				for (const readUri of this.collectReading(unitUri, config.uri, new Set())) reading.add(readUri);
+			}
+			config.reading = [...reading].sort();
 			config.external = this.isExternal(config.uri);
 		}
 
@@ -652,22 +758,40 @@ export class Workspace {
 			throw new Error('Configuration graph has no roots; check for include or dependency cycles');
 		}
 		for (const config of roots) {
-			const node = this.configTreeRoot.addChild(config, this.formatPath(config.uri), config.dependencyType);
-			await this.traverseConfigTree(node, new Set());
+			const contextual = this.contextualConfig(config.uri, config);
+			const node = this.configTreeRoot.addChild(contextual, this.formatPath(config.uri), config.dependencyType);
+			await this.traverseConfigTree(node, config.uri, new Set());
 		}
 	}
 
-	private collectReading(uri: string, ancestry: Set<string>): string[] {
-		if (ancestry.has(uri)) throw new Error(`Reading cycle detected at ${uri}`);
+	private contextualConfig(unitUri: string, config: TerragruntConfig): TerragruntConfig {
+		const relationships = this.relationshipsFor(unitUri, config);
+		return {
+			...config,
+			includes: [...relationships.includes],
+			dependencies: [...relationships.dependencies],
+			reads: [...relationships.reads],
+			reading: this.collectReading(unitUri, config.uri, new Set()),
+			external: this.isExternal(config.uri)
+		};
+	}
+
+	private collectReading(unitUri: string, uri: string, ancestry: Set<string>): string[] {
+		const contextKey = `${unitUri}\0${uri}`;
+		if (ancestry.has(contextKey)) throw new Error(`Reading cycle detected at ${uri}`);
 		const config = this.configMap.get(uri);
 		if (!config) throw new Error(`Cannot collect reading lineage for missing configuration ${uri}`);
+		const relationships = this.relationshipsFor(unitUri, config);
 		const nextAncestry = new Set(ancestry);
-		nextAncestry.add(uri);
-		const reading = new Set(config.reads);
-		for (const readUri of config.reads) {
+		nextAncestry.add(contextKey);
+		const reading = new Set(relationships.reads);
+		for (const includeUri of relationships.includes) {
+			for (const transitiveUri of this.collectReading(unitUri, includeUri, nextAncestry)) reading.add(transitiveUri);
+		}
+		for (const readUri of relationships.reads) {
 			const readConfig = this.configMap.get(readUri);
 			if (!readConfig) throw new Error(`Reading lineage references missing file ${readUri}`);
-			for (const transitiveUri of this.collectReading(readUri, nextAncestry)) reading.add(transitiveUri);
+			for (const transitiveUri of this.collectReading(readUri, readUri, nextAncestry)) reading.add(transitiveUri);
 		}
 		return [...reading].sort();
 	}
@@ -678,17 +802,23 @@ export class Workspace {
 		return relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
 	}
 
-	private async traverseConfigTree(startNode: TreeNode<TerragruntConfig>, ancestry: Set<string>): Promise<void> {
-		const traverseNode = async (treeNode: TreeNode<TerragruntConfig>, ancestors: Set<string>) => {
-			const config = this.configMap.get(treeNode.data.uri);
-			if (!config) {
-				throw new Error(`Configuration graph references an unloaded document: ${treeNode.data.uri}`);
-			}
-			if (ancestors.has(config.uri)) {
+	private async traverseConfigTree(
+		startNode: TreeNode<TerragruntConfig>,
+		unitUri: string,
+		ancestry: Set<string>
+	): Promise<void> {
+		const traverseNode = async (
+			treeNode: TreeNode<TerragruntConfig>,
+			contextUnitUri: string,
+			ancestors: Set<string>
+		): Promise<void> => {
+			const config = treeNode.data;
+			const contextKey = `${contextUnitUri}\0${config.uri}`;
+			if (ancestors.has(contextKey)) {
 				throw new Error(`Configuration cycle detected at ${config.uri}`);
 			}
 			const nextAncestors = new Set(ancestors);
-			nextAncestors.add(config.uri);
+			nextAncestors.add(contextKey);
 
 			// Add outputs if they exist
 			if (config.outputs && config.outputs.size > 0) {
@@ -755,17 +885,23 @@ export class Workspace {
 						: refConfig.dependencyType === 'unit' || refConfig.dependencyType === 'stack'
 							? refConfig.dependencyType
 							: 'dependency';
+					// Includes and generated stack components can have relationships
+					// authored in the current unit context. Ordinary read/dependency
+					// targets are configurations in their own right.
+					const childUnitUri = this.configContexts.get(contextUnitUri)?.has(refUri)
+						? contextUnitUri
+						: refUri;
 					const childNode = treeNode.addChild(
-						refConfig,
+						this.contextualConfig(childUnitUri, refConfig),
 						this.formatPath(refConfig.uri),
 						relationshipType
 					);
-					await traverseNode(childNode, nextAncestors);
+					await traverseNode(childNode, childUnitUri, nextAncestors);
 				}
 			}
 		};
 
-		await traverseNode(startNode, ancestry);
+		await traverseNode(startNode, unitUri, ancestry);
 	}
 
 	private formatPath(uri: string): string {
@@ -815,12 +951,39 @@ export class Workspace {
 		const uri = document.getUri();
 		this.documents.set(uri, document);
 
-		await this.updateConfigMap(document);  // Update just this document's config
+		// Re-resolve every unit whose context contains this file. An included
+		// configuration can produce different paths for each unit, so updating a
+		// single URI in isolation would leave those contextual relationships stale.
+		const affectedUnits = new Set<string>();
+		if (this.configContexts.has(uri)) affectedUnits.add(uri);
+		for (const [unitUri, contexts] of this.configContexts) {
+			if (contexts.has(uri)) affectedUnits.add(unitUri);
+		}
+		if (affectedUnits.size === 0) affectedUnits.add(uri);
+		const previousContexts = new Map<string, Map<string, ConfigRelationships>>();
+		for (const unitUri of affectedUnits) {
+			const previous = this.configContexts.get(unitUri);
+			if (previous) previousContexts.set(unitUri, previous);
+		}
+		for (const unitUri of affectedUnits) this.configContexts.delete(unitUri);
+		try {
+			for (const unitUri of affectedUnits) {
+				const unitDocument = unitUri === uri ? document : await this.getParsedDocument(unitUri);
+				if (unitDocument) await this.updateConfigMap(unitDocument, new Set(), unitUri);
+			}
+			this.syncConfigRelationships();
+		} catch (error) {
+			for (const unitUri of affectedUnits) this.configContexts.delete(unitUri);
+			for (const [unitUri, contexts] of previousContexts) this.configContexts.set(unitUri, contexts);
+			this.syncConfigRelationships();
+			throw error;
+		}
 	}
 
 	async refreshDependencyTree(): Promise<TreeNode<TerragruntConfig> | undefined> {
 		this.configTreeRoot = undefined;
 		this.configMap.clear();
+		this.configContexts.clear();
 		await this.buildDependencyTree();
 		return this.configTreeRoot;
 	}
@@ -862,20 +1025,10 @@ export class Workspace {
 	}
 
 	removeDocument(uri: string) {
-		const config = this.configMap.get(uri);
-		if (config) {
-			for (const targetUri of [...config.includes, ...config.dependencies, ...config.reads]) {
-				const target = this.configMap.get(targetUri);
-				if (target) {
-					target.referencedBy = target.referencedBy.filter(reference => reference !== uri);
-					target.includedBy = target.includedBy.filter(reference => reference !== uri);
-					target.dependedOnBy = target.dependedOnBy.filter(reference => reference !== uri);
-					target.readBy = target.readBy.filter(reference => reference !== uri);
-				}
-			}
-		}
+		// Closing an editor document does not remove the configuration from the
+		// workspace. Keep its graph state; a later filesystem refresh is what
+		// observes an actual deletion.
 		this.documents.delete(uri);
-		this.configMap.delete(uri);
 	}
 
 	getReferencingConfigs(uri: string): TerragruntConfig[] {

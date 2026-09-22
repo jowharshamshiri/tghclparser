@@ -482,6 +482,31 @@ describe('semantic configuration evaluation', () => {
 		}
 	});
 
+	it('reports a local cycle that crosses an asynchronous expression boundary', async () => {
+		const content = [
+			'locals {',
+			'  a = true ? local.b : "unused"',
+			'  b = local.a',
+			'}',
+			'',
+			'inputs = { value = local.a }'
+		].join('\n');
+		const evaluation = evaluator.evaluateUnit(configPath, content, process.cwd());
+		let timeout: NodeJS.Timeout | undefined;
+		const timedOut = new Promise<never>((_, reject) => {
+			timeout = setTimeout(() => reject(new Error('local cycle evaluation did not terminate')), 500);
+		});
+		let result;
+		try {
+			result = await Promise.race([evaluation, timedOut]);
+		} finally {
+			if (timeout) clearTimeout(timeout);
+		}
+
+		assert.equal(result.valid, false);
+		assert.match(result.error ?? '', /Cycle detected in locals/u);
+	});
+
 	it('exposes the whole locals map of an include addressed without a name', async () => {
 		const os = await import('node:os');
 		const fs = await import('node:fs/promises');
@@ -517,6 +542,97 @@ describe('semantic configuration evaluation', () => {
 			assert.deepEqual(result.inputs ? runtimeValueToPlain(result.inputs) : undefined, {
 				site: 'datadoghq.eu'
 			});
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it('resolves a relative read in an included config from the including unit', async () => {
+		const os = await import('node:os');
+		const fs = await import('node:fs/promises');
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-relative-read-'));
+		try {
+			await fs.writeFile(path.join(root, 'root.hcl'), [
+				'locals {',
+				'  unit_vars = read_terragrunt_config("unit.hcl")',
+				'}'
+			].join('\n'));
+			const unitDir = path.join(root, 'live', 'app');
+			await fs.mkdir(unitDir, { recursive: true });
+			await fs.writeFile(path.join(unitDir, 'unit.hcl'), 'locals { marker = "from-unit" }\n');
+			const unit = [
+				'include "root" {',
+				'  path   = find_in_parent_folders("root.hcl")',
+				'  expose = true',
+				'}',
+				'',
+				'inputs = { marker = include.root.locals.unit_vars.locals.marker }'
+			].join('\n');
+			const unitPath = path.join(unitDir, 'terragrunt.hcl');
+
+			const result = await evaluator.evaluateUnit(unitPath, unit, root);
+			assert.equal(result.valid, true, result.error);
+			assert.deepEqual(result.inputs ? runtimeValueToPlain(result.inputs) : undefined, {
+				marker: 'from-unit'
+			});
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it('uses the including unit repository for repository functions in an external include', async () => {
+		const os = await import('node:os');
+		const fs = await import('node:fs/promises');
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-unit-repo-'));
+		try {
+			await fs.writeFile(path.join(root, 'root.hcl'), [
+				'locals {',
+				'  global = read_terragrunt_config("${get_repo_root()}/global.hcl")',
+				'}'
+			].join('\n'));
+			const repository = path.join(root, 'repository');
+			const unitDir = path.join(repository, 'live', 'app');
+			await fs.mkdir(path.join(repository, '.git'), { recursive: true });
+			await fs.mkdir(unitDir, { recursive: true });
+			await fs.writeFile(path.join(repository, 'global.hcl'), 'locals { marker = "unit-repository" }\n');
+			const unit = [
+				'include "root" {',
+				'  path   = "../../../root.hcl"',
+				'  expose = true',
+				'}',
+				'',
+				'inputs = { marker = include.root.locals.global.locals.marker }'
+			].join('\n');
+
+			const result = await evaluator.evaluateUnit(path.join(unitDir, 'terragrunt.hcl'), unit, root);
+			assert.equal(result.valid, true, result.error);
+			assert.deepEqual(result.inputs ? runtimeValueToPlain(result.inputs) : undefined, {
+				marker: 'unit-repository'
+			});
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it('collects inline functions through a unit-relative nested include', async () => {
+		const os = await import('node:os');
+		const fs = await import('node:fs/promises');
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-inline-unitdir-'));
+		try {
+			await fs.writeFile(path.join(root, 'root.hcl'), `include "environment" {
+  path = find_in_parent_folders("environment.hcl")
+}`);
+			const environmentDir = path.join(root, 'live', 'prod');
+			const unitDir = path.join(environmentDir, 'app');
+			await fs.mkdir(unitDir, { recursive: true });
+			await fs.writeFile(path.join(environmentDir, 'environment.hcl'), 'function environment() { return "prod"; }\n');
+			const unit = `include "root" {
+  path = find_in_parent_folders("root.hcl")
+}`;
+			const unitPath = path.join(unitDir, 'terragrunt.hcl');
+
+			const inherited = await evaluator.collectInheritedInlineFunctions(unitPath, unit, root);
+			assert.equal(inherited.has('environment'), true);
 		} finally {
 			await fs.rm(root, { recursive: true, force: true });
 		}
