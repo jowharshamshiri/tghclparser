@@ -57,10 +57,11 @@
 		"build": "tsup src/index.ts src/cli.ts --format cjs,esm --dts --external vscode-languageserver-types --external vscode-languageserver",
 		"format": "prettier --write \"src/**/*.ts\"",
 		"lint": "eslint --fix",
+		"lint:ci": "eslint",
 		"parser": "peggy --cache --trace --format 'es' --dts --dependency \"{Schema}:./Schema.ts\" --output src/parser.js grammar.peggy",
 		"prepare": "npm run build",
 		"prepublishOnly": "npm test && npm run lint",
-		"test": "tsx node_modules/.bin/mocha 'tests/**/*.test.ts'"
+		"test": "mocha"
 	},
 	"peerDependencies": {
 		"typescript": ">=4.7.0"
@@ -79,6 +80,9 @@
 		"vscode-uri": "^3.1.0"
 	},
 	"devDependencies": {
+		"@eslint/js": "^9.39.0",
+		"@swc-node/register": "^1.12.1",
+		"@swc/core": "^1.16.2",
 		"@types/chai": "^5.0.1",
 		"@types/js-yaml": "^4.0.9",
 		"@types/mocha": "^10.0.10",
@@ -86,16 +90,15 @@
 		"@types/vscode": "^1.97.0",
 		"brace-expansion": "^1.1.18",
 		"chai": "5.1.2",
-		"@eslint/js": "^9.39.0",
 		"eslint": "^9.39.0",
+		"eslint-formatter-gha": "2.0.1",
 		"globals": "^17.12.0",
 		"lint-staged": "^16.2.0",
-		"mocha": "^11.7.0",
+		"mocha": "^12.0.1",
 		"peggy": "^4.2.0",
 		"prettier": "^3.3.3",
 		"simple-git-hooks": "2.11.1",
 		"tsup": "^8.5.0",
-		"tsx": "^4.20.0",
 		"typescript": "^5.9.0",
 		"typescript-eslint": "^8.46.0"
 	},
