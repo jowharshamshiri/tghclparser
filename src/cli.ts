@@ -171,12 +171,12 @@ function executionUsage(): string {
 
 function renderUsage(): string {
 	return [
-		'Usage: tghclp render --json [options]',
+		'Usage: tghclp render (--json | --format=json) [options]',
 		'',
 		'Options:',
-		'  --json                Print the rendered configuration as JSON (required)',
-		'  --format <format>     json; equivalent to --json',
-		'  --working-dir <path>  Directory containing the configuration',
+		'  --json                Print the rendered configuration as JSON',
+		'  --format=json        Equivalent to --json (also accepts --format json)',
+		'  --working-dir <path>  Directory containing the configuration (default: current directory)',
 		'  --config <file>       Configuration filename (default: terragrunt.hcl)',
 		'  --help                Show this help'
 	].join('\n');
