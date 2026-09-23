@@ -140,6 +140,7 @@ function rootUsage(): string {
 		'',
 		'Configuration commands:',
 		'  hcl validate     Validate Terragrunt HCL files',
+		'  render           Print an evaluated configuration as JSON',
 		'  info print       Print evaluation context',
 		'',
 		'OpenTofu shortcuts:',
@@ -165,6 +166,19 @@ function executionUsage(): string {
 		'  --tf-path <path>       OpenTofu/Terraform executable (default: tofu)',
 		'  --no-color              Disable color output',
 		'  --help                  Show this help'
+	].join('\n');
+}
+
+function renderUsage(): string {
+	return [
+		'Usage: tghclp render --json [options]',
+		'',
+		'Options:',
+		'  --json                Print the rendered configuration as JSON (required)',
+		'  --format <format>     json; equivalent to --json',
+		'  --working-dir <path>  Directory containing the configuration',
+		'  --config <file>       Configuration filename (default: terragrunt.hcl)',
+		'  --help                Show this help'
 	].join('\n');
 }
 
@@ -729,7 +743,7 @@ async function renderConfig(argv: string[]): Promise<number> {
 	for (let index = 0; index < argv.length; index++) {
 		const argument = argv[index];
 		if (argument === '--help' || argument === '-h') {
-			console.log('Usage: tghclp render --json [--working-dir <path>] [--config <file>]');
+			console.log(renderUsage());
 			return 0;
 		}
 		if (argument === '--json' || argument === '--format=json') { json = true; continue; }

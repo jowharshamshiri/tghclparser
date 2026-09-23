@@ -95,6 +95,15 @@ tghclp run --working-dir ./infrastructure -- plan
 Discovery skips generated and dependency-cache directories and reports paths relative to the selected working directory.
 `run` validates the discovered configuration before invoking the selected OpenTofu/Terraform binary without a shell; use `--tf-path` to select the executable explicitly.
 
+To see what a configuration actually evaluates to — after `include` merging, `locals`, function calls, and `dependency` resolution — render it:
+
+```sh
+tghclp render --json --working-dir ./infrastructure/app
+tghclp render --json --working-dir ./infrastructure/app --config root.hcl
+```
+
+JSON is currently the only output format, so `--json` (or `--format=json`) is required. `--config` selects the configuration filename, which defaults to `terragrunt.hcl` and must sit inside the working directory. A `.hcl.json` configuration is validated and printed as authored rather than re-evaluated.
+
 Experiment-gated language features must be enabled explicitly, for example `--experiment deep-merge`; the command fails when such a feature is used without its explicit switch.
 
 ## Dependencies and mock outputs
