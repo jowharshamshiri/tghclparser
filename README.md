@@ -137,6 +137,8 @@ Reading an output that only a disallowed mock would have supplied reports which 
 
 Install dependencies in this directory. The grammar source is `grammar.peggy`; `src/parser.js` is the checked-in generated parser used by consumers. The test suite contains behavior assertions for includes, completions, file-kind validation, stack references, autoincludes, and workspace graph construction.
 
+Run the TypeScript CLI directly during development with `npm run tghclp -- render --help` (or pass any other CLI arguments). This uses the locally installed `tsx` and does not require rebuilding `dist` after source changes.
+
 Function evaluation is implemented as named operations using `@jowharshamshiri/ops-ts`. Each operation receives serialized arguments through a dry context and the live evaluator services through a wet context, so built-in and inline functions share the same invocation boundary.
 
 ## License
