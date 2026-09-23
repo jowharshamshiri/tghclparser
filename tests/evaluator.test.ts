@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, publicEncrypt, constants } from 'node:crypto';
-import { existsSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import path from 'node:path';
 
@@ -61,20 +60,27 @@ describe('semantic configuration evaluation', () => {
 		assert.match(result.error ?? '', /disabled until the workspace is trusted/);
 	});
 
-	// Needs the sibling tghclparser_testenv checkout, which is not part of this repository.
-	it('anchors parent-file resolution at the project root marker when evaluation starts in a child directory', async function () {
-		const projectRoot = `${process.cwd()}/../tghclparser_testenv/showcase/current`;
-		if (!existsSync(projectRoot)) this.skip();
-		const configPath = `${projectRoot}/environments/prod/app/terragrunt.hcl`;
-		const result = await evaluator.evaluateUnit(
-			configPath,
-			'inputs = { root = find_in_parent_folders("root.hcl") }',
-			`${projectRoot}/environments/prod/app`
-		);
-		assert.equal(result.valid, true);
-		assert.deepEqual(result.inputs ? runtimeValueToPlain(result.inputs) : undefined, {
-			root: path.resolve(`${projectRoot}/root.hcl`)
-		});
+	it('anchors parent-file resolution at the project root marker when evaluation starts in a child directory', async () => {
+		const os = await import('node:os');
+		const fs = await import('node:fs/promises');
+		const projectRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-project-root-')));
+		try {
+			await fs.mkdir(path.join(projectRoot, '.git'));
+			await fs.writeFile(path.join(projectRoot, 'root.hcl'), 'locals { marker = "root" }\n');
+			const unitDir = path.join(projectRoot, 'environments', 'prod', 'app');
+			await fs.mkdir(unitDir, { recursive: true });
+			const configPath = path.join(unitDir, 'terragrunt.hcl');
+			const content = 'inputs = { root = find_in_parent_folders("root.hcl") }';
+			await fs.writeFile(configPath, content);
+
+			const result = await evaluator.evaluateUnit(configPath, content, unitDir);
+			assert.equal(result.valid, true, result.error);
+			assert.deepEqual(result.inputs ? runtimeValueToPlain(result.inputs) : undefined, {
+				root: path.join(projectRoot, 'root.hcl')
+			});
+		} finally {
+			await fs.rm(projectRoot, { recursive: true, force: true });
+		}
 	});
 
 	it('requires and evaluates the deep-merge experiment explicitly', async () => {
