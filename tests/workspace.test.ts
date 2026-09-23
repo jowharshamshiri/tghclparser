@@ -233,4 +233,198 @@ dependency "network" {
 		const app = graph?.children.find(node => node.name.endsWith(path.join('live', 'app', 'terragrunt.hcl')));
 		expect(app?.children.map(node => [node.type, path.basename(node.name)])).to.deep.equal([['read', 'shared.yaml']]);
 	});
+
+	it('reads a path named by a local instead of by a literal', async () => {
+		const unitDirectory = path.join(directory, 'live', 'app');
+		await fs.mkdir(unitDirectory, { recursive: true });
+		await fs.writeFile(path.join(directory, 'secrets.yaml'), 'api_key: value');
+		await fs.writeFile(path.join(unitDirectory, 'terragrunt.hcl'), `locals {
+  secrets_file = "secrets.yaml"
+  secrets      = read_terragrunt_config(find_in_parent_folders(local.secrets_file))
+}`);
+		const workspace = new Workspace();
+		workspace.setWorkspaceRoot(URI.file(directory).toString());
+
+		const graph = await workspace.refreshDependencyTree();
+		const app = graph?.children.find(node => node.name.endsWith(path.join('live', 'app', 'terragrunt.hcl')));
+		expect(app?.children.map(node => [node.type, path.basename(node.name)])).to.deep.equal([['read', 'secrets.yaml']]);
+	});
+
+	it('searches parent folders from the unit when walking an include chain', async () => {
+		const unitDirectory = path.join(directory, 'live', 'prod', 'app');
+		await fs.mkdir(unitDirectory, { recursive: true });
+		await fs.writeFile(path.join(directory, 'root.hcl'), `locals {
+  stage_vars = read_terragrunt_config(find_in_parent_folders("stage.hcl"))
+}`);
+		await fs.writeFile(path.join(directory, 'live', 'prod', 'stage.hcl'), 'locals { stage = "prod" }');
+		await fs.writeFile(path.join(unitDirectory, 'terragrunt.hcl'), `include "root" {
+  path = find_in_parent_folders("root.hcl")
+}`);
+		const workspace = new Workspace();
+		workspace.setWorkspaceRoot(URI.file(directory).toString());
+
+		const graph = await workspace.refreshDependencyTree();
+		const app = graph?.children.find(node => node.name.endsWith(path.join('live', 'prod', 'app', 'terragrunt.hcl')));
+		expect(app?.children.map(node => path.basename(node.name))).to.include('root.hcl');
+	});
+
+	it('keeps shared-include reads distinct for every originating unit', async () => {
+		await fs.writeFile(path.join(directory, 'root.hcl'), `locals {
+  account = read_terragrunt_config(find_in_parent_folders("account.hcl"))
+}`);
+		for (const environment of ['dev', 'prod']) {
+			const environmentDirectory = path.join(directory, 'live', environment);
+			const unitDirectory = path.join(environmentDirectory, 'app');
+			await fs.mkdir(unitDirectory, { recursive: true });
+			await fs.writeFile(path.join(environmentDirectory, 'account.hcl'), `locals { environment = "${environment}" }`);
+			await fs.writeFile(path.join(unitDirectory, 'terragrunt.hcl'), `include "root" {
+  path = find_in_parent_folders("root.hcl")
+}`);
+		}
+		const workspace = new Workspace();
+		workspace.setWorkspaceRoot(URI.file(directory).toString());
+
+		const graph = await workspace.refreshDependencyTree();
+		for (const environment of ['dev', 'prod']) {
+			const unit = graph?.children.find(node =>
+				node.name.endsWith(path.join('live', environment, 'app', 'terragrunt.hcl')));
+			const root = unit?.children.find(node => node.name === 'root.hcl');
+			expect(root?.children.map(node => node.name)).to.deep.equal([
+				path.join('live', environment, 'account.hcl')
+			]);
+			expect(unit?.data.reading?.map(uri => path.relative(directory, URI.parse(uri).fsPath))).to.deep.equal([
+				path.join('live', environment, 'account.hcl')
+			]);
+		}
+		expect(graph?.children.filter(node => node.name.endsWith('account.hcl'))).to.have.length(0);
+
+		const rootUri = URI.file(path.join(directory, 'root.hcl')).toString();
+		const rootContent = `locals {
+  account = read_terragrunt_config(find_in_parent_folders("account.hcl"))
+  edited  = true
+}`;
+		await workspace.addDocument(new ParsedDocument(workspace, rootUri, rootContent));
+		expect((await workspace.getDependents(rootUri)).map(config =>
+			path.relative(directory, URI.parse(config.uri).fsPath))).to.deep.equal([
+			path.join('live', 'dev', 'app', 'terragrunt.hcl'),
+			path.join('live', 'prod', 'app', 'terragrunt.hcl')
+		]);
+
+		const invalidUpdate = new ParsedDocument(workspace, rootUri, `locals {
+  missing = read_terragrunt_config(find_in_parent_folders("missing.hcl"))
+}`);
+		const message = await rejectionMessage(workspace.addDocument(invalidUpdate));
+		expect(message).to.include('Could not find missing.hcl in parent folders');
+		expect((await workspace.getDependents(rootUri)).map(config =>
+			path.relative(directory, URI.parse(config.uri).fsPath))).to.deep.equal([
+			path.join('live', 'dev', 'app', 'terragrunt.hcl'),
+			path.join('live', 'prod', 'app', 'terragrunt.hcl')
+		]);
+	});
+
+	it('resolves an inherited dependency path from the including unit', async () => {
+		const unitDirectory = path.join(directory, 'live', 'dev', 'app');
+		const dependencyDirectory = path.join(directory, 'live', 'dev', 'network');
+		await fs.mkdir(unitDirectory, { recursive: true });
+		await fs.mkdir(dependencyDirectory, { recursive: true });
+		await fs.mkdir(path.join(directory, '_env'));
+		await fs.writeFile(path.join(dependencyDirectory, 'terragrunt.hcl'), 'inputs = {}');
+		await fs.writeFile(path.join(directory, '_env', 'app.hcl'), `dependency "network" {
+  config_path = "../network"
+}`);
+		await fs.writeFile(path.join(unitDirectory, 'terragrunt.hcl'), `include "env" {
+  path = "../../../_env/app.hcl"
+}`);
+		const workspace = new Workspace();
+		workspace.setWorkspaceRoot(URI.file(directory).toString());
+
+		const graph = await workspace.refreshDependencyTree();
+		const unit = graph?.children.find(node => node.name.endsWith(path.join('dev', 'app', 'terragrunt.hcl')));
+		const included = unit?.children.find(node => node.name.endsWith(path.join('_env', 'app.hcl')));
+		expect(included?.children.map(node => node.name)).to.deep.equal([
+			path.join('live', 'dev', 'network', 'terragrunt.hcl')
+		]);
+	});
+
+	it('resolves a repository-relative read path against the unit that asked for it', async () => {
+		// The unit is nested deeper than the repository root is on disk, so resolving from the wrong base runs off the
+		// filesystem root and clamps rather than landing on a path that happens to exist.
+		const deepRoot = path.join(directory, 'repo');
+		const unitDirectory = path.join(deepRoot, ...Array.from({ length: 12 }, (_, index) => `level${index}`));
+		await fs.mkdir(unitDirectory, { recursive: true });
+		await fs.mkdir(path.join(deepRoot, '.git'));
+		await fs.mkdir(path.join(deepRoot, 'live'), { recursive: true });
+		await fs.writeFile(path.join(deepRoot, 'live', 'global.hcl'), 'locals { org = "platform" }');
+		await fs.writeFile(path.join(deepRoot, 'root.hcl'), `locals {
+  global = read_terragrunt_config("\${get_path_to_repo_root()}/live/global.hcl")
+}`);
+		await fs.writeFile(path.join(unitDirectory, 'terragrunt.hcl'), `include "root" {
+  path = find_in_parent_folders("root.hcl")
+}`);
+		const workspace = new Workspace();
+		workspace.setWorkspaceRoot(URI.file(deepRoot).toString());
+
+		const graph = await workspace.refreshDependencyTree();
+		const app = graph?.children.find(node => node.name.endsWith(path.join('level11', 'terragrunt.hcl')));
+		const root = app?.children.find(node => path.basename(node.name) === 'root.hcl');
+		expect(root?.children.map(node => path.basename(node.name))).to.include('global.hcl');
+	});
+
+	it('uses the originating unit repository when an included config is outside it', async () => {
+		const repository = path.join(directory, 'repository');
+		const unitDirectory = path.join(repository, 'live', 'app');
+		await fs.mkdir(path.join(repository, '.git'), { recursive: true });
+		await fs.mkdir(unitDirectory, { recursive: true });
+		await fs.writeFile(path.join(repository, 'global.hcl'), 'locals { owner = "platform" }');
+		await fs.writeFile(path.join(directory, 'root.hcl'), `locals {
+  global = read_terragrunt_config("\${get_repo_root()}/global.hcl")
+}`);
+		await fs.writeFile(path.join(unitDirectory, 'terragrunt.hcl'), `include "root" {
+  path = "../../../root.hcl"
+}`);
+		const workspace = new Workspace();
+		workspace.setWorkspaceRoot(URI.file(directory).toString());
+
+		const graph = await workspace.refreshDependencyTree();
+		const unit = graph?.children.find(node => node.name.endsWith(path.join('live', 'app', 'terragrunt.hcl')));
+		const root = unit?.children.find(node => node.name === 'root.hcl');
+		expect(root?.children.map(node => node.name)).to.deep.equal([
+			path.join('repository', 'global.hcl')
+		]);
+	});
+
+	it('keeps the rest of the lineage when one read path cannot be known statically', async () => {
+		const unitDirectory = path.join(directory, 'live', 'app');
+		await fs.mkdir(unitDirectory, { recursive: true });
+		await fs.writeFile(path.join(directory, 'stage.hcl'), 'locals { stage = "prod" }');
+		await fs.writeFile(path.join(directory, 'shared.yaml'), 'owner: platform');
+		await fs.writeFile(path.join(unitDirectory, 'terragrunt.hcl'), `locals {
+  stage_vars = read_terragrunt_config(find_in_parent_folders("stage.hcl")).locals
+  shared     = mark_as_read("\${get_terragrunt_dir()}/../../shared.yaml")
+}
+
+dependency "other" {
+  config_path = "../\${local.stage_vars.stage}/other"
+}`);
+		const workspace = new Workspace();
+		workspace.setWorkspaceRoot(URI.file(directory).toString());
+
+		const graph = await workspace.refreshDependencyTree();
+		const app = graph?.children.find(node => node.name.endsWith(path.join('live', 'app', 'terragrunt.hcl')));
+		const read = app?.children.map(node => path.basename(node.name)) ?? [];
+		expect(read).to.include('stage.hcl');
+		expect(read).to.include('shared.yaml');
+	});
+
+	it('rejects a local read-path cycle even when it crosses a function call', async () => {
+		await fs.writeFile(path.join(directory, 'terragrunt.hcl'), `locals {
+  path = find_in_parent_folders(local.path)
+  data = read_terragrunt_config(local.path)
+}`);
+		const workspace = new Workspace();
+		workspace.setWorkspaceRoot(URI.file(directory).toString());
+
+		const message = await rejectionMessage(workspace.refreshDependencyTree());
+		expect(message).to.equal('Local path refers to itself in a read path');
+	});
 });

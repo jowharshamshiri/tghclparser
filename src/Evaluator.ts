@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -88,7 +89,9 @@ interface Scope {
 	dir: string;
 	workspaceRoot: string;
 	locals: Map<string, TNode>;
-	localCache: Map<string, RuntimeValue<ValueType> | 'pending'>;
+	localCache: Map<string, RuntimeValue<ValueType>>;
+	/** In-flight `resolveLocal` work, so concurrent readers of one local await it instead of reporting a cycle. */
+	localPending: Map<string, Promise<RuntimeValue<ValueType>>>;
 	includes: Map<string, IncludeRef>;
 	autoinclude: FileResult | null;
 	rootAttrs: Map<string, TNode>;
@@ -118,6 +121,11 @@ interface Scope {
 	comprehension: Array<Map<string, RuntimeValue<ValueType>>>;
 	/** Inline functions declared by this file, by name. */
 	functions: Map<string, InlineFunctionDefinition<Scope>>;
+}
+
+interface LocalResolution {
+	scope: Scope;
+	name: string;
 }
 
 const AUTOINCLUDE_FILES = new Set(['terragrunt.autoinclude.hcl', 'terragrunt.autoinclude.stack.hcl']);
@@ -231,6 +239,14 @@ export class ConfigEvaluator {
 	 * between "something recursed" and "this unit includes itself".
 	 */
 	private readonly includeChain: string[] = [];
+	/**
+	 * Local-resolution ancestry for each asynchronous evaluation chain.
+	 *
+	 * Scope-wide pending state cannot distinguish recursion from sibling
+	 * expressions awaiting the same local. Keeping ancestry in async context
+	 * preserves that distinction across every await.
+	 */
+	private readonly localResolutionPath = new AsyncLocalStorage<readonly LocalResolution[]>();
 	/** `options.allowedPaths` after realpath, resolved on first use. */
 	private allowedPathsResolved: string[] | undefined;
 
@@ -358,6 +374,7 @@ export class ConfigEvaluator {
 		const workspaceRoot = await this.resolveWorkspaceRoot(workDir);
 		const inherited = new Map<string, FunctionDefinition>();
 		const visited = new Set<string>([path.resolve(configPath)]);
+		const unitDir = path.dirname(configPath);
 
 		const own = new Set<string>();
 		for (const node of declaredInlineFunctions(parse(content, { grammarSource: configPath, tracer: { trace() {} } }))) {
@@ -367,7 +384,7 @@ export class ConfigEvaluator {
 		// Breadth-first over the include graph so that nearer declarations are
 		// recorded first and never replaced by a same-named one further along,
 		// matching the resolution order findInlineFunction uses.
-		const queue: string[] = await this.includeTargets(configPath, content, workspaceRoot);
+		const queue: string[] = await this.includeTargets(configPath, content, workspaceRoot, unitDir);
 
 		while (queue.length > 0) {
 			const target = queue.shift()!;
@@ -403,7 +420,7 @@ export class ConfigEvaluator {
 				}
 			}
 
-			queue.push(...await this.includeTargets(resolved, includedContent, workspaceRoot));
+			queue.push(...await this.includeTargets(resolved, includedContent, workspaceRoot, unitDir));
 		}
 
 		return inherited;
@@ -415,7 +432,12 @@ export class ConfigEvaluator {
 	 * be computed — `find_in_parent_folders("root.hcl")` is the common form — but
 	 * a path that cannot be resolved is skipped rather than failing the walk.
 	 */
-	private async includeTargets(filePath: string, content: string, workspaceRoot: string): Promise<string[]> {
+	private async includeTargets(
+		filePath: string,
+		content: string,
+		workspaceRoot: string,
+		unitDir = path.dirname(filePath)
+	): Promise<string[]> {
 		const targets: string[] = [];
 		let ast: TNode;
 		try {
@@ -430,9 +452,11 @@ export class ConfigEvaluator {
 			content,
 			ast,
 			dir,
+			unitDir,
 			workspaceRoot,
 			locals: new Map(),
 			localCache: new Map(),
+			localPending: new Map(),
 			includes: new Map(),
 			autoinclude: null,
 			rootAttrs: new Map(),
@@ -489,7 +513,16 @@ export class ConfigEvaluator {
 	): Promise<RuntimeValue<ValueType> | undefined> {
 		this.assertTrusted('Semantic evaluation');
 		const workspaceRoot = await this.resolveWorkspaceRoot(workDir);
-		const result = await this.evaluateFile(configPath, content, workspaceRoot);
+		// A failure elsewhere in the file must not answer for the one expression being hovered; `inputs` is evaluated eagerly
+		// and can throw on its own.
+		let result: FileResult;
+		try {
+			result = await this.evaluateFile(configPath, content, workspaceRoot);
+		} catch {
+			const partial = await this.scopeWithoutInputs(configPath, content, workspaceRoot);
+			if (!partial) return undefined;
+			result = partial;
+		}
 		const lines = content.split('\n');
 		if (position.line < 0 || position.line >= lines.length || position.character < 0) return undefined;
 		const offset = lines.slice(0, position.line).reduce((total, line) => total + line.length + 1, 0) + position.character;
@@ -533,7 +566,16 @@ export class ConfigEvaluator {
 		return node.location.end.offset - node.location.start.offset;
 	}
 
-	private async evaluateFile(filePath: string, content: string, workDir: string): Promise<FileResult> {
+	/** The scope alone, for callers that evaluate one node and can do without the file's own `inputs`. */
+	private async scopeWithoutInputs(filePath: string, content: string, workDir: string): Promise<FileResult | undefined> {
+		try {
+			return await this.evaluateFile(filePath, content, workDir, undefined, true);
+		} catch {
+			return undefined;
+		}
+	}
+
+	private async evaluateFile(filePath: string, content: string, workDir: string, unitDir?: string, skipInputs = false): Promise<FileResult> {
 		const resolvedPath = path.resolve(filePath);
 		const repeatedAt = this.includeChain.indexOf(resolvedPath);
 		if (repeatedAt !== -1) {
@@ -547,13 +589,13 @@ export class ConfigEvaluator {
 		}
 		this.includeChain.push(resolvedPath);
 		try {
-			return await this.evaluateFileUnguarded(filePath, content, workDir);
+			return await this.evaluateFileUnguarded(filePath, content, workDir, unitDir, skipInputs);
 		} finally {
 			this.includeChain.pop();
 		}
 	}
 
-	private async evaluateFileUnguarded(filePath: string, content: string, workDir: string): Promise<FileResult> {
+	private async evaluateFileUnguarded(filePath: string, content: string, workDir: string, unitDir?: string, skipInputs = false): Promise<FileResult> {
 		const ast = parse(content, { grammarSource: filePath, tracer: { trace() {} } });
 		const dir = path.dirname(filePath);
 		const baseName = path.basename(filePath);
@@ -572,9 +614,12 @@ export class ConfigEvaluator {
 			content,
 			ast,
 			dir,
+			// An included file resolves parent-folder searches for the unit that included it, not for its own directory.
+			unitDir: unitDir ?? dir,
 			workspaceRoot: path.resolve(workDir),
 			locals: new Map(),
 			localCache: new Map(),
+			localPending: new Map(),
 			includes: new Map(),
 			autoinclude: null,
 			rootAttrs: new Map(),
@@ -670,7 +715,7 @@ export class ConfigEvaluator {
 			this.assertTrusted('Included configuration evaluation');
 			await this.assertPathAllowed(includePath, scope.workspaceRoot);
 			const includeContent = await fs.readFile(includePath, 'utf8');
-			const includeResult = await this.evaluateFile(includePath, includeContent, workDir);
+			const includeResult = await this.evaluateFile(includePath, includeContent, workDir, scope.unitDir ?? dir);
 			if (blocks.some(block => block.value === 'remote_state') && includeResult.scope.blocks.some(block => block.value === 'remote_state')) {
 				throw new Error(`remote_state is defined in both ${filePath} and included configuration ${includePath}`);
 			}
@@ -683,13 +728,13 @@ export class ConfigEvaluator {
 				this.assertTrusted('Autoinclude evaluation');
 				await this.assertPathAllowed(autoPath, scope.workspaceRoot);
 				const autoContent = await fs.readFile(autoPath, 'utf8');
-				scope.autoinclude = await this.evaluateFile(autoPath, autoContent, workDir);
+				scope.autoinclude = await this.evaluateFile(autoPath, autoContent, workDir, scope.unitDir ?? dir);
 			}
 		}
 
 		const inputsAssignment = assignments.find(assignment => String(assignment.value) === 'inputs');
 		let ownInputs: Map<string, RuntimeValue<ValueType>> | null = null;
-		if (inputsAssignment) {
+		if (inputsAssignment && !skipInputs) {
 			const value = await this.evalNode(requiredValueNode(inputsAssignment, 'root_assignment_identifier'), scope);
 			if (value.type !== 'object' && value.type !== 'block') {
 				throw new Error(`inputs in ${filePath} must evaluate to an object`);
@@ -731,7 +776,7 @@ export class ConfigEvaluator {
 		// genuinely require the repository root resolve it themselves and raise
 		// their own error, so resolving it eagerly here would fail evaluations
 		// that never ask for it.
-		const repoRoot = await this.findRepoRoot(scope.dir);
+		const repoRoot = await this.findRepoRoot(scope.unitDir ?? scope.dir);
 		return {
 			workingDirectory: scope.dir,
 			environmentVariables: this.options.environmentVariables,
@@ -753,16 +798,17 @@ export class ConfigEvaluator {
 				}
 			},
 			// `workingDirectory` above stays this FILE's directory, because
-			// that is what a relative `file()` resolves against. These two
-			// report the unit being rendered, which differs only for a
-			// `generate` block inherited through an include.
+			// that is what a relative `file()` resolves against. Directory-aware
+			// Terragrunt functions report the unit currently being rendered.
 			terragruntDir: scope.unitDir ?? scope.dir,
 			originalTerragruntDir: scope.unitDir ?? scope.dir,
 			includeDir: scope.includes.size > 0 ? [...scope.includes.values()][0].dir : undefined,
 			repoRoot,
 			readTerragruntConfig: async (relativePath: string) => {
 				this.assertTrusted('read_terragrunt_config');
-				const target = path.isAbsolute(relativePath) ? relativePath : path.resolve(scope.dir, relativePath);
+				const target = path.isAbsolute(relativePath)
+					? relativePath
+					: path.resolve(scope.unitDir ?? scope.dir, relativePath);
 				await this.assertPathAllowed(target, scope.workspaceRoot);
 				if (!(await pathExists(target))) return undefined;
 				const fileContent = await fs.readFile(target, 'utf8');
@@ -771,7 +817,9 @@ export class ConfigEvaluator {
 			},
 			readTFVarsFile: async (relativePath: string) => {
 				this.assertTrusted('read_tfvars_file');
-				const target = path.isAbsolute(relativePath) ? relativePath : path.resolve(scope.dir, relativePath);
+				const target = path.isAbsolute(relativePath)
+					? relativePath
+					: path.resolve(scope.unitDir ?? scope.dir, relativePath);
 				await this.assertPathAllowed(target, scope.workspaceRoot);
 				if (!(await pathExists(target))) return undefined;
 				const fileContent = await fs.readFile(target, 'utf8');
@@ -976,14 +1024,34 @@ export class ConfigEvaluator {
 
 	private async resolveLocal(scope: Scope, name: string): Promise<RuntimeValue<ValueType>> {
 		const cached = scope.localCache.get(name);
-		if (cached === 'pending') throw new Error(`Cycle detected in locals involving "${name}"`);
 		if (cached !== undefined) return cached;
+
+		const activePath = this.localResolutionPath.getStore() ?? [];
+		if (activePath.some(entry => entry.scope === scope && entry.name === name)) {
+			throw new Error(`Cycle detected in locals involving "${name}"`);
+		}
+
+		// A reader outside the active ancestry is concurrent, not recursive. It
+		// shares the published evaluation instead of starting duplicate work.
+		const inFlight = scope.localPending.get(name);
+		if (inFlight) return inFlight;
+
 		const node = scope.locals.get(name);
 		if (!node) throw new Error(`Undefined local value "${name}"`);
-		scope.localCache.set(name, 'pending');
-		const value = await this.evalNode(node, scope);
-		scope.localCache.set(name, value);
-		return value;
+		const evaluation = this.localResolutionPath.run(
+			[...activePath, { scope, name }],
+			() => this.evalNode(node, scope)
+		);
+		scope.localPending.set(name, evaluation);
+		try {
+			const value = await evaluation;
+			scope.localCache.set(name, value);
+			return value;
+		} finally {
+			// Do not remove a newer evaluation if a rejected promise was retried
+			// before this finally block ran.
+			if (scope.localPending.get(name) === evaluation) scope.localPending.delete(name);
+		}
 	}
 
 	private async resolveReference(parts: string[], scope: Scope): Promise<RuntimeValue<ValueType>> {
@@ -1027,7 +1095,14 @@ export class ConfigEvaluator {
 		const head = parts[0];
 		const result = include.result;
 		if (head === 'locals') {
-			if (parts.length < 2) throw new Error('include locals reference requires a name');
+			// `include.<name>.locals` with no trailing name is the whole map.
+			if (parts.length < 2) {
+				const all = new Map<string, RuntimeValue<ValueType>>();
+				for (const name of result.scope.locals.keys()) {
+					all.set(name, await this.resolveLocal(result.scope, name));
+				}
+				return makeObjectValue(all);
+			}
 			const value = await this.resolveLocal(result.scope, parts[1]);
 			return this.traverse(value, parts.slice(2), parts[1]);
 		}
@@ -1594,8 +1669,12 @@ export class ConfigEvaluator {
 	 */
 	private async resolvableLocals(scope: Scope): Promise<Record<string, unknown>> {
 		const resolved: Record<string, unknown> = {};
+		const activePath = this.localResolutionPath.getStore() ?? [];
 		for (const name of scope.locals.keys()) {
-			if (scope.localCache.get(name) === 'pending') continue;
+			// A function can be called while one of its declaring scope's locals
+			// is being resolved. Do not eagerly recurse into that one merely to
+			// build the binding; guardedNamespace still fails if the body reads it.
+			if (activePath.some(entry => entry.scope === scope && entry.name === name)) continue;
 			resolved[name] = runtimeToPlain(await this.resolveLocal(scope, name));
 		}
 		return resolved;
@@ -1685,6 +1764,7 @@ function makeRootScope(filePath: string, content: string, workspaceRoot = path.d
 		workspaceRoot,
 		locals: new Map(),
 		localCache: new Map(),
+		localPending: new Map(),
 		includes: new Map(),
 		autoinclude: null,
 		rootAttrs: new Map(),
