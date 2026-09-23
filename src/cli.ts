@@ -766,9 +766,12 @@ async function renderConfig(argv: string[]): Promise<number> {
 		process.stdout.write(`${JSON.stringify(parsed)}\n`);
 		return 0;
 	}
-	const evaluator = evaluatorFor();
+	const evaluator = evaluatorFor({terraformCommand: 'validate', toleratesUnresolvedDependencies: true});
 	const result = await evaluator.evaluateRenderedConfig(realConfig, content, root);
 	process.stdout.write(`${JSON.stringify(runtimeValueToPlain(result))}\n`);
+	for (const reason of unresolvedDependencies.values()) {
+		process.stderr.write(`warning: ${reason} Its outputs render as [].\n`);
+	}
 	return 0;
 }
 
@@ -814,6 +817,7 @@ function evaluatorFor(options: {
 	terraformCliArgs?: string[];
 	experiments?: string[];
 	tfPath?: string;
+	toleratesUnresolvedDependencies?: boolean;
 } = {}): ConfigEvaluator {
 	const tfPath = options.tfPath ?? tfPathForDependencies();
 	const terraformCommand = options.terraformCommand ?? '';
@@ -827,8 +831,44 @@ function evaluatorFor(options: {
 		// The command decides whether a dependency's mock_outputs may be seen,
 		// so it has to reach the resolver. Without it every evaluation looked
 		// like the same command and a mock could not be scoped at all.
-		resolveDependency: (from, name) => dependencyOutputs(from, name, tfPath, terraformCommand),
+		resolveDependency: async (from, name) => {
+			if (!options.toleratesUnresolvedDependencies) {
+				return dependencyOutputs(from, name, tfPath, terraformCommand);
+			}
+			try {
+				return await dependencyOutputs(from, name, tfPath, terraformCommand, true);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				unresolvedDependencies.set(name, message.split('\n')[0].trim());
+				return unresolvedOutputs();
+			}
+		},
 	});
+}
+
+const unresolvedDependencies = new Map<string, string>();
+
+function unresolvedOutputs(): RuntimeValue<ValueType> {
+	return makeObjectValue(new Map([['outputs', makeObjectValue(answeringMap())]]));
+}
+
+function answeringMap(
+	known: Map<string, RuntimeValue<ValueType>> = new Map()
+): Map<string, RuntimeValue<ValueType>> {
+	return new Proxy(known, {
+		get(target, property, receiver) {
+			if (property === 'get') {
+				return (key: string) => target.get(key) ?? unresolvedOutputValue();
+			}
+			if (property === 'has') return () => true;
+			const value: unknown = Reflect.get(target, property, receiver);
+			return typeof value === 'function' ? value.bind(target) : value;
+		},
+	});
+}
+
+function unresolvedOutputValue(): RuntimeValue<ValueType> {
+	return convertToRuntimeValue([]);
 }
 
 function tfPathForDependencies(): string {
@@ -911,7 +951,8 @@ async function dependencyOutputs(
 	configPath: string,
 	name: string,
 	tfPath: string,
-	terraformCommand: string
+	terraformCommand: string,
+	tolerateAbsentOutputs = false
 ): Promise<RuntimeValue<ValueType> | undefined> {
 	const content = await fs.readFile(configPath, 'utf8');
 	const ast: any = parse(content, {grammarSource: configPath, tracer: {trace() {}}});
@@ -1015,7 +1056,7 @@ async function dependencyOutputs(
 		// output nobody produced is exactly the undefined state mocks are
 		// scoped to prevent.
 		const absent = Object.keys(mocks as Record<string, unknown>).filter(key => !outputs.has(key));
-		if (absent.length > 0) {
+		if (absent.length > 0 && !tolerateAbsentOutputs) {
 			throw new Error(
 				`dependency "${name}" has no ${absent.join(', ')} to read from ${target}, ` +
 				`and its mock_outputs are allowed only for: ${allowed.join(', ') || '(none)'} ` +
@@ -1025,6 +1066,12 @@ async function dependencyOutputs(
 				'safe for it.'
 			);
 		}
+	}
+	if (tolerateAbsentOutputs) {
+		if (outputs.size === 0) {
+			unresolvedDependencies.set(name, `dependency "${name}" has no outputs to read from ${target}.`);
+		}
+		return makeObjectValue(new Map([['outputs', makeObjectValue(answeringMap(outputs))]]));
 	}
 	return makeObjectValue(new Map([['outputs', makeObjectValue(outputs)]]));
 }

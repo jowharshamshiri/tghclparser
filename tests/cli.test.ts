@@ -691,6 +691,60 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(root, {recursive: true, force: true});
 	});
 
+	it('renders a unit whose dependency has no outputs to give', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const made = await workspaceWithUnappliedDependency(dependencyBlock([]));
+
+		const result = spawnSync(
+			process.execPath, [cli, 'render', '--json', '--working-dir', made.consumer],
+			{cwd: made.consumer, encoding: 'utf8'}
+		);
+		expect(result.status).to.equal(0, result.stderr);
+		expect(JSON.parse(result.stdout).inputs.seen).to.deep.equal([]);
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
+	it('names on stderr every dependency a render could not resolve', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const made = await workspaceWithUnappliedDependency(dependencyBlock([]));
+
+		const result = spawnSync(
+			process.execPath, [cli, 'render', '--json', '--working-dir', made.consumer],
+			{cwd: made.consumer, encoding: 'utf8'}
+		);
+		expect(result.stderr).to.contain('producer');
+		expect(result.stderr).to.contain('render as []');
+		expect(() => JSON.parse(result.stdout)).to.not.throw();
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
+	it('uses mock_outputs when rendering, rather than inventing a placeholder', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const made = await workspaceWithUnappliedDependency(
+			dependencyBlock(['  mock_outputs = {', '    answer = "invented"', '  }'], '["validate"]')
+		);
+
+		const result = spawnSync(
+			process.execPath, [cli, 'render', '--json', '--working-dir', made.consumer],
+			{cwd: made.consumer, encoding: 'utf8'}
+		);
+		expect(result.status).to.equal(0, result.stderr);
+		expect(JSON.parse(result.stdout).inputs.seen).to.equal('invented');
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
+	it('still refuses to run a unit whose dependency has no outputs', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const made = await workspaceWithUnappliedDependency(dependencyBlock([]));
+
+		const result = spawnSync(
+			process.execPath, [cli, 'apply', '--working-dir', made.consumer, '-auto-approve'],
+			{cwd: made.consumer, encoding: 'utf8'}
+		);
+		expect(result.status).to.not.equal(0);
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
 	it('passes the inputs block to OpenTofu, which is what inputs is for', async () => {
 		// Terragrunt evaluates `inputs` and exports each entry as TF_VAR_<name>.
 		// That is how a unit receives what its configuration computed -- a
