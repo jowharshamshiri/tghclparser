@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, publicEncrypt, constants } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import path from 'node:path';
 
@@ -60,8 +61,10 @@ describe('semantic configuration evaluation', () => {
 		assert.match(result.error ?? '', /disabled until the workspace is trusted/);
 	});
 
-	it('anchors parent-file resolution at the project root marker when evaluation starts in a child directory', async () => {
+	// Needs the sibling tghclparser_testenv checkout, which is not part of this repository.
+	it('anchors parent-file resolution at the project root marker when evaluation starts in a child directory', async function () {
 		const projectRoot = `${process.cwd()}/../tghclparser_testenv/showcase/current`;
+		if (!existsSync(projectRoot)) this.skip();
 		const configPath = `${projectRoot}/environments/prod/app/terragrunt.hcl`;
 		const result = await evaluator.evaluateUnit(
 			configPath,
