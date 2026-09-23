@@ -58,6 +58,15 @@ export interface ConfigEvaluatorOptions {
 	 */
 	allowedPaths?: string[];
 	resolveDependency?: (configPath: string, name: string) => Promise<RuntimeValue<ValueType> | undefined>;
+	/** Omit fields that read absent dependency outputs, and expose them through unresolvedRenderFields(). */
+	partialRender?: boolean;
+}
+
+export class UnresolvedDependencyOutputError extends Error {
+	constructor(dependency: string, output: string) {
+		super(`dependency "${dependency}" has no output "${output}"; apply the unit or allow a mock for render`);
+		this.name = 'UnresolvedDependencyOutputError';
+	}
 }
 
 export interface ConfigEvaluationResult {
@@ -79,6 +88,7 @@ interface FileResult {
 	content: string;
 	scope: Scope;
 	inputs: Map<string, RuntimeValue<ValueType>> | null;
+	unresolvedInputs: Map<string, {file: string; reason: string}>;
 	hasInputs: boolean;
 }
 
@@ -229,6 +239,25 @@ function requiredValueNode(node: TNode, excludedType = 'attribute_identifier'): 
 export class ConfigEvaluator {
 	private readonly schema = Schema.getInstance();
 	private readonly options: ConfigEvaluatorOptions;
+	private readonly renderUnresolved: Array<{file: string; field: string; reason: string}> = [];
+
+	unresolvedRenderFields(): ReadonlyArray<{file: string; field: string; reason: string}> {
+		return [...new Map(this.renderUnresolved.map(issue => [JSON.stringify(issue), issue])).values()];
+	}
+
+	private async renderField(
+		file: string,
+		field: string,
+		evaluate: () => Promise<RuntimeValue<ValueType>>
+	): Promise<RuntimeValue<ValueType> | undefined> {
+		try {
+			return await evaluate();
+		} catch (error) {
+			if (!this.options.partialRender || !(error instanceof UnresolvedDependencyOutputError)) throw error;
+			this.renderUnresolved.push({file, field, reason: error.message});
+			return undefined;
+		}
+	}
 	/** Depth of nested inline function calls, bounded by MAX_INLINE_CALL_DEPTH. */
 	private inlineCallDepth = 0;
 	/**
@@ -501,6 +530,7 @@ export class ConfigEvaluator {
 	async evaluateRenderedConfig(configPath: string, content: string, workDir: string): Promise<RuntimeValue<ValueType>> {
 		this.assertTrusted('Rendered configuration evaluation');
 		const workspaceRoot = await this.resolveWorkspaceRoot(workDir);
+		this.renderUnresolved.length = 0;
 		const result = await this.evaluateFile(configPath, content, workspaceRoot);
 		return this.readConfigObject(result);
 	}
@@ -734,8 +764,32 @@ export class ConfigEvaluator {
 
 		const inputsAssignment = assignments.find(assignment => String(assignment.value) === 'inputs');
 		let ownInputs: Map<string, RuntimeValue<ValueType>> | null = null;
+		const unresolvedInputs = new Map<string, {file: string; reason: string}>();
 		if (inputsAssignment && !skipInputs) {
-			const value = await this.evalNode(requiredValueNode(inputsAssignment, 'root_assignment_identifier'), scope);
+			const inputNode = requiredValueNode(inputsAssignment, 'root_assignment_identifier');
+			let value: RuntimeValue<ValueType>;
+			if (this.options.partialRender && inputNode.type === 'object'
+				&& !(inputNode.children ?? []).some(child => child.type !== 'attribute')) {
+				const entries = new Map<string, RuntimeValue<ValueType>>();
+				for (const child of inputNode.children ?? []) {
+					const keyNode = child.children?.find(part => part.type === 'object_key');
+					const key = keyNode
+						? coerceToString(await this.evalNode(keyNode.children?.[0], scope))
+						: String(child.value);
+					const valueNode = child.children?.find(part => part.type !== 'attribute_identifier' && part.type !== 'object_key');
+					try {
+						entries.set(key, await this.evalNode(valueNode, scope));
+						unresolvedInputs.delete(key);
+					} catch (error) {
+						if (!(error instanceof UnresolvedDependencyOutputError)) throw error;
+						entries.delete(key);
+						unresolvedInputs.set(key, {file: filePath, reason: error.message});
+					}
+				}
+				value = makeObjectValue(entries);
+			} else {
+				value = await this.evalNode(inputNode, scope);
+			}
 			if (value.type !== 'object' && value.type !== 'block') {
 				throw new Error(`inputs in ${filePath} must evaluate to an object`);
 			}
@@ -743,23 +797,41 @@ export class ConfigEvaluator {
 		}
 
 		let mergedInputs: Map<string, RuntimeValue<ValueType>> | null = ownInputs ? new Map(ownInputs) : new Map();
+		const mergedUnresolved = new Map(unresolvedInputs);
 		if (scope.autoinclude?.inputs) {
-			for (const [key, value] of scope.autoinclude.inputs) mergedInputs.set(key, value);
+			for (const [key, value] of scope.autoinclude.inputs) {
+				mergedInputs.set(key, value);
+				mergedUnresolved.delete(key);
+			}
+		}
+		for (const [key, issue] of scope.autoinclude?.unresolvedInputs ?? []) {
+			mergedInputs.delete(key);
+			mergedUnresolved.set(key, issue);
 		}
 		for (const name of [...scope.includes.keys()].reverse()) {
 			const include = scope.includes.get(name)!;
 			const includeInputs = include.result.inputs;
 			if (!includeInputs || include.mergeStrategy === 'no_merge') continue;
 			if (include.mergeStrategy === 'deep') {
+				const prior = mergedInputs;
 				mergedInputs = deepMergeInputs(mergedInputs, includeInputs);
+				for (const [key, issue] of include.result.unresolvedInputs) {
+					if (mergedUnresolved.has(key)) continue;
+					const child = prior.get(key);
+					if (!child || isObjectValue(child)) mergedUnresolved.set(key, issue);
+				}
 			} else {
 				const next = new Map(includeInputs);
 				for (const [key, value] of mergedInputs) next.set(key, value);
 				mergedInputs = next;
+				for (const [key, issue] of include.result.unresolvedInputs) {
+					if (!mergedInputs.has(key) && !mergedUnresolved.has(key)) mergedUnresolved.set(key, issue);
+				}
 			}
 		}
+		for (const name of mergedUnresolved.keys()) mergedInputs.delete(name);
 
-		if (ownInputs === null && mergedInputs.size === 0) mergedInputs = null;
+		if (ownInputs === null && mergedInputs.size === 0 && mergedUnresolved.size === 0) mergedInputs = null;
 
 		return {
 			filePath,
@@ -767,6 +839,7 @@ export class ConfigEvaluator {
 			content,
 			scope,
 			inputs: mergedInputs,
+			unresolvedInputs: mergedUnresolved,
 			hasInputs: inputsAssignment !== undefined
 		};
 	}
@@ -865,6 +938,7 @@ export class ConfigEvaluator {
 	 */
 	private async readGenerateBlocks(result: FileResult): Promise<Map<string, RuntimeValue<ValueType>>> {
 		const blocks = new Map<string, RuntimeValue<ValueType>>();
+		const unresolvedByLabel = new Map<string, Array<{file: string; field: string; reason: string}>>();
 		const collect = async (from: FileResult): Promise<void> => {
 			for (const include of from.scope.includes.values()) {
 				await collect(include.result);
@@ -881,21 +955,33 @@ export class ConfigEvaluator {
 				: { ...from.scope, unitDir: result.scope.dir, includes: result.scope.includes };
 			for (const [label, attributes] of from.scope.generate) {
 				const rendered = new Map<string, RuntimeValue<ValueType>>();
+				const unresolved: Array<{file: string; field: string; reason: string}> = [];
 				for (const [name, node] of attributes) {
-					rendered.set(name, await this.evalNode(node, scope));
+					try {
+						rendered.set(name, await this.evalNode(node, scope));
+					} catch (error) {
+						if (!this.options.partialRender || !(error instanceof UnresolvedDependencyOutputError)) throw error;
+						unresolved.push({file: from.filePath, field: `generate.${label}.${name}`, reason: error.message});
+					}
 				}
 				blocks.set(label, makeObjectValue(rendered));
+				unresolvedByLabel.set(label, unresolved);
 			}
 		};
 		await collect(result);
+		for (const unresolved of unresolvedByLabel.values()) this.renderUnresolved.push(...unresolved);
 		return blocks;
 	}
 
 	private async readConfigObject(result: FileResult): Promise<RuntimeValue<ValueType>> {
+		for (const [name, issue] of result.unresolvedInputs) {
+			this.renderUnresolved.push({file: issue.file, field: `inputs.${name}`, reason: issue.reason});
+		}
 		const output = new Map<string, RuntimeValue<ValueType>>();
 		const locals = new Map<string, RuntimeValue<ValueType>>();
 		for (const name of result.scope.locals.keys()) {
-			locals.set(name, await this.resolveLocal(result.scope, name));
+			const value = await this.renderField(result.filePath, `locals.${name}`, () => this.resolveLocal(result.scope, name));
+			if (value !== undefined) locals.set(name, value);
 		}
 		output.set('dependencies', makeNullValue());
 		output.set('dependency', makeObjectValue(new Map()));
@@ -913,7 +999,8 @@ export class ConfigEvaluator {
 		output.set('inputs', result.inputs !== null ? makeObjectValue(result.inputs) : makeObjectValue(new Map()));
 		const terraform = new Map<string, RuntimeValue<ValueType>>();
 		for (const [name, node] of result.scope.terraform) {
-			terraform.set(name, await this.evalNode(node, result.scope));
+			const value = await this.renderField(result.filePath, `terraform.${name}`, () => this.evalNode(node, result.scope));
+			if (value !== undefined) terraform.set(name, value);
 		}
 		const terraformDefaults = new Map<string, RuntimeValue<ValueType>>([
 			['after_hook', makeObjectValue(new Map())],
@@ -930,7 +1017,8 @@ export class ConfigEvaluator {
 			for (const child of terraformBlock.children ?? []) {
 				if (child.type !== 'block') continue;
 				const name = String(child.value);
-				const value = await this.evaluateBlock(child, result.scope);
+				const value = await this.renderField(result.filePath, `terraform.${name}`, () => this.evaluateBlock(child, result.scope));
+				if (value === undefined) continue;
 				const labels = (child.children ?? []).filter(item => item.type === 'parameter').map(item => String(item.value));
 				if (labels.length > 0) {
 					const current = terraformDefaults.get(name);
@@ -947,7 +1035,8 @@ export class ConfigEvaluator {
 			if (['locals', 'terraform', 'include'].includes(String(block.value))) continue;
 			const name = String(block.value);
 			const labels = (block.children ?? []).filter(child => child.type === 'parameter').map(child => String(child.value));
-			const value = await this.evaluateBlock(block, result.scope);
+			const value = await this.renderField(result.filePath, `${name}${labels[0] ? `.${labels[0]}` : ''}`, () => this.evaluateBlock(block, result.scope));
+			if (value === undefined) continue;
 			if (labels.length > 0) {
 				const existing = output.get(name);
 				const entries = existing && (existing.type === 'object' || existing.type === 'block')
@@ -960,7 +1049,8 @@ export class ConfigEvaluator {
 			}
 		}
 		for (const [name, node] of result.scope.rootAttrs) {
-			output.set(name, await this.evalNode(node, result.scope));
+			const value = await this.renderField(result.filePath, name, () => this.evalNode(node, result.scope));
+			if (value !== undefined) output.set(name, value);
 		}
 		return makeObjectValue(output);
 	}
@@ -1436,7 +1526,8 @@ export class ConfigEvaluator {
 			try {
 				await this.evalNode(args[0], scope);
 				return makeBooleanValue(true);
-			} catch {
+			} catch (error) {
+				if (error instanceof UnresolvedDependencyOutputError) throw error;
 				return makeBooleanValue(false);
 			}
 		}
@@ -1445,7 +1536,8 @@ export class ConfigEvaluator {
 			for (const arg of args) {
 				try {
 					return await this.evalNode(arg, scope);
-				} catch {
+				} catch (error) {
+					if (error instanceof UnresolvedDependencyOutputError) throw error;
 					// fall through to the next candidate
 				}
 			}
