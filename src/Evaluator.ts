@@ -229,16 +229,24 @@ function requiredValueNode(node: TNode, excludedType = 'attribute_identifier'): 
 export class ConfigEvaluator {
 	private readonly schema = Schema.getInstance();
 	private readonly options: ConfigEvaluatorOptions;
-	/** Depth of nested inline function calls, bounded by MAX_INLINE_CALL_DEPTH. */
-	private inlineCallDepth = 0;
 	/**
-	 * The files currently being evaluated, outermost first.
+	 * Depth of nested inline function calls, bounded by MAX_INLINE_CALL_DEPTH.
+	 *
+	 * Kept in async context, like the chains below: one evaluator serves
+	 * evaluations that run concurrently, and each is bounded by its own nesting,
+	 * not by the sum of everyone's.
+	 */
+	private readonly inlineCallDepth = new AsyncLocalStorage<number>();
+	/**
+	 * The files being evaluated on this asynchronous evaluation chain, outermost first.
 	 *
 	 * A stack rather than a counter so that a cycle can be REPORTED: the chain
 	 * names the files that lead back to the repeat, which is the difference
-	 * between "something recursed" and "this unit includes itself".
+	 * between "something recursed" and "this unit includes itself". Per chain
+	 * rather than per evaluator, so that two evaluations of the same file that
+	 * overlap are not taken for a file that includes itself.
 	 */
-	private readonly includeChain: string[] = [];
+	private readonly includeChain = new AsyncLocalStorage<readonly string[]>();
 	/**
 	 * Local-resolution ancestry for each asynchronous evaluation chain.
 	 *
@@ -577,22 +585,21 @@ export class ConfigEvaluator {
 
 	private async evaluateFile(filePath: string, content: string, workDir: string, unitDir?: string, skipInputs = false): Promise<FileResult> {
 		const resolvedPath = path.resolve(filePath);
-		const repeatedAt = this.includeChain.indexOf(resolvedPath);
+		const chain = this.includeChain.getStore() ?? [];
+		const repeatedAt = chain.indexOf(resolvedPath);
 		if (repeatedAt !== -1) {
-			const cycle = [...this.includeChain.slice(repeatedAt), resolvedPath];
+			const cycle = [...chain.slice(repeatedAt), resolvedPath];
 			throw new Error(`Include cycle: ${cycle.join(' -> ')}`);
 		}
-		if (this.includeChain.length >= MAX_INCLUDE_DEPTH) {
+		if (chain.length >= MAX_INCLUDE_DEPTH) {
 			throw new Error(
-				`Includes nested deeper than ${MAX_INCLUDE_DEPTH} levels, starting at ${this.includeChain[0]}`
+				`Includes nested deeper than ${MAX_INCLUDE_DEPTH} levels, starting at ${chain[0]}`
 			);
 		}
-		this.includeChain.push(resolvedPath);
-		try {
-			return await this.evaluateFileUnguarded(filePath, content, workDir, unitDir, skipInputs);
-		} finally {
-			this.includeChain.pop();
-		}
+		return this.includeChain.run(
+			[...chain, resolvedPath],
+			() => this.evaluateFileUnguarded(filePath, content, workDir, unitDir, skipInputs)
+		);
 	}
 
 	private async evaluateFileUnguarded(filePath: string, content: string, workDir: string, unitDir?: string, skipInputs = false): Promise<FileResult> {
@@ -1509,7 +1516,8 @@ export class ConfigEvaluator {
 		definition: InlineFunctionDefinition<Scope>,
 		args: RuntimeValue<ValueType>[]
 	): Promise<RuntimeValue<ValueType>> {
-		if (this.inlineCallDepth >= MAX_INLINE_CALL_DEPTH) {
+		const depth = this.inlineCallDepth.getStore() ?? 0;
+		if (depth >= MAX_INLINE_CALL_DEPTH) {
 			throw new InlineFunctionError(
 				`Inline function "${definition.name}" exceeded maximum call depth of ${MAX_INLINE_CALL_DEPTH}`
 			);
@@ -1527,14 +1535,11 @@ export class ConfigEvaluator {
 		// mean the same thing regardless of which file called it.
 		const context = await this.makeContext(definition.scope);
 
-		this.inlineCallDepth += 1;
-		try {
+		return this.inlineCallDepth.run(depth + 1, async () => {
 			const value = await invokeFunctionOperation(operation, args, context);
 			if (!value) throw new Error(`Inline function "${definition.name}" returned no value`);
 			return value;
-		} finally {
-			this.inlineCallDepth -= 1;
-		}
+		});
 	}
 
 	/**

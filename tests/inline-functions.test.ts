@@ -594,6 +594,27 @@ describe('inline function failure reporting', () => {
 		assert.equal(message.match(/exceeded maximum call depth/g)?.length, 1);
 		assert.ok(message.length < 200, `expected a concise message, got ${message.length} characters`);
 	});
+
+	it('bounds each evaluation by its own nesting when evaluations share an evaluator', async () => {
+		// A language server keeps one evaluator and evaluates files concurrently. Each recursion below is 100 deep,
+		// within the limit of 128; only their sum is not.
+		const shared = evaluator();
+		const content = 'function down(n) {\n  if (n <= 0) return 0;\n  return await tg.call("down", n - 1);\n}\n\ninputs = { d = down(100) }\n';
+		const dirs = await Promise.all([0, 1].map(() => fs.mkdtemp(path.join(os.tmpdir(), 'inline-fn-'))));
+		try {
+			const results = await Promise.all(dirs.map(async dir => {
+				const configPath = path.join(dir, 'terragrunt.hcl');
+				await fs.writeFile(configPath, content);
+				return shared.evaluateUnit(configPath, content, dir);
+			}));
+			for (const result of results) {
+				assert.equal(result.valid, true, result.error);
+				assert.deepEqual(runtimeValueToPlain(result.inputs!), { d: 0 });
+			}
+		} finally {
+			await Promise.all(dirs.map(dir => fs.rm(dir, { recursive: true, force: true })));
+		}
+	});
 });
 
 describe('inline function language service', () => {
