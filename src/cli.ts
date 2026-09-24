@@ -6,7 +6,7 @@ import {spawnSync} from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { ConfigEvaluator, runtimeValueToPlain } from './Evaluator';
+import { ConfigEvaluator, UnresolvedDependencyOutputError, runtimeValueToPlain } from './Evaluator';
 import { convertToRuntimeValue, makeObjectValue } from './functions/utils';
 import type { RuntimeValue, ValueType } from './model';
 import type { FunctionDefinition } from './model';
@@ -780,10 +780,14 @@ async function renderConfig(argv: string[]): Promise<number> {
 		process.stdout.write(`${JSON.stringify(parsed)}\n`);
 		return 0;
 	}
-	const evaluator = evaluatorFor();
+	const evaluator = evaluatorFor({terraformCommand: 'render', partialRender: true});
 	const result = await evaluator.evaluateRenderedConfig(realConfig, content, root);
 	process.stdout.write(`${JSON.stringify(runtimeValueToPlain(result))}\n`);
-	return 0;
+	const unresolved = evaluator.unresolvedRenderFields();
+	for (const entry of unresolved) {
+		process.stderr.write(`unresolved ${entry.field} in ${entry.file}: ${entry.reason}\n`);
+	}
+	return unresolved.length > 0 ? 2 : 0;
 }
 
 function generatedEntries(value: unknown): Array<[string, Record<string, unknown>]> {
@@ -828,6 +832,7 @@ function evaluatorFor(options: {
 	terraformCliArgs?: string[];
 	experiments?: string[];
 	tfPath?: string;
+	partialRender?: boolean;
 } = {}): ConfigEvaluator {
 	const tfPath = options.tfPath ?? tfPathForDependencies();
 	const terraformCommand = options.terraformCommand ?? '';
@@ -838,6 +843,7 @@ function evaluatorFor(options: {
 		...(options.experiments ? {experiments: options.experiments} : {}),
 		workspaceTrusted: true,
 		allowedPaths,
+		partialRender: options.partialRender,
 		// The command decides whether a dependency's mock_outputs may be seen,
 		// so it has to reach the resolver. Without it every evaluation looked
 		// like the same command and a mock could not be scoped at all.
@@ -847,6 +853,25 @@ function evaluatorFor(options: {
 
 function tfPathForDependencies(): string {
 	return process.env.TG_TF_PATH ?? process.env.TERRAGRUNT_TFPATH ?? 'tofu';
+}
+
+function mockedOutputs(mocks: Record<string, unknown>): RuntimeValue<ValueType> {
+	const outputs = new Map<string, RuntimeValue<ValueType>>();
+	for (const [key, value] of Object.entries(mocks)) {
+		outputs.set(key, convertToRuntimeValue(value));
+	}
+	return makeObjectValue(new Map([['outputs', makeObjectValue(outputs)]]));
+}
+
+/** An empty output set remains empty; attempted reads carry the missing name. */
+class EmptyRenderOutputs extends Map<string, RuntimeValue<ValueType>> {
+	constructor(private readonly dependency: string, private readonly reason?: string) {
+		super();
+	}
+
+	override get(key: string): RuntimeValue<ValueType> | undefined {
+		throw new UnresolvedDependencyOutputError(this.dependency, key, this.reason);
+	}
 }
 
 /**
@@ -984,29 +1009,42 @@ async function dependencyOutputs(
 	const allowed = (allowedRaw as unknown[] | undefined)?.map(entry => String(entry)) ?? [];
 	const mocksApply = mocks !== undefined && allowed.includes(terraformCommand);
 
+	const rendering = terraformCommand === 'render';
+	// Outputs that could not be read are not outputs that were never produced. Only a render, which provisions
+	// nothing, carries on past them: with a mock the author allowed for it, or with the reads reported. Every
+	// other command stops, even with a mock allowed for it -- a plan must not proceed on invented values because
+	// credentials expired or the working directory was never initialised.
+	const unreadable = (reason: string): RuntimeValue<ValueType> | undefined => {
+		if (!rendering) throw new Error(`dependency "${name}" ${reason} in ${target}`);
+		if (mocksApply) return mockedOutputs(mocks as Record<string, unknown>);
+		return makeObjectValue(new Map([['outputs', makeObjectValue(new EmptyRenderOutputs(name, reason))]]));
+	};
+
 	const result = spawnSync(tfPath, ['output', '-json'], {cwd: target, encoding: 'utf8'});
 	if (result.status !== 0) {
-		// No state at all: the unit has never been applied. That is the case
-		// mocks exist for -- a destroy of a workspace whose later steps were
-		// never stood up must not need outputs from a unit that produced none.
-		if (mocksApply) return mockedOutputs(mocks as Record<string, unknown>);
-		throw new Error(
-			`dependency "${name}" has no outputs to read from ${target}.\n` +
-			`Apply that unit first${
-				mocks === undefined
-					? ', or give the dependency mock_outputs and ' +
-					  'mock_outputs_allowed_terraform_commands for the commands that can ' +
-					  'run without it.'
-					: `. Its mock_outputs are allowed only for: ${allowed.join(', ') || '(none)'}.`
-			} ${(result.stderr || '').trim().split('\n')[0]}`
+		return unreadable(
+			'output command failed: ' +
+			(result.error?.message ?? (result.stderr.trim() || `exit status ${result.status}`))
 		);
 	}
 
 	// `output -json` gives {name: {value, type, sensitive}}; a dependency reads
 	// the values.
-	const raw = JSON.parse(result.stdout || '{}') as Record<string, {value: unknown}>;
+	if (!result.stdout.trim()) return unreadable('output command returned empty JSON');
+	let raw: unknown;
+	try {
+		raw = JSON.parse(result.stdout);
+	} catch {
+		return unreadable('output command returned output that is not JSON');
+	}
+	if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+		return unreadable('output command returned an invalid output map');
+	}
 	const outputs = new Map<string, RuntimeValue<ValueType>>();
 	for (const [key, entry] of Object.entries(raw)) {
+		if (entry === null || typeof entry !== 'object' || !('value' in entry)) {
+			return unreadable(`output ${key} has no value`);
+		}
 		outputs.set(key, convertToRuntimeValue(entry.value));
 	}
 	// A unit that has never been applied is this case, not the one above:
@@ -1029,7 +1067,7 @@ async function dependencyOutputs(
 		// output nobody produced is exactly the undefined state mocks are
 		// scoped to prevent.
 		const absent = Object.keys(mocks as Record<string, unknown>).filter(key => !outputs.has(key));
-		if (absent.length > 0) {
+		if (absent.length > 0 && terraformCommand !== 'render') {
 			throw new Error(
 				`dependency "${name}" has no ${absent.join(', ')} to read from ${target}, ` +
 				`and its mock_outputs are allowed only for: ${allowed.join(', ') || '(none)'} ` +
@@ -1040,15 +1078,10 @@ async function dependencyOutputs(
 			);
 		}
 	}
-	return makeObjectValue(new Map([['outputs', makeObjectValue(outputs)]]));
-}
-
-function mockedOutputs(mocks: Record<string, unknown>): RuntimeValue<ValueType> {
-	const outputs = new Map<string, RuntimeValue<ValueType>>();
-	for (const [key, value] of Object.entries(mocks)) {
-		outputs.set(key, convertToRuntimeValue(value));
-	}
-	return makeObjectValue(new Map([['outputs', makeObjectValue(outputs)]]));
+	const renderOutputs = terraformCommand === 'render' && outputs.size === 0
+		? new EmptyRenderOutputs(name)
+		: outputs;
+	return makeObjectValue(new Map([['outputs', makeObjectValue(renderOutputs)]]));
 }
 
 async function materializeGeneratedFiles(

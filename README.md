@@ -108,7 +108,9 @@ Experiment-gated language features must be enabled explicitly, for example `--ex
 
 ## Dependencies and mock outputs
 
-`dependency.<name>.outputs.<x>` is resolved by reading the dependency's outputs from its own directory, so the unit it names must have been applied.
+`dependency.<name>.outputs.<x>` is resolved by reading the dependency's outputs from its own directory. Commands that execute OpenTofu require that output to exist or an explicitly permitted mock.
+
+`render --json` can print the known part of a configuration when a dependency's outputs cannot be had: the dependency returns an empty output map, or its `tofu output -json` command fails or returns something that is not an output map. It omits fields whose values cannot be evaluated, names each field and the reason on stderr, and exits with status 2 so the JSON cannot be mistaken for a complete render. An invalid dependency block, or an output missing from a nonempty output map, is an error: render exits 1 without JSON. Only `render` carries on past outputs it could not read; `run` and the commands it wraps stop, even with a mock allowed for them. To render a complete configuration before apply, declare `mock_outputs` and include `"render"` in `mock_outputs_allowed_terraform_commands`.
 
 A unit that has not been applied has no outputs to give, and that is ordinary during a teardown: `destroy` runs in reverse dependency order, so a unit is destroyed before the ones depending on it. `mock_outputs` supplies stand-in values for exactly that case.
 
@@ -127,6 +129,7 @@ Three rules, which differ from Terragrunt's defaults on purpose:
 
 - **`mock_outputs_allowed_terraform_commands` is required.** Terragrunt treats an omitted list as *every* command, which lets an invented value reach an `apply` and be written to real infrastructure. Here a unit that declares mocks names the commands that may see them; one that does not is refused.
 - **A mock never shadows a real output.** Mocks fill in what the dependency does not have; a value it does have always wins, so a stale mock cannot quietly replace one.
+- **A failed output command is an error.** Mocks apply when the output command succeeds with an empty map; an absent executable, invalid working directory, or credential failure is not evidence that state is absent.
 - **Mock values are literals.** A mock stands in for a unit that has not been applied, so it cannot reference one. Strings, numbers, booleans, null, and lists and objects of those; anything else is refused by name.
 
 Note that a mocked path may still be read during evaluation — a module doing `jsondecode(file(var.path))` in a top-level local does so whatever the command — so a mock standing in for a file should name a real, minimal one rather than a path to nothing.

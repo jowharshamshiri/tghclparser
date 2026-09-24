@@ -691,6 +691,192 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(root, {recursive: true, force: true});
 	});
 
+	it('prints known inputs and reports an unapplied dependency as incomplete', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const body = dependencyBlock([]);
+		body.splice(body.length - 1, 0, '  stable = "known"');
+		const made = await workspaceWithUnappliedDependency(body);
+
+		const result = spawnSync(
+			process.execPath, [cli, 'render', '--json', '--working-dir', made.consumer],
+			{cwd: made.consumer, encoding: 'utf8'}
+		);
+		expect(result.status).to.equal(2, result.stderr);
+		const rendered = JSON.parse(result.stdout);
+		expect(rendered.inputs.stable).to.equal('known');
+		expect(rendered.inputs).to.not.have.property('seen');
+		expect(result.stderr).to.contain('unresolved inputs.seen');
+		expect(result.stderr).to.contain('no output "answer"');
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
+	it('keeps an unresolved output visible through a local alias', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const body = dependencyBlock([]);
+		body.splice(body.indexOf('inputs = {'), 0,
+			'locals {',
+			'  outputs = dependency.producer.outputs',
+			'}');
+		body[body.indexOf('  seen = dependency.producer.outputs.answer')] = '  seen = local.outputs.answer';
+		const made = await workspaceWithUnappliedDependency(body);
+		const result = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', made.consumer],
+			{cwd: made.consumer, encoding: 'utf8'});
+		expect(result.status).to.equal(2, result.stderr);
+		expect(JSON.parse(result.stdout).inputs).to.not.have.property('seen');
+		expect(result.stderr).to.contain('unresolved inputs.seen');
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
+	it('does not convert an unavailable output into a try fallback', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const body = dependencyBlock([]);
+		body[body.indexOf('  seen = dependency.producer.outputs.answer')] =
+			'  seen = try(dependency.producer.outputs.answer, "fallback")';
+		const made = await workspaceWithUnappliedDependency(body);
+		const result = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', made.consumer],
+			{cwd: made.consumer, encoding: 'utf8'});
+		expect(result.status).to.equal(2, result.stderr);
+		expect(JSON.parse(result.stdout).inputs).to.not.have.property('seen');
+		expect(result.stderr).to.contain('unresolved inputs.seen');
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
+	it('merges included inputs without reviving an unresolved value', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const made = await workspaceWithUnappliedDependency([
+			'include "root" { path = find_in_parent_folders("terragrunt.hcl") }',
+			'inputs = { child = "known" }'
+		]);
+		await fs.writeFile(path.join(made.root, 'terragrunt.hcl'), [
+			'dependency "producer" { config_path = "./producer" }',
+			'inputs = { inherited = dependency.producer.outputs.answer stable = "known" }'
+		].join('\n'));
+		const args = [cli, 'render', '--json', '--working-dir', made.consumer];
+		const incomplete = spawnSync(process.execPath, args, {cwd: made.consumer, encoding: 'utf8'});
+		expect(incomplete.status).to.equal(2, incomplete.stderr);
+		expect(JSON.parse(incomplete.stdout).inputs).to.deep.equal({stable: 'known', child: 'known'});
+		expect(incomplete.stderr).to.contain('unresolved inputs.inherited');
+
+		await fs.writeFile(path.join(made.consumer, 'terragrunt.hcl'), [
+			'include "root" { path = find_in_parent_folders("terragrunt.hcl") }',
+			'inputs = { inherited = "override" child = "known" }'
+		].join('\n'));
+		const overridden = spawnSync(process.execPath, args, {cwd: made.consumer, encoding: 'utf8'});
+		expect(overridden.status).to.equal(0, overridden.stderr);
+		expect(JSON.parse(overridden.stdout).inputs).to.deep.equal({inherited: 'override', stable: 'known', child: 'known'});
+		expect(overridden.stderr).to.equal('');
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
+	it('does not report an inherited generate block replaced by the unit', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const made = await workspaceWithUnappliedDependency([
+			'include "root" { path = find_in_parent_folders("terragrunt.hcl") }',
+			'generate "file" { path = "x.tf" contents = "known" }'
+		]);
+		await fs.writeFile(path.join(made.root, 'terragrunt.hcl'), [
+			'dependency "producer" { config_path = "./producer" }',
+			'generate "file" { path = "x.tf" contents = dependency.producer.outputs.answer }'
+		].join('\n'));
+		const result = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', made.consumer],
+			{cwd: made.consumer, encoding: 'utf8'});
+		expect(result.status).to.equal(0, result.stderr);
+		expect(JSON.parse(result.stdout).generate.file.contents).to.equal('known');
+		expect(result.stderr).to.equal('');
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
+	it('renders with an allowed mock when the output command cannot run, and stops a plan the mock is also allowed for', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const made = await workspaceWithUnappliedDependency(
+			dependencyBlock(['  mock_outputs = { answer = "invented" }'], '["render", "plan"]')
+		);
+		const env = {...process.env, TG_TF_PATH: path.join(made.root, 'missing-tofu')};
+
+		const result = spawnSync(
+			process.execPath, [cli, 'render', '--json', '--working-dir', made.consumer],
+			{cwd: made.consumer, encoding: 'utf8', env}
+		);
+		expect(result.status).to.equal(0, result.stderr);
+		expect(JSON.parse(result.stdout).inputs.seen).to.equal('invented');
+		// The mock is allowed for plan, but it stands in for outputs never produced, not for outputs that could not
+		// be read.
+		const plan = spawnSync(process.execPath, [cli, 'plan', '--working-dir', made.consumer],
+			{cwd: made.consumer, encoding: 'utf8', env});
+		expect(plan.status).to.equal(1);
+		expect(plan.stderr).to.contain('output command failed');
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
+	it('renders without the field when an output command cannot run', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const made = await workspaceWithUnappliedDependency(dependencyBlock([]));
+		const env = {...process.env, TG_TF_PATH: path.join(made.root, 'missing-tofu')};
+
+		const result = spawnSync(
+			process.execPath, [cli, 'render', '--json', '--working-dir', made.consumer],
+			{cwd: made.consumer, encoding: 'utf8', env}
+		);
+		expect(result.status).to.equal(2);
+		expect(JSON.parse(result.stdout).inputs).to.not.have.property('seen');
+		expect(result.stderr).to.contain('output command failed');
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
+	it('uses mocks only when explicitly allowed for render', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const made = await workspaceWithUnappliedDependency(
+			dependencyBlock(['  mock_outputs = {', '    answer = "invented"', '  }'], '["render"]')
+		);
+
+		const result = spawnSync(
+			process.execPath, [cli, 'render', '--json', '--working-dir', made.consumer],
+			{cwd: made.consumer, encoding: 'utf8'}
+		);
+		expect(result.status).to.equal(0, result.stderr);
+		expect(JSON.parse(result.stdout).inputs.seen).to.equal('invented');
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
+	it('does not borrow validate mocks or misreport the render command', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const body = dependencyBlock(['  mock_outputs = {', '    answer = "invented"', '  }'], '["validate"]');
+		body.splice(body.length - 1, 0, '  command = get_terraform_command()');
+		const made = await workspaceWithUnappliedDependency(body);
+		const result = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', made.consumer],
+			{cwd: made.consumer, encoding: 'utf8'});
+		expect(result.status).to.equal(2, result.stderr);
+		const rendered = JSON.parse(result.stdout);
+		expect(rendered.inputs.command).to.equal('render');
+		expect(rendered.inputs).to.not.have.property('seen');
+		expect(result.stderr).to.contain('no output "answer"');
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
+	it('rejects an invalid dependency block instead of reporting an incomplete render', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const body = dependencyBlock([]).filter(line => !line.includes('config_path'));
+		const made = await workspaceWithUnappliedDependency(body);
+		const result = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', made.consumer],
+			{cwd: made.consumer, encoding: 'utf8'});
+		expect(result.status).to.equal(1);
+		expect(result.stdout).to.equal('');
+		expect(result.stderr).to.contain('missing config_path');
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
+	it('still refuses to run a unit whose dependency has no outputs', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const made = await workspaceWithUnappliedDependency(dependencyBlock([]));
+
+		const result = spawnSync(
+			process.execPath, [cli, 'apply', '--working-dir', made.consumer, '-auto-approve'],
+			{cwd: made.consumer, encoding: 'utf8'}
+		);
+		expect(result.status).to.not.equal(0);
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
 	it('passes the inputs block to OpenTofu, which is what inputs is for', async () => {
 		// Terragrunt evaluates `inputs` and exports each entry as TF_VAR_<name>.
 		// That is how a unit receives what its configuration computed -- a
