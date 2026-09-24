@@ -22,6 +22,7 @@ import {
 	runtimeToPlain,
 	unwrapSensitive
 } from './functions/utils';
+import { isWrittenOut } from './writtenOut';
 
 interface TNode {
 	type: string;
@@ -72,6 +73,46 @@ export class UnresolvedDependencyOutputError extends Error {
 		this.name = 'UnresolvedDependencyOutputError';
 	}
 }
+
+/** A span of source, by character offset, and the value it evaluates to. */
+export interface EvaluatedSpan {
+	start: number;
+	end: number;
+	value: RuntimeValue<ValueType>;
+}
+
+// The node types that are expressions in their own right. Array and object literals are left out: their elements
+// are spans, and the name they are bound to shows the whole.
+const EXPRESSION_SPAN_TYPES = new Set([
+	'string_lit',
+	'number_lit',
+	'boolean_lit',
+	'null_lit',
+	'reference',
+	'local_reference',
+	'dependency_reference',
+	'module_reference',
+	'terraform_reference',
+	'var_reference',
+	'data_reference',
+	'path_reference',
+	'traversal_reference',
+	'interpolated_string',
+	'ternary_expression',
+	'comparison_expression',
+	'logical_expression',
+	'arithmetic_expression',
+	'null_coalescing',
+	'unary_expression',
+	'postfix_expression',
+	'pipe_expression',
+	'index_expression',
+	'splat_expression',
+	'member_access',
+	'list_comprehension',
+	'map_comprehension',
+	'function_call'
+]);
 
 export interface ConfigEvaluationResult {
 	valid: boolean;
@@ -262,16 +303,24 @@ export class ConfigEvaluator {
 			return undefined;
 		}
 	}
-	/** Depth of nested inline function calls, bounded by MAX_INLINE_CALL_DEPTH. */
-	private inlineCallDepth = 0;
 	/**
-	 * The files currently being evaluated, outermost first.
+	 * Depth of nested inline function calls, bounded by MAX_INLINE_CALL_DEPTH.
+	 *
+	 * Kept in async context, like the chains below: one evaluator serves
+	 * evaluations that run concurrently, and each is bounded by its own nesting,
+	 * not by the sum of everyone's.
+	 */
+	private readonly inlineCallDepth = new AsyncLocalStorage<number>();
+	/**
+	 * The files being evaluated on this asynchronous evaluation chain, outermost first.
 	 *
 	 * A stack rather than a counter so that a cycle can be REPORTED: the chain
 	 * names the files that lead back to the repeat, which is the difference
-	 * between "something recursed" and "this unit includes itself".
+	 * between "something recursed" and "this unit includes itself". Per chain
+	 * rather than per evaluator, so that two evaluations of the same file that
+	 * overlap are not taken for a file that includes itself.
 	 */
-	private readonly includeChain: string[] = [];
+	private readonly includeChain = new AsyncLocalStorage<readonly string[]>();
 	/**
 	 * Local-resolution ancestry for each asynchronous evaluation chain.
 	 *
@@ -595,6 +644,56 @@ export class ConfigEvaluator {
 		return undefined;
 	}
 
+	/**
+	 * Every span of the file whose value a reader cannot already see written there, each with that value, from a
+	 * single evaluation of the file.
+	 *
+	 * An expression is a span unless its value is exactly what its source spells out (see `isWrittenOut`). An
+	 * attribute's name is a span for the value bound to it, so `name = upper(local.service)` yields the name as well
+	 * as the call, while `cidr = "10.0.0.0/16"` yields neither. Array and object literals are not spans of their
+	 * own: their elements are, and so is the name they are bound to. An expression that cannot be evaluated in the
+	 * file's scope, such as one reading a `for` variable, has no value to show and yields no span.
+	 */
+	async evaluatedSpans(configPath: string, content: string, workDir: string): Promise<EvaluatedSpan[]> {
+		this.assertTrusted('Semantic evaluation');
+		const workspaceRoot = await this.resolveWorkspaceRoot(workDir);
+		// As for evaluateAtPosition: an `inputs` that fails must not take every other expression's value with it.
+		let result: FileResult;
+		try {
+			result = await this.evaluateFile(configPath, content, workspaceRoot);
+		} catch {
+			const partial = await this.scopeWithoutInputs(configPath, content, workspaceRoot);
+			if (!partial) return [];
+			result = partial;
+		}
+		const spans = new Map<string, EvaluatedSpan>();
+		const add = async (span: NonNullable<TNode['location']>, node: TNode): Promise<void> => {
+			const key = `${span.start.offset}:${span.end.offset}`;
+			if (spans.has(key)) return;
+			let value: RuntimeValue<ValueType>;
+			try {
+				value = await this.evalNode(node, result.scope);
+			} catch {
+				return;
+			}
+			if (isWrittenOut(node, value, content)) return;
+			spans.set(key, { start: span.start.offset, end: span.end.offset, value });
+		};
+		const visit = async (node: TNode, parent: TNode | undefined): Promise<void> => {
+			if (node.type === 'attribute') {
+				const identifier = node.children?.find(child => child.type === 'attribute_identifier');
+				const value = node.children?.find(child => child.type !== 'attribute_identifier');
+				if (identifier?.location && value) await add(identifier.location, value);
+			}
+			// The literal fragments of an interpolated string carry the whole string's location; the string is the span.
+			const fragment = node.type === 'string_lit' && parent?.type === 'interpolated_string';
+			if (node.location && EXPRESSION_SPAN_TYPES.has(node.type) && !fragment) await add(node.location, node);
+			for (const child of node.children ?? []) await visit(child, node);
+		};
+		await visit(result.scope.ast, undefined);
+		return [...spans.values()].sort((left, right) => left.start - right.start || right.end - left.end);
+	}
+
 	private nodeWidth(node: TNode): number {
 		if (!node.location) return Number.MAX_SAFE_INTEGER;
 		return node.location.end.offset - node.location.start.offset;
@@ -611,22 +710,21 @@ export class ConfigEvaluator {
 
 	private async evaluateFile(filePath: string, content: string, workDir: string, unitDir?: string, skipInputs = false): Promise<FileResult> {
 		const resolvedPath = path.resolve(filePath);
-		const repeatedAt = this.includeChain.indexOf(resolvedPath);
+		const chain = this.includeChain.getStore() ?? [];
+		const repeatedAt = chain.indexOf(resolvedPath);
 		if (repeatedAt !== -1) {
-			const cycle = [...this.includeChain.slice(repeatedAt), resolvedPath];
+			const cycle = [...chain.slice(repeatedAt), resolvedPath];
 			throw new Error(`Include cycle: ${cycle.join(' -> ')}`);
 		}
-		if (this.includeChain.length >= MAX_INCLUDE_DEPTH) {
+		if (chain.length >= MAX_INCLUDE_DEPTH) {
 			throw new Error(
-				`Includes nested deeper than ${MAX_INCLUDE_DEPTH} levels, starting at ${this.includeChain[0]}`
+				`Includes nested deeper than ${MAX_INCLUDE_DEPTH} levels, starting at ${chain[0]}`
 			);
 		}
-		this.includeChain.push(resolvedPath);
-		try {
-			return await this.evaluateFileUnguarded(filePath, content, workDir, unitDir, skipInputs);
-		} finally {
-			this.includeChain.pop();
-		}
+		return this.includeChain.run(
+			[...chain, resolvedPath],
+			() => this.evaluateFileUnguarded(filePath, content, workDir, unitDir, skipInputs)
+		);
 	}
 
 	private async evaluateFileUnguarded(filePath: string, content: string, workDir: string, unitDir?: string, skipInputs = false): Promise<FileResult> {
@@ -1605,7 +1703,8 @@ export class ConfigEvaluator {
 		definition: InlineFunctionDefinition<Scope>,
 		args: RuntimeValue<ValueType>[]
 	): Promise<RuntimeValue<ValueType>> {
-		if (this.inlineCallDepth >= MAX_INLINE_CALL_DEPTH) {
+		const depth = this.inlineCallDepth.getStore() ?? 0;
+		if (depth >= MAX_INLINE_CALL_DEPTH) {
 			throw new InlineFunctionError(
 				`Inline function "${definition.name}" exceeded maximum call depth of ${MAX_INLINE_CALL_DEPTH}`
 			);
@@ -1623,14 +1722,11 @@ export class ConfigEvaluator {
 		// mean the same thing regardless of which file called it.
 		const context = await this.makeContext(definition.scope);
 
-		this.inlineCallDepth += 1;
-		try {
+		return this.inlineCallDepth.run(depth + 1, async () => {
 			const value = await invokeFunctionOperation(operation, args, context);
 			if (!value) throw new Error(`Inline function "${definition.name}" returned no value`);
 			return value;
-		} finally {
-			this.inlineCallDepth -= 1;
-		}
+		});
 	}
 
 	/**

@@ -171,6 +171,16 @@ describe('semantic configuration evaluation', () => {
 		}
 	});
 
+	it('evaluates one unit several times at once without mistaking the overlap for an include cycle', async () => {
+		// A language server evaluates a file for its diagnostics, its underlines and its hovers, and those overlap.
+		const content = 'locals {\n  a = upper("x")\n}\n\ninputs = {\n  a = local.a\n}';
+		const results = await Promise.all([0, 1, 2].map(() => evaluator.evaluateUnit(configPath, content, process.cwd())));
+		for (const result of results) {
+			assert.equal(result.valid, true, result.error);
+			assert.deepEqual(runtimeValueToPlain(result.inputs!), { a: 'X' });
+		}
+	});
+
 	it('reports an include cycle instead of evaluating until it is killed', async () => {
 		// The guard that stops any OTHER way a configuration can refer back to
 		// itself. Named rather than counted: "a includes b includes a" is a
