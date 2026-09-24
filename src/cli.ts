@@ -388,7 +388,9 @@ interface FormatOptions {
 
 function parseExecutionArgs(argv: string[]): ExecutionOptions & {command: string} {
 	let workingDir = process.cwd();
-	let tfPath = tfPathForDependencies();
+	// Resolved only once the arguments are read: probing for a default before
+	// seeing --tf-path would refuse a command whose executable was named.
+	let tfPath: string | undefined;
 	let all = false;
 	let index = 0;
 	while (index < argv.length) {
@@ -465,7 +467,7 @@ function parseExecutionArgs(argv: string[]): ExecutionOptions & {command: string
 		}
 		args.push(argument);
 	}
-	return {workingDir, tfPath, command, args, all};
+	return {workingDir, tfPath: tfPath ?? tfPathForDependencies(), command, args, all};
 }
 
 /**
@@ -486,7 +488,8 @@ function valuedExecutionFlag(argument: string): 'working-dir' | 'tf-path' | unde
 
 function parseFormatArgs(argv: string[]): FormatOptions | 'help' {
 	let workingDir = process.cwd();
-	let tfPath = tfPathForDependencies();
+	// As in parseExecutionArgs: a named executable is never probed for.
+	let tfPath: string | undefined;
 	let check = false;
 	let diff = false;
 	let stdin = false;
@@ -526,7 +529,7 @@ function parseFormatArgs(argv: string[]): FormatOptions | 'help' {
 	}
 	if (check && diff) throw new Error('--check and --diff cannot be used together');
 	if (stdin && files.length > 0) throw new Error('--stdin cannot be combined with file paths');
-	return {workingDir, tfPath, check, diff, stdin, files};
+	return {workingDir, tfPath: tfPath ?? tfPathForDependencies(), check, diff, stdin, files};
 }
 
 async function formatHCL(argv: string[]): Promise<number> {
@@ -1567,7 +1570,9 @@ async function backendCommand(argv: string[]): Promise<number> {
 	}
 	if (!['bootstrap', 'delete', 'migrate'].includes(operation)) throw new Error(`Unknown backend operation ${operation}`);
 	let workingDir = process.cwd();
-	let tfPath = tfPathForDependencies();
+	// Accepted for terragrunt compatibility; no backend operation runs the
+	// executable, so none is probed for.
+	let tfPath: string | undefined;
 	let force = false;
 	const positional: string[] = [];
 	for (let index = 1; index < argv.length; index++) {

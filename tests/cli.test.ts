@@ -133,6 +133,26 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(root, {recursive: true, force: true});
 	});
 
+	it('runs the executable named with --tf-path when neither default is on PATH', async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-tfpath-named-'));
+		const empty = path.join(root, 'empty');
+		const unit = path.join(root, 'unit');
+		await fs.mkdir(empty);
+		await fs.mkdir(unit);
+		await fs.writeFile(path.join(unit, 'terragrunt.hcl'), 'inputs = {}\n');
+		const named = path.join(root, 'named-tf');
+		await fs.writeFile(named, '#!/bin/sh\necho "named executable ran: $1"\n', {mode: 0o755});
+		const cli = path.resolve('dist/cli.cjs');
+
+		for (const flag of [['--tf-path', named], [`--tf-path=${named}`]]) {
+			const result = spawnSync(process.execPath, [cli, 'run', '--working-dir', unit, ...flag, '--', 'version'],
+				{encoding: 'utf8', env: {PATH: empty}});
+			expect(result.status).to.equal(0, result.stderr);
+			expect(result.stdout).to.contain('named executable ran: version');
+		}
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
 	it('scaffolds a local module without unresolved placeholders', async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-scaffold-'));
 		const moduleDir = path.join(root, 'module');
