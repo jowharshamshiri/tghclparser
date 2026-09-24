@@ -74,10 +74,17 @@ export class UnresolvedDependencyOutputError extends Error {
 	}
 }
 
-/** A span of source, by character offset, and the value it evaluates to. */
+/**
+ * A span of source, by character offset, and the value it evaluates to.
+ *
+ * `kind` says what the span is: an `expression`, or the `name` of an attribute, whose value is the one bound to it.
+ * A name's value is always also the value of the expression beside it, so a caller marking spans can leave names
+ * out and lose nothing, while one answering a hover still has them.
+ */
 export interface EvaluatedSpan {
 	start: number;
 	end: number;
+	kind: 'name' | 'expression';
 	value: RuntimeValue<ValueType>;
 }
 
@@ -667,7 +674,7 @@ export class ConfigEvaluator {
 			result = partial;
 		}
 		const spans = new Map<string, EvaluatedSpan>();
-		const add = async (span: NonNullable<TNode['location']>, node: TNode): Promise<void> => {
+		const add = async (span: NonNullable<TNode['location']>, kind: EvaluatedSpan['kind'], node: TNode): Promise<void> => {
 			const key = `${span.start.offset}:${span.end.offset}`;
 			if (spans.has(key)) return;
 			let value: RuntimeValue<ValueType>;
@@ -677,17 +684,17 @@ export class ConfigEvaluator {
 				return;
 			}
 			if (isWrittenOut(node, value, content)) return;
-			spans.set(key, { start: span.start.offset, end: span.end.offset, value });
+			spans.set(key, { start: span.start.offset, end: span.end.offset, kind, value });
 		};
 		const visit = async (node: TNode, parent: TNode | undefined): Promise<void> => {
 			if (node.type === 'attribute') {
 				const identifier = node.children?.find(child => child.type === 'attribute_identifier');
 				const value = node.children?.find(child => child.type !== 'attribute_identifier');
-				if (identifier?.location && value) await add(identifier.location, value);
+				if (identifier?.location && value) await add(identifier.location, 'name', value);
 			}
 			// The literal fragments of an interpolated string carry the whole string's location; the string is the span.
 			const fragment = node.type === 'string_lit' && parent?.type === 'interpolated_string';
-			if (node.location && EXPRESSION_SPAN_TYPES.has(node.type) && !fragment) await add(node.location, node);
+			if (node.location && EXPRESSION_SPAN_TYPES.has(node.type) && !fragment) await add(node.location, 'expression', node);
 			for (const child of node.children ?? []) await visit(child, node);
 		};
 		await visit(result.scope.ast, undefined);

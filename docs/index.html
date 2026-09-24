@@ -524,7 +524,7 @@ tghclp run --tf-path terraform --working-dir ./app -- apply</code></pre></div>
           <tr><td>evaluateUnit(path, content, workDir)</td><td><code>{ valid, inputs, error? }</code>; evaluation errors are captured.</td></tr>
           <tr><td>evaluateRenderedConfig(path, content, workDir)</td><td>A complete <code>RuntimeValue</code>; errors are thrown.</td></tr>
           <tr><td>evaluateAtPosition(path, content, workDir, position)</td><td>The value of the function call at the zero-based position, if any.</td></tr>
-          <tr><td>evaluatedSpans(path, content, workDir)</td><td><code>EvaluatedSpan[]</code> — <code>{ start, end, value }</code> by character offset for every expression, and every attribute name, whose value is not already spelled out in its source; literals written as their value are left out. One evaluation of the file.</td></tr>
+          <tr><td>evaluatedSpans(path, content, workDir)</td><td><code>EvaluatedSpan[]</code> — <code>{ start, end, kind, value }</code> by character offset for every expression, and every attribute name (<code>kind</code> says which), whose value is not already spelled out in its source; literals written as their value are left out. One evaluation of the file.</td></tr>
         </tbody></table>
 
         <div class="signature"><h3>Schema.getInstance()</h3><p>Returns the schema singleton used for file-kind, block, attribute, and function definitions.</p></div>
