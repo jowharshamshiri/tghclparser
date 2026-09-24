@@ -403,7 +403,7 @@ publishDiagnostics(fileUri, document.getDiagnostics());</code></pre></div>
             <tr><td>find, fd</td><td>Discover unit and stack configurations.</td></tr>
             <tr><td>list, ls</td><td>List configurations as text, a tree, or DOT.</td></tr>
             <tr><td>dag graph</td><td>Print the resolved configuration graph in DOT form.</td></tr>
-            <tr><td>render</td><td>Evaluate and print a rendered configuration as JSON.</td></tr>
+            <tr><td>render</td><td>Evaluate and print a configuration as JSON. Missing outputs from an empty dependency output map leave affected fields out; stderr names them and exit status 2 marks the JSON incomplete. Invalid configuration or a failed output command exits 1 without JSON.</td></tr>
             <tr><td>info print</td><td>Print evaluation-context paths and command details.</td></tr>
             <tr><td>run</td><td>Validate, run hooks, then invoke OpenTofu or Terraform without a shell.</td></tr>
             <tr><td>exec</td><td>Execute an external command directly without a shell.</td></tr>
