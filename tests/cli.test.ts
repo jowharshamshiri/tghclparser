@@ -97,6 +97,42 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(root, {recursive: true, force: true});
 	});
 
+	it('falls back to terraform when tofu is not on PATH, and prefers tofu when it is', async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-tfpath-'));
+		const bothDir = path.join(root, 'both');
+		const tfOnly = path.join(root, 'tf-only');
+		await fs.mkdir(bothDir);
+		await fs.mkdir(tfOnly);
+		await fs.writeFile(path.join(bothDir, 'tofu'), '#!/bin/sh\nexit 0\n', {mode: 0o755});
+		await fs.writeFile(path.join(bothDir, 'terraform'), '#!/bin/sh\nexit 0\n', {mode: 0o755});
+		await fs.writeFile(path.join(tfOnly, 'terraform'), '#!/bin/sh\nexit 0\n', {mode: 0o755});
+		const cli = path.resolve('dist/cli.cjs');
+		const read = (env: NodeJS.ProcessEnv) => {
+			const result = spawnSync(process.execPath, [cli, 'info', 'print', '--working-dir', root], {encoding: 'utf8', env});
+			expect(result.status).to.equal(0, result.stderr);
+			return JSON.parse(result.stdout).terraform_binary;
+		};
+		const bare = {PATH: tfOnly};
+
+		expect(read(bare)).to.equal('terraform');
+		expect(read({PATH: bothDir})).to.equal('tofu');
+		expect(read({...bare, TG_TF_PATH: '/custom/binary'})).to.equal('/custom/binary');
+		expect(read({...bare, TERRAGRUNT_TFPATH: '/legacy/binary'})).to.equal('/legacy/binary');
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
+	it('names both executables when neither is on PATH', async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-tfpath-none-'));
+		const empty = path.join(root, 'empty');
+		await fs.mkdir(empty);
+		const cli = path.resolve('dist/cli.cjs');
+		const result = spawnSync(process.execPath, [cli, 'info', 'print', '--working-dir', root],
+			{encoding: 'utf8', env: {PATH: empty}});
+		expect(result.status).to.not.equal(0);
+		expect(`${result.stdout}${result.stderr}`).to.contain('missing from your $PATH');
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
 	it('scaffolds a local module without unresolved placeholders', async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-scaffold-'));
 		const moduleDir = path.join(root, 'module');

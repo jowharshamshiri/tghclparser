@@ -163,7 +163,8 @@ function executionUsage(): string {
 		'',
 		'Options:',
 		'  --working-dir <path>   Directory containing Terragrunt configuration',
-		'  --tf-path <path>       OpenTofu/Terraform executable (default: tofu)',
+		'  --tf-path <path>       OpenTofu/Terraform executable (default: tofu on',
+		'                         PATH, otherwise terraform)',
 		'  --no-color              Disable color output',
 		'  --help                  Show this help'
 	].join('\n');
@@ -363,7 +364,7 @@ function printInfo(command: string, workingDir: string): void {
 		config_path: path.join(workingDir, 'terragrunt.hcl'),
 		download_dir: path.join(workingDir, '.terragrunt-cache'),
 		iam_role: '',
-		terraform_binary: 'tofu',
+		terraform_binary: tfPathForDependencies(),
 		terraform_command: 'print',
 		working_dir: workingDir
 	}, null, 2)}\n`);
@@ -387,7 +388,7 @@ interface FormatOptions {
 
 function parseExecutionArgs(argv: string[]): ExecutionOptions & {command: string} {
 	let workingDir = process.cwd();
-	let tfPath = process.env.TG_TF_PATH ?? process.env.TERRAGRUNT_TFPATH ?? 'tofu';
+	let tfPath = tfPathForDependencies();
 	let all = false;
 	let index = 0;
 	while (index < argv.length) {
@@ -485,7 +486,7 @@ function valuedExecutionFlag(argument: string): 'working-dir' | 'tf-path' | unde
 
 function parseFormatArgs(argv: string[]): FormatOptions | 'help' {
 	let workingDir = process.cwd();
-	let tfPath = process.env.TG_TF_PATH ?? process.env.TERRAGRUNT_TFPATH ?? 'tofu';
+	let tfPath = tfPathForDependencies();
 	let check = false;
 	let diff = false;
 	let stdin = false;
@@ -829,7 +830,6 @@ function evaluatorFor(options: {
 	experiments?: string[];
 	tfPath?: string;
 } = {}): ConfigEvaluator {
-	const tfPath = options.tfPath ?? tfPathForDependencies();
 	const terraformCommand = options.terraformCommand ?? '';
 	return new ConfigEvaluator({
 		environmentVariables: process.env as Record<string, string>,
@@ -841,12 +841,48 @@ function evaluatorFor(options: {
 		// The command decides whether a dependency's mock_outputs may be seen,
 		// so it has to reach the resolver. Without it every evaluation looked
 		// like the same command and a mock could not be scoped at all.
-		resolveDependency: (from, name) => dependencyOutputs(from, name, tfPath, terraformCommand),
+		//
+		// The executable is resolved here rather than when the evaluator is
+		// built, so a configuration with no dependency to read needs neither
+		// binary installed.
+		resolveDependency: (from, name) =>
+			dependencyOutputs(from, name, options.tfPath ?? tfPathForDependencies(), terraformCommand),
 	});
 }
 
+let resolvedTfPath: string | undefined;
+
+/**
+ * The executable to use when nothing named one, chosen the way terragrunt
+ * chooses it. Each candidate is run rather than looked up, so a shim resolves
+ * as it will when the command runs. Found once and kept.
+ *
+ * @returns `tofu` when it is on PATH, otherwise `terraform`.
+ * @throws when neither is on PATH.
+ */
+function defaultTfPath(): string {
+	if (resolvedTfPath !== undefined) return resolvedTfPath;
+	for (const candidate of ['tofu', 'terraform']) {
+		const probe = spawnSync(candidate, ['version'], {encoding: 'utf8'});
+		if (probe.error === undefined && probe.status === 0) {
+			resolvedTfPath = candidate;
+			return resolvedTfPath;
+		}
+	}
+	throw new Error(
+		"The executables 'tofu' and 'terraform' are missing from your $PATH. " +
+		'Add one of them, or name the executable with --tf-path or TG_TF_PATH.'
+	);
+}
+
+/**
+ * The OpenTofu/Terraform executable to run. An explicitly named one wins and
+ * is never probed for.
+ *
+ * @returns the named executable, or the one {@link defaultTfPath} resolves.
+ */
 function tfPathForDependencies(): string {
-	return process.env.TG_TF_PATH ?? process.env.TERRAGRUNT_TFPATH ?? 'tofu';
+	return process.env.TG_TF_PATH ?? process.env.TERRAGRUNT_TFPATH ?? defaultTfPath();
 }
 
 /**
@@ -1531,7 +1567,7 @@ async function backendCommand(argv: string[]): Promise<number> {
 	}
 	if (!['bootstrap', 'delete', 'migrate'].includes(operation)) throw new Error(`Unknown backend operation ${operation}`);
 	let workingDir = process.cwd();
-	let tfPath = process.env.TG_TF_PATH ?? process.env.TERRAGRUNT_TFPATH ?? 'tofu';
+	let tfPath = tfPathForDependencies();
 	let force = false;
 	const positional: string[] = [];
 	for (let index = 1; index < argv.length; index++) {
