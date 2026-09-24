@@ -786,7 +786,7 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(made.root, {recursive: true, force: true});
 	});
 
-	it('uses an allowed mock when the output command cannot run, and still stops other commands', async () => {
+	it('renders with an allowed mock when the output command cannot run, and stops a plan the mock is also allowed for', async () => {
 		const cli = path.resolve('dist/cli.cjs');
 		const made = await workspaceWithUnappliedDependency(
 			dependencyBlock(['  mock_outputs = { answer = "invented" }'], '["render", "plan"]')
@@ -799,10 +799,12 @@ describe('CLI configuration discovery', function () {
 		);
 		expect(result.status).to.equal(0, result.stderr);
 		expect(JSON.parse(result.stdout).inputs.seen).to.equal('invented');
-		const apply = spawnSync(process.execPath, [cli, 'apply', '--working-dir', made.consumer, '-auto-approve'],
+		// The mock is allowed for plan, but it stands in for outputs never produced, not for outputs that could not
+		// be read.
+		const plan = spawnSync(process.execPath, [cli, 'plan', '--working-dir', made.consumer],
 			{cwd: made.consumer, encoding: 'utf8', env});
-		expect(apply.status).to.not.equal(0);
-		expect(apply.stderr).to.contain('output command failed');
+		expect(plan.status).to.equal(1);
+		expect(plan.stderr).to.contain('output command failed');
 		await fs.rm(made.root, {recursive: true, force: true});
 	});
 

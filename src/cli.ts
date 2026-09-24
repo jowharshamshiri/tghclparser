@@ -996,9 +996,13 @@ async function dependencyOutputs(
 	const mocksApply = mocks !== undefined && allowed.includes(terraformCommand);
 
 	const rendering = terraformCommand === 'render';
+	// Outputs that could not be read are not outputs that were never produced. Only a render, which provisions
+	// nothing, carries on past them: with a mock the author allowed for it, or with the reads reported. Every
+	// other command stops, even with a mock allowed for it -- a plan must not proceed on invented values because
+	// credentials expired or the working directory was never initialised.
 	const unreadable = (reason: string): RuntimeValue<ValueType> | undefined => {
-		if (mocksApply) return mockedOutputs(mocks as Record<string, unknown>);
 		if (!rendering) throw new Error(`dependency "${name}" ${reason} in ${target}`);
+		if (mocksApply) return mockedOutputs(mocks as Record<string, unknown>);
 		return makeObjectValue(new Map([['outputs', makeObjectValue(new EmptyRenderOutputs(name, reason))]]));
 	};
 
