@@ -64,8 +64,12 @@ export interface ConfigEvaluatorOptions {
 }
 
 export class UnresolvedDependencyOutputError extends Error {
-	constructor(dependency: string, output: string) {
-		super(`dependency "${dependency}" has no output "${output}"; apply the unit or allow a mock for render`);
+	constructor(dependency: string, output: string, reason?: string) {
+		super(
+			reason === undefined
+				? `dependency "${dependency}" has no output "${output}"; apply the unit or allow a mock for render`
+				: `dependency "${dependency}" output "${output}" could not be read: ${reason}`
+		);
 		this.name = 'UnresolvedDependencyOutputError';
 	}
 }

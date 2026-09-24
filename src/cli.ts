@@ -841,14 +841,22 @@ function tfPathForDependencies(): string {
 	return process.env.TG_TF_PATH ?? process.env.TERRAGRUNT_TFPATH ?? 'tofu';
 }
 
+function mockedOutputs(mocks: Record<string, unknown>): RuntimeValue<ValueType> {
+	const outputs = new Map<string, RuntimeValue<ValueType>>();
+	for (const [key, value] of Object.entries(mocks)) {
+		outputs.set(key, convertToRuntimeValue(value));
+	}
+	return makeObjectValue(new Map([['outputs', makeObjectValue(outputs)]]));
+}
+
 /** An empty output set remains empty; attempted reads carry the missing name. */
 class EmptyRenderOutputs extends Map<string, RuntimeValue<ValueType>> {
-	constructor(private readonly dependency: string) {
+	constructor(private readonly dependency: string, private readonly reason?: string) {
 		super();
 	}
 
 	override get(key: string): RuntimeValue<ValueType> | undefined {
-		throw new UnresolvedDependencyOutputError(this.dependency, key);
+		throw new UnresolvedDependencyOutputError(this.dependency, key, this.reason);
 	}
 }
 
@@ -987,25 +995,41 @@ async function dependencyOutputs(
 	const allowed = (allowedRaw as unknown[] | undefined)?.map(entry => String(entry)) ?? [];
 	const mocksApply = mocks !== undefined && allowed.includes(terraformCommand);
 
+	const rendering = terraformCommand === 'render';
+	// Outputs that could not be read are not outputs that were never produced. Only a render, which provisions
+	// nothing, carries on past them: with a mock the author allowed for it, or with the reads reported. Every
+	// other command stops, even with a mock allowed for it -- a plan must not proceed on invented values because
+	// credentials expired or the working directory was never initialised.
+	const unreadable = (reason: string): RuntimeValue<ValueType> | undefined => {
+		if (!rendering) throw new Error(`dependency "${name}" ${reason} in ${target}`);
+		if (mocksApply) return mockedOutputs(mocks as Record<string, unknown>);
+		return makeObjectValue(new Map([['outputs', makeObjectValue(new EmptyRenderOutputs(name, reason))]]));
+	};
+
 	const result = spawnSync(tfPath, ['output', '-json'], {cwd: target, encoding: 'utf8'});
 	if (result.status !== 0) {
-		throw new Error(
-			`dependency "${name}" output command failed in ${target}: ` +
+		return unreadable(
+			'output command failed: ' +
 			(result.error?.message ?? (result.stderr.trim() || `exit status ${result.status}`))
 		);
 	}
 
 	// `output -json` gives {name: {value, type, sensitive}}; a dependency reads
 	// the values.
-	if (!result.stdout.trim()) throw new Error(`dependency "${name}" output command returned empty JSON in ${target}`);
-	const raw: unknown = JSON.parse(result.stdout);
+	if (!result.stdout.trim()) return unreadable('output command returned empty JSON');
+	let raw: unknown;
+	try {
+		raw = JSON.parse(result.stdout);
+	} catch {
+		return unreadable('output command returned output that is not JSON');
+	}
 	if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
-		throw new Error(`dependency "${name}" output command returned an invalid output map in ${target}`);
+		return unreadable('output command returned an invalid output map');
 	}
 	const outputs = new Map<string, RuntimeValue<ValueType>>();
 	for (const [key, entry] of Object.entries(raw)) {
 		if (entry === null || typeof entry !== 'object' || !('value' in entry)) {
-			throw new Error(`dependency "${name}" output ${key} has no value in ${target}`);
+			return unreadable(`output ${key} has no value`);
 		}
 		outputs.set(key, convertToRuntimeValue(entry.value));
 	}
