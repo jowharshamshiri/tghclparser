@@ -22,6 +22,7 @@ import {
 	runtimeToPlain,
 	unwrapSensitive
 } from './functions/utils';
+import { isWrittenOut } from './writtenOut';
 
 interface TNode {
 	type: string;
@@ -59,6 +60,46 @@ export interface ConfigEvaluatorOptions {
 	allowedPaths?: string[];
 	resolveDependency?: (configPath: string, name: string) => Promise<RuntimeValue<ValueType> | undefined>;
 }
+
+/** A span of source, by character offset, and the value it evaluates to. */
+export interface EvaluatedSpan {
+	start: number;
+	end: number;
+	value: RuntimeValue<ValueType>;
+}
+
+// The node types that are expressions in their own right. Array and object literals are left out: their elements
+// are spans, and the name they are bound to shows the whole.
+const EXPRESSION_SPAN_TYPES = new Set([
+	'string_lit',
+	'number_lit',
+	'boolean_lit',
+	'null_lit',
+	'reference',
+	'local_reference',
+	'dependency_reference',
+	'module_reference',
+	'terraform_reference',
+	'var_reference',
+	'data_reference',
+	'path_reference',
+	'traversal_reference',
+	'interpolated_string',
+	'ternary_expression',
+	'comparison_expression',
+	'logical_expression',
+	'arithmetic_expression',
+	'null_coalescing',
+	'unary_expression',
+	'postfix_expression',
+	'pipe_expression',
+	'index_expression',
+	'splat_expression',
+	'member_access',
+	'list_comprehension',
+	'map_comprehension',
+	'function_call'
+]);
 
 export interface ConfigEvaluationResult {
 	valid: boolean;
@@ -567,6 +608,56 @@ export class ConfigEvaluator {
 			}
 		}
 		return undefined;
+	}
+
+	/**
+	 * Every span of the file whose value a reader cannot already see written there, each with that value, from a
+	 * single evaluation of the file.
+	 *
+	 * An expression is a span unless its value is exactly what its source spells out (see `isWrittenOut`). An
+	 * attribute's name is a span for the value bound to it, so `name = upper(local.service)` yields the name as well
+	 * as the call, while `cidr = "10.0.0.0/16"` yields neither. Array and object literals are not spans of their
+	 * own: their elements are, and so is the name they are bound to. An expression that cannot be evaluated in the
+	 * file's scope, such as one reading a `for` variable, has no value to show and yields no span.
+	 */
+	async evaluatedSpans(configPath: string, content: string, workDir: string): Promise<EvaluatedSpan[]> {
+		this.assertTrusted('Semantic evaluation');
+		const workspaceRoot = await this.resolveWorkspaceRoot(workDir);
+		// As for evaluateAtPosition: an `inputs` that fails must not take every other expression's value with it.
+		let result: FileResult;
+		try {
+			result = await this.evaluateFile(configPath, content, workspaceRoot);
+		} catch {
+			const partial = await this.scopeWithoutInputs(configPath, content, workspaceRoot);
+			if (!partial) return [];
+			result = partial;
+		}
+		const spans = new Map<string, EvaluatedSpan>();
+		const add = async (span: NonNullable<TNode['location']>, node: TNode): Promise<void> => {
+			const key = `${span.start.offset}:${span.end.offset}`;
+			if (spans.has(key)) return;
+			let value: RuntimeValue<ValueType>;
+			try {
+				value = await this.evalNode(node, result.scope);
+			} catch {
+				return;
+			}
+			if (isWrittenOut(node, value, content)) return;
+			spans.set(key, { start: span.start.offset, end: span.end.offset, value });
+		};
+		const visit = async (node: TNode, parent: TNode | undefined): Promise<void> => {
+			if (node.type === 'attribute') {
+				const identifier = node.children?.find(child => child.type === 'attribute_identifier');
+				const value = node.children?.find(child => child.type !== 'attribute_identifier');
+				if (identifier?.location && value) await add(identifier.location, value);
+			}
+			// The literal fragments of an interpolated string carry the whole string's location; the string is the span.
+			const fragment = node.type === 'string_lit' && parent?.type === 'interpolated_string';
+			if (node.location && EXPRESSION_SPAN_TYPES.has(node.type) && !fragment) await add(node.location, node);
+			for (const child of node.children ?? []) await visit(child, node);
+		};
+		await visit(result.scope.ast, undefined);
+		return [...spans.values()].sort((left, right) => left.start - right.start || right.end - left.end);
 	}
 
 	private nodeWidth(node: TNode): number {
