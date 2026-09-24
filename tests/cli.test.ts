@@ -786,7 +786,7 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(made.root, {recursive: true, force: true});
 	});
 
-	it('fails without rendered JSON when an output command cannot run, even with an allowed mock', async () => {
+	it('uses an allowed mock when the output command cannot run, and still stops other commands', async () => {
 		const cli = path.resolve('dist/cli.cjs');
 		const made = await workspaceWithUnappliedDependency(
 			dependencyBlock(['  mock_outputs = { answer = "invented" }'], '["render", "plan"]')
@@ -797,13 +797,27 @@ describe('CLI configuration discovery', function () {
 			process.execPath, [cli, 'render', '--json', '--working-dir', made.consumer],
 			{cwd: made.consumer, encoding: 'utf8', env}
 		);
-		expect(result.status).to.equal(1);
-		expect(result.stdout).to.equal('');
-		expect(result.stderr).to.contain('output command failed');
-		const plan = spawnSync(process.execPath, [cli, 'plan', '--working-dir', made.consumer],
+		expect(result.status).to.equal(0, result.stderr);
+		expect(JSON.parse(result.stdout).inputs.seen).to.equal('invented');
+		const apply = spawnSync(process.execPath, [cli, 'apply', '--working-dir', made.consumer, '-auto-approve'],
 			{cwd: made.consumer, encoding: 'utf8', env});
-		expect(plan.status).to.equal(1);
-		expect(plan.stderr).to.contain('output command failed');
+		expect(apply.status).to.not.equal(0);
+		expect(apply.stderr).to.contain('output command failed');
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
+	it('renders without the field when an output command cannot run', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const made = await workspaceWithUnappliedDependency(dependencyBlock([]));
+		const env = {...process.env, TG_TF_PATH: path.join(made.root, 'missing-tofu')};
+
+		const result = spawnSync(
+			process.execPath, [cli, 'render', '--json', '--working-dir', made.consumer],
+			{cwd: made.consumer, encoding: 'utf8', env}
+		);
+		expect(result.status).to.equal(2);
+		expect(JSON.parse(result.stdout).inputs).to.not.have.property('seen');
+		expect(result.stderr).to.contain('output command failed');
 		await fs.rm(made.root, {recursive: true, force: true});
 	});
 
