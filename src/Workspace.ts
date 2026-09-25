@@ -1,13 +1,40 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { URI } from 'vscode-uri';
 
 import type { FunctionContext, FunctionDefinition, TerragruntConfig, Token } from './model';
 import { createDependencyConfig, createIncludeConfig, TreeNode } from './model';
+import { isLocalSource, ModuleVariableCache, splitModuleSource } from './module-variables';
+import type { ModuleVariablesState } from './ParsedDocument';
 import { ParsedDocument } from './ParsedDocument';
 import { Schema } from './Schema';
 import { expandTerragruntGlob } from './functions/terragrunt_glob';
+
+/**
+ * The outcome of resolving a `terraform { source }` value. `local` names a directory that exists, `missing` one
+ * that does not, `remote` any source that is not a local path, and `unresolvable` a source the path helpers could
+ * not evaluate, with the reason.
+ */
+export type ModuleSourceResolution =
+	| {
+		kind: 'local' | 'missing';
+		/** Absolute path of the module directory as written, including any `//subdirectory`, not its realpath. */
+		moduleDir: string;
+		/** The source after path functions and interpolations were evaluated. */
+		sourceText: string;
+	}
+	| {
+		kind: 'remote';
+		/** The source after path functions and interpolations were evaluated. */
+		sourceText: string;
+	}
+	| {
+		kind: 'unresolvable';
+		/** Why the source could not be evaluated or the subdirectory was refused. */
+		reason: string;
+	};
 
 /**
  * A read path that cannot be known without evaluating the configuration, such as one interpolating a local whose value
@@ -30,6 +57,7 @@ export class Workspace {
 	private workspaceRoot: string | null;
 	private schema: Schema = Schema.getInstance();
 	private configTreeRoot: TreeNode<TerragruntConfig> | undefined;
+	private moduleVariables = new ModuleVariableCache();
 
 	public constructor() {
 		this.documents = new Map();
@@ -105,6 +133,10 @@ export class Workspace {
 		// been parsed. Supplying them here re-runs diagnostics with calls to
 		// inherited functions resolved.
 		await this.applyInheritedInlineFunctions(doc, includePaths, resolveFrom);
+
+		// The module a unit sources is only known once its include chain is, because the `terraform` block and
+		// part of the `inputs` may live in an included configuration.
+		if (uri === unitUri) await this.applyModuleVariables(doc, includePaths, resolveFrom);
 
 		// Explicit stack components are graph edges even before `terragrunt stack generate`
 		// materializes their target files.
@@ -451,6 +483,26 @@ export class Workspace {
 		if (includePaths.length === 0) return;
 
 		const inherited = new Map<string, FunctionDefinition>();
+		for (const included of await this.includeChain(doc, includePaths, unitDir)) {
+			for (const [name, definition] of included.getOwnInlineFunctions()) {
+				if (!inherited.has(name)) inherited.set(name, definition);
+			}
+		}
+
+		doc.setInheritedInlineFunctions(inherited);
+	}
+
+	/**
+	 * The configurations `doc` includes, nearest first, walked transitively. Already-visited URIs are skipped, so a
+	 * cyclic include graph terminates rather than recursing forever.
+	 *
+	 * @param doc the document whose includes are walked.
+	 * @param includePaths URIs of the configurations `doc` includes directly.
+	 * @param unitDir directory of the unit the walk serves, which nested include paths resolve against.
+	 * @returns the included documents that could be loaded, in breadth-first order.
+	 */
+	private async includeChain(doc: ParsedDocument, includePaths: string[], unitDir: string): Promise<ParsedDocument[]> {
+		const chain: ParsedDocument[] = [];
 		const visited = new Set<string>([doc.getUri()]);
 		const queue = [...includePaths];
 		while (queue.length > 0) {
@@ -460,10 +512,7 @@ export class Workspace {
 
 			const included = await this.getParsedDocument(includeUri);
 			if (!included) continue;
-
-			for (const [name, definition] of included.getOwnInlineFunctions()) {
-				if (!inherited.has(name)) inherited.set(name, definition);
-			}
+			chain.push(included);
 
 			const includedAst = included.getAST();
 			if (!includedAst) continue;
@@ -473,12 +522,162 @@ export class Workspace {
 				} catch {
 					// An include this document cannot resolve is reported by the
 					// include processing that owns that document; it contributes
-					// no inherited functions here.
+					// nothing to the chain here.
 				}
 			}
 		}
+		return chain;
+	}
 
-		doc.setInheritedInlineFunctions(inherited);
+	/**
+	 * The value of `source` in a document's root `terraform` block, when it is a form the path helpers can read.
+	 *
+	 * @param doc the document to look in.
+	 * @returns the string, interpolation or function-call token, or undefined when there is no such `source`.
+	 */
+	public findTerraformSourceToken(doc: ParsedDocument): Token | undefined {
+		return doc.getTerraformSourceToken();
+	}
+
+	/**
+	 * Resolves a `terraform { source }` value to a module directory. Only local sources are resolved; anything else
+	 * is reported as `remote`. Never throws: a source the path helpers cannot evaluate is `unresolvable`.
+	 * `unitDir` is the unit this resolution serves; a relative source written in an included configuration is
+	 * resolved against it, as Terragrunt does.
+	 *
+	 * @param token the `source` value token.
+	 * @param sourceUri URI of the file the token is written in.
+	 * @param unitDir directory of the unit being resolved for; defaults to the directory of `sourceUri`.
+	 * @returns `local` with the module directory, `missing` when that directory does not exist, `remote` for any
+	 *   non-local source, or `unresolvable` with the reason.
+	 */
+	public async resolveModuleSource(token: Token, sourceUri: string, unitDir?: string): Promise<ModuleSourceResolution> {
+		const resolveFrom = unitDir ?? path.dirname(URI.parse(sourceUri).fsPath);
+		let sourceText: string;
+		try {
+			sourceText = await this.resolvePathToken(token, resolveFrom, sourceUri);
+		} catch (error) {
+			return { kind: 'unresolvable', reason: error instanceof Error ? error.message : String(error) };
+		}
+		const parts = splitModuleSource(sourceText);
+		if (parts.forced || !isLocalSource(parts.repository)) return { kind: 'remote', sourceText };
+		let moduleDir: string;
+		try {
+			moduleDir = parts.repository.startsWith('file://')
+				? fileURLToPath(new URL(parts.repository))
+				: path.resolve(resolveFrom, parts.repository);
+		} catch (error) {
+			return { kind: 'unresolvable', reason: error instanceof Error ? error.message : String(error) };
+		}
+		// The directory is reported as written, so hovers and messages show the path the author used; the real
+		// paths are only consulted to check that a `//subdirectory` stays inside the module.
+		const selected = path.resolve(moduleDir, parts.subdirectory);
+		let realRoot: string;
+		let realSelected: string;
+		try {
+			realRoot = await fs.realpath(moduleDir);
+			realSelected = await fs.realpath(selected);
+		} catch {
+			return { kind: 'missing', moduleDir: selected, sourceText };
+		}
+		const relative = path.relative(realRoot, realSelected);
+		if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+			return { kind: 'unresolvable', reason: `Module source subdirectory escapes repository: ${sourceText}` };
+		}
+		if (!(await fs.stat(realSelected)).isDirectory()) return { kind: 'missing', moduleDir: selected, sourceText };
+		return { kind: 'local', moduleDir: selected, sourceText };
+	}
+
+	/**
+	 * The file an editor should open for a module directory: `variables.tf`, then `main.tf`, then the first
+	 * Terraform file it holds. Editors cannot open a directory as a text document, so a module with no `.tf`
+	 * files has no target.
+	 *
+	 * @param moduleDir absolute path of the module directory.
+	 * @returns absolute path of the file to open, or undefined when the module has no Terraform files or cannot be
+	 *   read.
+	 */
+	public async moduleEntryFile(moduleDir: string): Promise<string | undefined> {
+		let files: string[];
+		try {
+			files = (await this.moduleVariables.get(moduleDir)).files;
+		} catch {
+			return undefined;
+		}
+		for (const name of ['variables.tf', 'main.tf']) {
+			const match = files.find(file => path.basename(file) === name);
+			if (match) return match;
+		}
+		return files[0];
+	}
+
+	/**
+	 * Supplies a unit with the variables of the module it sources. The `terraform` block is taken from the unit
+	 * itself, else from the nearest included configuration that has one, and the `inputs` of included
+	 * configurations count towards the required variables. Included configurations that are not `terragrunt.hcl`
+	 * are skipped when opened on their own: their sources resolve against the unit that includes them, not against
+	 * themselves. Nothing here may throw into the include processing; a module that cannot be read leaves the
+	 * unit with no state.
+	 *
+	 * @param doc the unit being processed.
+	 * @param includePaths URIs of the configurations the unit includes directly.
+	 * @param unitDir directory of the unit, which the source and the include chain resolve against.
+	 */
+	private async applyModuleVariables(doc: ParsedDocument, includePaths: string[], unitDir: string): Promise<void> {
+		const uri = doc.getUri();
+		try {
+			if (this.schema.getFileKind(uri) !== 'unit' || path.basename(URI.parse(uri).fsPath) !== 'terragrunt.hcl') {
+				doc.setModuleVariables(undefined);
+				return;
+			}
+			const chain = await this.includeChain(doc, includePaths, unitDir);
+			let sourceToken = this.findTerraformSourceToken(doc);
+			let sourceUri = uri;
+			const sourceInThisFile = sourceToken !== undefined;
+			if (!sourceToken) {
+				for (const included of chain) {
+					sourceToken = this.findTerraformSourceToken(included);
+					if (sourceToken) {
+						sourceUri = included.getUri();
+						break;
+					}
+				}
+			}
+			if (!sourceToken) {
+				doc.setModuleVariables(undefined);
+				return;
+			}
+			const resolution = await this.resolveModuleSource(sourceToken, sourceUri, unitDir);
+			if (resolution.kind === 'remote' || resolution.kind === 'unresolvable') {
+				doc.setModuleVariables(undefined);
+				return;
+			}
+			if (resolution.kind === 'missing') {
+				doc.setModuleVariables({ status: 'missing', moduleDir: resolution.moduleDir, sourceText: resolution.sourceText, sourceInThisFile });
+				return;
+			}
+			const module = await this.moduleVariables.get(resolution.moduleDir);
+			const inheritedInputKeys = new Set<string>();
+			let inheritedInputsKnown = true;
+			for (const included of chain) {
+				const keys = included.getOwnInputKeys();
+				if (keys === undefined) inheritedInputsKnown = false;
+				else for (const key of keys) inheritedInputKeys.add(key);
+			}
+			const state: ModuleVariablesState = {
+				status: 'loaded',
+				moduleDir: resolution.moduleDir,
+				sourceText: resolution.sourceText,
+				sourceInThisFile,
+				variables: module.variables,
+				files: module.files,
+				inheritedInputKeys,
+				inheritedInputsKnown
+			};
+			doc.setModuleVariables(state);
+		} catch {
+			doc.setModuleVariables(undefined);
+		}
 	}
 
 	/** `unitDir` is the unit this resolution started from; it differs from the source file in an include chain. */
@@ -945,6 +1144,11 @@ export class Workspace {
 
 	setWorkspaceRoot(root: string) {
 		this.workspaceRoot = root;
+	}
+
+	/** @returns the workspace root URI set by {@link setWorkspaceRoot}, or null before one is set. */
+	getWorkspaceRoot(): string | null {
+		return this.workspaceRoot;
 	}
 
 	async addDocument(document: ParsedDocument) {

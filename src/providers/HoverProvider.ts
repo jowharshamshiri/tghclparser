@@ -1,9 +1,14 @@
+import path from 'node:path';
+
 import type { MarkupContent } from 'vscode-languageserver-types';
 import { MarkupKind } from 'vscode-languageserver-types';
+import { URI } from 'vscode-uri';
 
 import type { AttributeDefinition, BlockDefinition, FunctionDefinition, TokenType, ValueType } from '../model';
 import { Token } from '../model';
-import type { ParsedDocument } from '../ParsedDocument';
+import type { ModuleType } from '../module-variables';
+import { anyType, formatModuleType, summarizeModuleType } from '../module-variables';
+import type { ModuleVariablesState, ParsedDocument } from '../ParsedDocument';
 import type { Schema } from '../Schema';
 
 
@@ -407,6 +412,7 @@ export class HoverProvider {
 			case 'root_assignment_identifier': {
 				const attribute = this.schema.getRootAttributeDefinition(doc.getUri(), value);
 				if (attribute) contents = this.getAttributeDocumentation(attribute);
+				if (value === 'inputs') contents.push(...this.getModuleSummary(doc));
 				break;
 			}
 
@@ -455,6 +461,12 @@ export class HoverProvider {
 			}
 
 			case 'attribute_identifier': {
+				const keyPath = this.inputsKeyPath(token);
+				if (keyPath) {
+					const state = doc.getModuleVariables();
+					if (state?.status === 'loaded') contents = this.getInputDocumentation(state, keyPath, doc);
+					break;
+				}
 				if (token.parent?.parent?.type === 'block') {
 					const parentBlock = token.parent.parent;
 					const parentBlockDefinition = parentBlock.parent?.type === 'root'
@@ -669,6 +681,150 @@ export class HoverProvider {
 		}
 
 		return contents;
+	}
+
+	/**
+	 * The keys from the root `inputs` object down to this key, with `[]` standing for a list element, or undefined
+	 * when the token is not a key inside `inputs`. A key under a `merge(...)` call or other expression has no path.
+	 *
+	 * @param token the hovered token.
+	 * @returns the path, outermost key first, or undefined when the token is not an `inputs` key.
+	 */
+	private inputsKeyPath(token: Token): string[] | undefined {
+		if (token.type !== 'attribute_identifier') return undefined;
+		const segments: string[] = [];
+		let current: Token | null = token.parent;
+		while (current) {
+			if (current.type === 'attribute') {
+				const name = current.children.find(child => child.type === 'attribute_identifier')?.getDisplayText();
+				if (name === undefined || current.parent?.type !== 'object') return undefined;
+				segments.unshift(name);
+				current = current.parent.parent;
+			} else if (current.type === 'array_lit') {
+				segments.unshift('[]');
+				current = current.parent;
+			} else if (current.type === 'assignment') {
+				return current.getDisplayText() === 'inputs' && current.parent?.type === 'root' ? segments : undefined;
+			} else return undefined;
+		}
+		return undefined;
+	}
+
+	/**
+	 * Documents the key at `keyPath` by walking the module variable's type down to it.
+	 *
+	 * @param state the loaded module state.
+	 * @param keyPath the path from {@link inputsKeyPath}, whose first segment names the variable.
+	 * @param doc the document being hovered, which file paths are shown relative to.
+	 * @returns markdown lines, empty when the path leads nowhere in the type.
+	 */
+	private getInputDocumentation(state: ModuleVariablesState & { status: 'loaded' }, keyPath: string[], doc: ParsedDocument): string[] {
+		const variable = state.variables.find(candidate => candidate.name === keyPath[0]);
+		if (!variable) return [];
+		let type: ModuleType = variable.type ?? anyType;
+		let optional = variable.hasDefault;
+		let defaultText = variable.defaultText;
+		let description = variable.description;
+		for (const segment of keyPath.slice(1)) {
+			description = undefined;
+			if (segment === '[]') {
+				if (type.kind !== 'list' && type.kind !== 'set') return [];
+				type = type.element;
+				optional = false;
+				defaultText = undefined;
+			} else if (type.kind === 'object') {
+				const attribute = type.attributes.find(candidate => candidate.name === segment);
+				if (!attribute) return [];
+				type = attribute.type;
+				optional = attribute.optional;
+				defaultText = attribute.defaultText;
+			} else if (type.kind === 'map') {
+				type = type.element;
+				optional = true;
+				defaultText = undefined;
+			} else return [];
+		}
+
+		const nested = keyPath.length > 1;
+		const contents: string[] = [`## Input: ${keyPath.filter(segment => segment !== '[]').join('.')}`, ''];
+		if (description) contents.push(description, '', '---', '');
+		contents.push('### Details', '');
+		const formatted = variable.type ? formatModuleType(type) : variable.typeText ?? 'any';
+		if (!formatted.includes('\n')) contents.push(`- *Type:* \`${formatted}\``);
+		contents.push(`- *Required:* ${optional ? 'No' : 'Yes'}`);
+		if (defaultText !== undefined) contents.push(`- *Default:* \`${defaultText}\``);
+		if (!nested && variable.sensitive !== undefined) contents.push(`- *Sensitive:* ${variable.sensitive ? 'Yes' : 'No'}`);
+		if (!nested && variable.nullable !== undefined) contents.push(`- *Nullable:* ${variable.nullable ? 'Yes' : 'No'}`);
+		contents.push(`- *Declared in:* ${this.fileLink(doc, variable.file, variable.range.start.line)}`);
+		if (formatted.includes('\n')) contents.push('', '*Type:*', '', '```hcl', formatted, '```');
+		return contents;
+	}
+
+	/**
+	 * The module section appended to the `inputs` hover: a link to the module and a table of its inputs, or the
+	 * missing directory when the source resolved to one that does not exist.
+	 *
+	 * @param doc the document being hovered.
+	 * @returns markdown lines, empty when no module is known.
+	 */
+	private getModuleSummary(doc: ParsedDocument): string[] {
+		const state = doc.getModuleVariables();
+		if (!state) return [];
+		const contents: string[] = ['', '### Module', ''];
+		if (state.status === 'missing') {
+			contents.push(`Module directory not found: \`${state.moduleDir}\``);
+			return contents;
+		}
+		const entry = ['variables.tf', 'main.tf'].map(name => state.files.find(file => path.basename(file) === name)).find(Boolean) ?? state.files[0];
+		const label = this.displayPath(doc, state.moduleDir);
+		contents.push(entry ? `[${label}](${URI.file(entry).toString()})` : `\`${label}\``, '');
+		if (state.variables.length === 0) {
+			contents.push('*The module declares no variables.*');
+			return contents;
+		}
+		contents.push('| Input | Type | Required | Default |', '| --- | --- | --- | --- |');
+		for (const variable of state.variables) {
+			const type = variable.type ? summarizeModuleType(variable.type) : variable.typeText ?? 'any';
+			const fallback = variable.defaultText !== undefined ? `\`${this.tableCell(variable.defaultText)}\`` : '';
+			contents.push(`| \`${variable.name}\` | \`${this.tableCell(type)}\` | ${variable.hasDefault ? 'No' : 'Yes'} | ${fallback} |`);
+		}
+		return contents;
+	}
+
+	/**
+	 * @param text a value to place in a markdown table cell.
+	 * @returns the text with pipes escaped so they do not end the cell.
+	 */
+	private tableCell(text: string): string {
+		return text.replace(/\|/g, '\\|');
+	}
+
+	/**
+	 * A markdown link to a file at a line, labelled with the path relative to the workspace root, else to the unit.
+	 *
+	 * @param doc the document being hovered.
+	 * @param file absolute path of the file to link to.
+	 * @param line zero-based line to open at.
+	 * @returns the markdown link text.
+	 */
+	private fileLink(doc: ParsedDocument, file: string, line: number): string {
+		return `[${this.displayPath(doc, file)}:${line + 1}](${URI.file(file).toString()}#L${line + 1})`;
+	}
+
+	/**
+	 * Relative to the workspace root when the target lies inside it, else relative to the unit's directory.
+	 *
+	 * @param doc the document being hovered.
+	 * @param target absolute path of the file or directory to name.
+	 * @returns the relative path, or `.` for the unit's own directory.
+	 */
+	private displayPath(doc: ParsedDocument, target: string): string {
+		const root = doc.getWorkspace().getWorkspaceRoot();
+		if (root) {
+			const fromRoot = path.relative(URI.parse(root).fsPath, target);
+			if (fromRoot && !fromRoot.startsWith('..') && !path.isAbsolute(fromRoot)) return fromRoot;
+		}
+		return path.relative(path.dirname(URI.parse(doc.getUri()).fsPath), target) || '.';
 	}
 
 	private getAttributeDocumentation(attr: AttributeDefinition): string[] {
