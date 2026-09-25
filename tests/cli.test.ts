@@ -797,6 +797,65 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(made.root, {recursive: true, force: true});
 	});
 
+	async function workspaceWithSops(unit: string[]): Promise<{root: string; env: NodeJS.ProcessEnv}> {
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-sops-')));
+		await fs.mkdir(path.join(root, '.git'));
+		await fs.writeFile(path.join(root, 'good.sops.yaml'), 'token: decrypted\n');
+		await fs.writeFile(path.join(root, 'bad.sops.yaml'), 'token: ENC[...]\n');
+		await fs.writeFile(path.join(root, 'terragrunt.hcl'), unit.join('\n'));
+		const bin = path.join(root, 'bin');
+		await fs.mkdir(bin);
+		await fs.writeFile(path.join(bin, 'sops'), [
+			'#!/bin/sh',
+			'case "$2" in',
+			'  *bad*) echo "Failed to get the data key required to decrypt the SOPS file." >&2; exit 1 ;;',
+			'esac',
+			'cat "$2"'
+		].join('\n'), {mode: 0o755});
+		return {root, env: {...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`}};
+	}
+
+	it('renders without the fields that read a file sops cannot decrypt', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const made = await workspaceWithSops([
+			'locals {',
+			'  good = yamldecode(sops_decrypt_file("${get_terragrunt_dir()}/good.sops.yaml"))',
+			'  bad  = yamldecode(sops_decrypt_file("${get_terragrunt_dir()}/bad.sops.yaml"))',
+			'}',
+			'inputs = {',
+			'  good     = local.good.token',
+			'  bad      = local.bad.token',
+			'  fallback = try(local.bad.token, "fallback")',
+			'}'
+		]);
+		const result = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', made.root],
+			{cwd: made.root, encoding: 'utf8', env: made.env});
+		expect(result.status).to.equal(2, result.stderr);
+		const rendered = JSON.parse(result.stdout);
+		expect(rendered.inputs).to.deep.equal({good: 'decrypted'});
+		expect(rendered.locals).to.deep.equal({good: {token: 'decrypted'}});
+		expect(result.stderr).to.contain('unresolved locals.bad');
+		expect(result.stderr).to.contain('unresolved inputs.bad');
+		expect(result.stderr).to.contain('unresolved inputs.fallback');
+		expect(result.stderr).to.contain('Failed to get the data key');
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
+	it('still refuses to plan a unit that reads a file sops cannot decrypt', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const made = await workspaceWithSops([
+			'inputs = {',
+			'  bad = yamldecode(sops_decrypt_file("${get_terragrunt_dir()}/bad.sops.yaml")).token',
+			'}'
+		]);
+		const result = spawnSync(process.execPath, [cli, 'plan', '--working-dir', made.root],
+			{cwd: made.root, encoding: 'utf8', env: made.env});
+		expect(result.status).to.equal(1);
+		expect(result.stderr).to.contain('Failed to get the data key');
+		expect(result.stderr).to.not.contain('unresolved');
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
 	it('merges included inputs without reviving an unresolved value', async () => {
 		const cli = path.resolve('dist/cli.cjs');
 		const made = await workspaceWithUnappliedDependency([

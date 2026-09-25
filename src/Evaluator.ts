@@ -59,11 +59,21 @@ export interface ConfigEvaluatorOptions {
 	 */
 	allowedPaths?: string[];
 	resolveDependency?: (configPath: string, name: string) => Promise<RuntimeValue<ValueType> | undefined>;
-	/** Omit fields that read absent dependency outputs, and expose them through unresolvedRenderFields(). */
+	/** Omit fields that read unresolvable values, and expose them through unresolvedRenderFields(). */
 	partialRender?: boolean;
 }
 
-export class UnresolvedDependencyOutputError extends Error {
+/** A value a render cannot resolve: the field that reads it is omitted and reported rather than failing the render. */
+export class UnresolvedRenderValueError extends Error {}
+
+export class UnreadableSopsFileError extends UnresolvedRenderValueError {
+	constructor(file: string, reason: string) {
+		super(`sops could not decrypt ${file}: ${reason}`);
+		this.name = 'UnreadableSopsFileError';
+	}
+}
+
+export class UnresolvedDependencyOutputError extends UnresolvedRenderValueError {
 	constructor(dependency: string, output: string, reason?: string) {
 		super(
 			reason === undefined
@@ -298,7 +308,7 @@ export class ConfigEvaluator {
 		try {
 			return await evaluate();
 		} catch (error) {
-			if (!this.options.partialRender || !(error instanceof UnresolvedDependencyOutputError)) throw error;
+			if (!this.options.partialRender || !(error instanceof UnresolvedRenderValueError)) throw error;
 			this.renderUnresolved.push({file, field, reason: error.message});
 			return undefined;
 		}
@@ -883,7 +893,7 @@ export class ConfigEvaluator {
 						entries.set(key, await this.evalNode(valueNode, scope));
 						unresolvedInputs.delete(key);
 					} catch (error) {
-						if (!(error instanceof UnresolvedDependencyOutputError)) throw error;
+						if (!(error instanceof UnresolvedRenderValueError)) throw error;
 						entries.delete(key);
 						unresolvedInputs.set(key, {file: filePath, reason: error.message});
 					}
@@ -1002,15 +1012,19 @@ export class ConfigEvaluator {
 			},
 			runCommand: async (program: string, args: string[]) => {
 				this.assertTrusted('run_cmd');
-				const output = execFileSync(program, args, {
-					cwd: scope.dir,
-					encoding: 'utf8',
-					stdio: ['ignore', 'pipe', 'pipe'],
-					timeout: 10_000,
-					maxBuffer: 1024 * 1024,
-					 windowsHide: true
-				});
-				return output.endsWith('\n') ? output.slice(0, -1) : output;
+				return this.runCommand(scope, program, args);
+			},
+			decryptSopsFile: async (filePath: string) => {
+				try {
+					return this.runCommand(scope, 'sops', ['--decrypt', filePath]);
+				} catch (error) {
+					if (!this.options.partialRender) throw error;
+					const stderr = (error as {stderr?: unknown}).stderr;
+					const reason = typeof stderr === 'string' && stderr.trim() !== ''
+						? stderr.trim()
+						: error instanceof Error ? error.message : String(error);
+					throw new UnreadableSopsFileError(filePath, reason);
+				}
 			},
 			evaluateFunction: async (name: string, args: RuntimeValue<ValueType>[]) => {
 					if (!this.schema.getFunctionDefinition(name)) throw new Error(`Unknown function ${name}`);
@@ -1020,6 +1034,18 @@ export class ConfigEvaluator {
 					return this.schema.getFunctionRegistry().evaluateFunction(name, args, await this.makeContext(scope));
 			}
 		};
+	}
+
+	private runCommand(scope: Scope, program: string, args: string[]): string {
+		const output = execFileSync(program, args, {
+			cwd: scope.dir,
+			encoding: 'utf8',
+			stdio: ['ignore', 'pipe', 'pipe'],
+			timeout: 10_000,
+			maxBuffer: 1024 * 1024,
+			windowsHide: true
+		});
+		return output.endsWith('\n') ? output.slice(0, -1) : output;
 	}
 
 	/**
@@ -1062,7 +1088,7 @@ export class ConfigEvaluator {
 					try {
 						rendered.set(name, await this.evalNode(node, scope));
 					} catch (error) {
-						if (!this.options.partialRender || !(error instanceof UnresolvedDependencyOutputError)) throw error;
+						if (!this.options.partialRender || !(error instanceof UnresolvedRenderValueError)) throw error;
 						unresolved.push({file: from.filePath, field: `generate.${label}.${name}`, reason: error.message});
 					}
 				}
@@ -1629,7 +1655,7 @@ export class ConfigEvaluator {
 				await this.evalNode(args[0], scope);
 				return makeBooleanValue(true);
 			} catch (error) {
-				if (error instanceof UnresolvedDependencyOutputError) throw error;
+				if (error instanceof UnresolvedRenderValueError) throw error;
 				return makeBooleanValue(false);
 			}
 		}
@@ -1639,7 +1665,7 @@ export class ConfigEvaluator {
 				try {
 					return await this.evalNode(arg, scope);
 				} catch (error) {
-					if (error instanceof UnresolvedDependencyOutputError) throw error;
+					if (error instanceof UnresolvedRenderValueError) throw error;
 					// fall through to the next candidate
 				}
 			}

@@ -116,8 +116,8 @@ export const fileFunctionGroup = {
 			const source = stringArgument(args, 0, 'sops_decrypt_file');
 			const filePath = resolveFilePath(source, context);
 			await assertPathAllowed(context, filePath);
-			if (!context.runCommand) throw new Error('sops_decrypt_file requires a command runner');
-			return makeStringValue(await context.runCommand('sops', ['--decrypt', filePath]));
+			if (!context.decryptSopsFile) throw new Error('sops_decrypt_file requires a sops runner');
+			return makeStringValue(await context.decryptSopsFile(filePath));
 		},
 		templatefile: async (
             args: RuntimeValue<ValueType>[],
