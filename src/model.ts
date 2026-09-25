@@ -401,6 +401,7 @@ export interface FunctionContext {
 	readTerragruntConfig?: (relativePath: string) => Promise<RuntimeValue<ValueType> | undefined>;
 	readTFVarsFile?: (relativePath: string) => Promise<RuntimeValue<ValueType> | undefined>;
 	runCommand?: (program: string, args: string[]) => Promise<string>;
+	decryptSopsFile?: (filePath: string) => Promise<string>;
 	evaluateFunction?: (name: string, args: RuntimeValue<ValueType>[]) => Promise<RuntimeValue<ValueType>>;
 }
 
