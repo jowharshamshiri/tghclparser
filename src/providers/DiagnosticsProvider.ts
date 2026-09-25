@@ -48,20 +48,41 @@ export class DiagnosticsProvider {
 	private validateModuleInputs(document: ParsedDocument, diagnostics: Diagnostic[]): void {
 		const state = document.getModuleVariables();
 		if (!state) return;
-		const sourceToken = state.sourceInThisFile ? document.getTerraformSourceToken() : undefined;
+		const assignment = document.getInputsAssignment();
+		const inputsKey = assignment?.children.find(child => child.type === 'root_assignment_identifier');
+		// Findings about the module as a whole sit on the `source` that names it when this unit sets one, else on
+		// `inputs`, else on the first include, which is where an inherited source comes from.
+		const anchor = (state.sourceInThisFile ? document.getTerraformSourceToken() : undefined)
+			?? inputsKey ?? document.getIncludeBlockTokens()[0] ?? document.getTokens()[0]?.children[0];
+		if (!anchor) throw new Error(`Module state is set on ${document.getUri()}, which has no token to report it on`);
+
+		if (state.status === 'unavailable') {
+			diagnostics.push(this.diagnostic(anchor, `Module inputs are not checked: ${state.reason}`, DiagnosticSeverity.Warning));
+			return;
+		}
 		if (state.status === 'missing') {
-			if (sourceToken) {
-				diagnostics.push(this.diagnostic(sourceToken, `Local module source not found: ${state.moduleDir}`, DiagnosticSeverity.Hint));
-			}
+			diagnostics.push(this.diagnostic(anchor, `Local module source not found: ${state.moduleDir}`, DiagnosticSeverity.Warning));
 			return;
 		}
 
-		const assignment = document.getInputsAssignment();
+		const unitDir = path.dirname(URI.parse(document.getUri()).fsPath);
+		const moduleName = path.relative(unitDir, state.moduleDir) || '.';
+		// A module file that does not parse may declare any variable, so no key can be called undeclared. Required
+		// variables and value shapes are still checked: what was read is still true.
+		for (const unparsed of state.unparsed) {
+			diagnostics.push(this.diagnostic(
+				anchor,
+				`Module file ${path.relative(unitDir, unparsed.file)} does not parse (${unparsed.message}); the variables it declares are unknown, so undeclared inputs are not reported`,
+				DiagnosticSeverity.Warning
+			));
+		}
+		if (state.inheritedInputsProblem) {
+			diagnostics.push(this.diagnostic(anchor, `Required module inputs are not checked: ${state.inheritedInputsProblem}`, DiagnosticSeverity.Warning));
+		}
+
 		const value = assignment?.children.find(child => child.type !== 'root_assignment_identifier');
 		if (assignment && value?.type !== 'object') return;
 
-		const unitDir = path.dirname(URI.parse(document.getUri()).fsPath);
-		const moduleName = path.relative(unitDir, state.moduleDir) || '.';
 		const declared = new Set(state.variables.map(variable => variable.name));
 		const own = new Set<string>();
 		for (const attribute of value?.children.filter(child => child.type === 'attribute') ?? []) {
@@ -70,7 +91,9 @@ export class DiagnosticsProvider {
 			const name = identifier.getDisplayText();
 			own.add(name);
 			if (!declared.has(name)) {
-				diagnostics.push(this.diagnostic(identifier, `Input "${name}" is not declared by module ${moduleName}`, DiagnosticSeverity.Warning));
+				if (state.unparsed.length === 0) {
+					diagnostics.push(this.diagnostic(identifier, `Input "${name}" is not declared by module ${moduleName}`, DiagnosticSeverity.Warning));
+				}
 				continue;
 			}
 			const type = state.variables.find(variable => variable.name === name)?.type;
@@ -83,10 +106,7 @@ export class DiagnosticsProvider {
 			.filter(variable => !variable.hasDefault && !own.has(variable.name) && !state.inheritedInputKeys.has(variable.name))
 			.map(variable => variable.name);
 		if (missing.length === 0) return;
-		const anchor = assignment?.children.find(child => child.type === 'root_assignment_identifier') ?? sourceToken;
-		if (anchor) {
-			diagnostics.push(this.diagnostic(anchor, `Missing required module inputs: ${missing.join(', ')}`, DiagnosticSeverity.Warning));
-		}
+		diagnostics.push(this.diagnostic(inputsKey ?? anchor, `Missing required module inputs: ${missing.join(', ')}`, DiagnosticSeverity.Warning));
 	}
 
 	/**

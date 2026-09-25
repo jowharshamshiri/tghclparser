@@ -6,7 +6,7 @@ import { URI } from 'vscode-uri';
 import { readInlineFunction, synthesizeDefinition, tokenToNode } from './inline-functions';
 import type { FunctionContext, FunctionDefinition, ResolvedReference, RuntimeValue, TerragruntConfig, TokenType, ValueType } from './model';
 import { Token } from './model';
-import type { ModuleVariable } from './module-variables';
+import type { ModuleFileError, ModuleVariable } from './module-variables';
 import { parse as tg_parse, SyntaxError } from './parser';
 import type { ParserTracerEvent } from './parser';
 import { CompletionsProvider } from './providers/CompletionsProvider';
@@ -19,8 +19,10 @@ import type { Workspace } from './Workspace';
 
 /**
  * What is known about the Terraform module a unit's `terraform { source }` names. `loaded` carries the module's
- * variables plus the input keys included configurations already supply; `missing` means the source resolved to a
- * local directory that does not exist. A remote or unresolvable source leaves the document with no state at all.
+ * variables plus the input keys the autoinclude and included configurations supply; `missing` means the source
+ * resolved to a local directory that does not exist; `unavailable` means the module or the configuration that names
+ * it could not be determined, with the reason. A remote source leaves the document with no state at all: it is a
+ * source this does not fetch, not a failure.
  */
 export type ModuleVariablesState =
 	| {
@@ -35,10 +37,24 @@ export type ModuleVariablesState =
 		variables: ModuleVariable[];
 		/** Absolute paths of the module's `.tf` files, sorted. */
 		files: string[];
-		/** Keys set by literal `inputs` objects in the include chain, which count towards required variables. */
+		/** The module files that did not parse; while any are listed, `variables` may be missing some. */
+		unparsed: ModuleFileError[];
+		/** Keys set by literal `inputs` objects the unit merges in, which count towards required variables. */
 		inheritedInputKeys: Set<string>;
-		/** False when an included configuration's `inputs` could not be enumerated, which switches coverage off. */
+		/** False when a merged configuration's `inputs` could not be enumerated, which switches coverage off. */
 		inheritedInputsKnown: boolean;
+		/**
+		 * Why a merged configuration's `inputs` are unknown when that is a failure, such as a configuration that does
+		 * not parse, rather than a value this does not enumerate, such as `merge(...)`.
+		 */
+		inheritedInputsProblem?: string;
+	}
+	| {
+		status: 'unavailable';
+		/** Why the module or its inputs could not be determined, as the diagnostic states it. */
+		reason: string;
+		/** True when the `terraform { source }` involved is in this document, so the diagnostic can sit on it. */
+		sourceInThisFile: boolean;
 	}
 	| {
 		status: 'missing';
@@ -857,16 +873,23 @@ export class ParsedDocument {
 	}
 
 	/**
-	 * The value of `source` in this document's root `terraform` block, when it is a form the path helpers can read.
+	 * The value of `source` in this document's root `terraform` block, whatever form it takes. A form the path
+	 * helpers cannot read is still returned, so that resolving it reports why rather than the source going unseen
+	 * and a lower-priority configuration's source being used in its place.
 	 *
-	 * @returns the string, interpolation or function-call token, or undefined when there is no such `source`.
+	 * @returns the value token, or undefined when the document sets no `source`.
 	 */
 	public getTerraformSourceToken(): Token | undefined {
 		const root = this.tokens[0];
 		const block = root?.children.find(child => child.type === 'block' && child.value === 'terraform');
 		const attribute = block?.children.find(child => child.type === 'attribute' && child.value === 'source');
-		return attribute?.children.find(child =>
-			child.type === 'string_lit' || child.type === 'interpolated_string' || child.type === 'function_call');
+		return attribute?.children.find(child => child.type !== 'attribute_identifier');
+	}
+
+	/** @returns the root `include` block tokens of this document, in the order they are written. */
+	public getIncludeBlockTokens(): Token[] {
+		const root = this.tokens[0];
+		return root?.children.filter(child => child.type === 'block' && child.value === 'include') ?? [];
 	}
 
 	/** @returns the root `inputs = …` assignment token of this document, or undefined when there is none. */

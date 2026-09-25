@@ -3,7 +3,7 @@ import * as path from 'node:path';
 
 import type { Position } from 'vscode-languageserver-types';
 
-import { parse } from './parser';
+import { parse, SyntaxError } from './parser';
 
 /** The flat shape of a type constraint, enough to choose a value snippet by. */
 export type ModuleVariableTypeKind = 'string' | 'number' | 'bool' | 'list' | 'set' | 'map' | 'object' | 'tuple' | 'any';
@@ -88,6 +88,19 @@ export interface ModuleVariables {
 	files: string[];
 	/** The variables declared, in file then declaration order, with the first declaration of a repeated name. */
 	variables: ModuleVariable[];
+	/**
+	 * The `.tf` files that did not parse, with the parser's message. Whatever they declare is unknown, so
+	 * `variables` is complete only when this is empty.
+	 */
+	unparsed: ModuleFileError[];
+}
+
+/** A module file the grammar could not parse. */
+export interface ModuleFileError {
+	/** Absolute path of the file. */
+	file: string;
+	/** The parser's message, prefixed with the one-based line and column it stopped at when it reported one. */
+	message: string;
 }
 
 /** Characters of a default expression kept for display before it is cut with an ellipsis. */
@@ -148,23 +161,30 @@ export async function listModuleFiles(moduleDir: string): Promise<string[]> {
 }
 
 /**
- * Reads the `variable` blocks of a module. A file that does not parse is skipped, and the first declaration of a
- * repeated name wins.
+ * Reads the `variable` blocks of a module. A file that does not parse is recorded in `unparsed` with the parser's
+ * message rather than dropped unnoticed, and the first declaration of a repeated name wins.
  *
  * @param moduleDir absolute path of the module directory.
- * @returns the files read and the variables they declare, in file then declaration order.
+ * @returns the files read, the variables they declare in file then declaration order, and the files that did not
+ *   parse.
  * @throws when the directory or one of its files cannot be read.
  */
 export async function readModuleVariables(moduleDir: string): Promise<ModuleVariables> {
 	const files = await listModuleFiles(moduleDir);
 	const variables: ModuleVariable[] = [];
+	const unparsed: ModuleFileError[] = [];
 	const seen = new Set<string>();
 	for (const file of files) {
 		const content = await fs.readFile(file, 'utf8');
 		let ast: any;
 		try {
 			ast = parse(content, { grammarSource: file, tracer: { trace() {} } });
-		} catch {
+		} catch (error) {
+			// The grammar rejects invalid input by throwing: a SyntaxError where the text does not match, a plain Error
+			// from its own checks, such as a redefined attribute. Both mean the file does not parse, as ParsedDocument
+			// treats them. Only the parse call is guarded, so nothing else is taken for a parse failure.
+			if (!(error instanceof Error)) throw error;
+			unparsed.push({ file, message: parseFailureMessage(error) });
 			continue;
 		}
 		for (const block of ast.children ?? []) {
@@ -177,7 +197,18 @@ export async function readModuleVariables(moduleDir: string): Promise<ModuleVari
 			variables.push(readVariable(block, name, file, content));
 		}
 	}
-	return { moduleDir, files, variables };
+	return { moduleDir, files, variables, unparsed };
+}
+
+/**
+ * @param error what the grammar threw.
+ * @returns for a syntax error, where it stopped and what it found there -- its own message lists every token it
+ *   would have accepted, which buries both; for any other rejection, its message.
+ */
+function parseFailureMessage(error: Error): string {
+	if (!(error instanceof SyntaxError) || !error.location) return error.message;
+	const found = error.found === null || error.found === undefined ? 'end of input' : JSON.stringify(error.found);
+	return `line ${error.location.start.line}, column ${error.location.start.column}: unexpected ${found}`;
 }
 
 /**

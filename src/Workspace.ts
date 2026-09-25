@@ -7,10 +7,17 @@ import { URI } from 'vscode-uri';
 import type { FunctionContext, FunctionDefinition, TerragruntConfig, Token } from './model';
 import { createDependencyConfig, createIncludeConfig, TreeNode } from './model';
 import { isLocalSource, ModuleVariableCache, splitModuleSource } from './module-variables';
+import type { ModuleVariables } from './module-variables';
 import type { ModuleVariablesState } from './ParsedDocument';
 import { ParsedDocument } from './ParsedDocument';
 import { Schema } from './Schema';
 import { expandTerragruntGlob } from './functions/terragrunt_glob';
+
+/** @returns true for an error from the filesystem, such as a directory that cannot be listed or a file that cannot be read. */
+function isFileSystemError(error: unknown): error is NodeJS.ErrnoException {
+	return error instanceof Error && typeof (error as NodeJS.ErrnoException).code === 'string'
+		&& typeof (error as NodeJS.ErrnoException).syscall === 'string';
+}
 
 /**
  * The outcome of resolving a `terraform { source }` value. `local` names a directory that exists, `missing` one
@@ -136,7 +143,7 @@ export class Workspace {
 
 		// The module a unit sources is only known once its include chain is, because the `terraform` block and
 		// part of the `inputs` may live in an included configuration.
-		if (uri === unitUri) await this.applyModuleVariables(doc, includePaths, resolveFrom);
+		if (uri === unitUri) await this.applyModuleVariables(doc, includes, includePaths, resolveFrom);
 
 		// Explicit stack components are graph edges even before `terragrunt stack generate`
 		// materializes their target files.
@@ -530,10 +537,10 @@ export class Workspace {
 	}
 
 	/**
-	 * The value of `source` in a document's root `terraform` block, when it is a form the path helpers can read.
+	 * The value of `source` in a document's root `terraform` block, whatever form it takes.
 	 *
 	 * @param doc the document to look in.
-	 * @returns the string, interpolation or function-call token, or undefined when there is no such `source`.
+	 * @returns the value token, or undefined when the document sets no `source`.
 	 */
 	public findTerraformSourceToken(doc: ParsedDocument): Token | undefined {
 		return doc.getTerraformSourceToken();
@@ -612,72 +619,190 @@ export class Workspace {
 	}
 
 	/**
-	 * Supplies a unit with the variables of the module it sources. The `terraform` block is taken from the unit
-	 * itself, else from the nearest included configuration that has one, and the `inputs` of included
-	 * configurations count towards the required variables. Included configurations that are not `terragrunt.hcl`
-	 * are skipped when opened on their own: their sources resolve against the unit that includes them, not against
-	 * themselves. Nothing here may throw into the include processing; a module that cannot be read leaves the
-	 * unit with no state.
+	 * Supplies a unit with the variables of the module it sources. Included configurations that are not
+	 * `terragrunt.hcl` get no state when opened on their own: their sources resolve against the unit that includes
+	 * them, not against themselves.
 	 *
 	 * @param doc the unit being processed.
-	 * @param includePaths URIs of the configurations the unit includes directly.
-	 * @param unitDir directory of the unit, which the source and the include chain resolve against.
+	 * @param includes the unit's include blocks whose paths resolved, in the order written.
+	 * @param includePaths URIs of those includes' configurations, index for index with `includes`.
+	 * @param unitDir directory of the unit, which the source and the includes resolve against.
 	 */
-	private async applyModuleVariables(doc: ParsedDocument, includePaths: string[], unitDir: string): Promise<void> {
+	private async applyModuleVariables(
+		doc: ParsedDocument,
+		includes: { path: Token; block: Token }[],
+		includePaths: string[],
+		unitDir: string
+	): Promise<void> {
 		const uri = doc.getUri();
-		try {
-			if (this.schema.getFileKind(uri) !== 'unit' || path.basename(URI.parse(uri).fsPath) !== 'terragrunt.hcl') {
-				doc.setModuleVariables(undefined);
-				return;
-			}
-			const chain = await this.includeChain(doc, includePaths, unitDir);
-			let sourceToken = this.findTerraformSourceToken(doc);
-			let sourceUri = uri;
-			const sourceInThisFile = sourceToken !== undefined;
-			if (!sourceToken) {
-				for (const included of chain) {
-					sourceToken = this.findTerraformSourceToken(included);
-					if (sourceToken) {
-						sourceUri = included.getUri();
-						break;
-					}
-				}
-			}
-			if (!sourceToken) {
-				doc.setModuleVariables(undefined);
-				return;
-			}
-			const resolution = await this.resolveModuleSource(sourceToken, sourceUri, unitDir);
-			if (resolution.kind === 'remote' || resolution.kind === 'unresolvable') {
-				doc.setModuleVariables(undefined);
-				return;
-			}
-			if (resolution.kind === 'missing') {
-				doc.setModuleVariables({ status: 'missing', moduleDir: resolution.moduleDir, sourceText: resolution.sourceText, sourceInThisFile });
-				return;
-			}
-			const module = await this.moduleVariables.get(resolution.moduleDir);
-			const inheritedInputKeys = new Set<string>();
-			let inheritedInputsKnown = true;
-			for (const included of chain) {
-				const keys = included.getOwnInputKeys();
-				if (keys === undefined) inheritedInputsKnown = false;
-				else for (const key of keys) inheritedInputKeys.add(key);
-			}
-			const state: ModuleVariablesState = {
-				status: 'loaded',
-				moduleDir: resolution.moduleDir,
-				sourceText: resolution.sourceText,
-				sourceInThisFile,
-				variables: module.variables,
-				files: module.files,
-				inheritedInputKeys,
-				inheritedInputsKnown
-			};
-			doc.setModuleVariables(state);
-		} catch {
+		if (this.schema.getFileKind(uri) !== 'unit' || path.basename(URI.parse(uri).fsPath) !== 'terragrunt.hcl') {
 			doc.setModuleVariables(undefined);
+			return;
 		}
+		doc.setModuleVariables(await this.moduleVariablesFor(doc, includes, includePaths, unitDir));
+	}
+
+	/**
+	 * The module a unit runs and the inputs it is given, from the configurations Terragrunt merges into the unit
+	 * (see {@link mergedConfigurations}). The first of them, in merge priority, that sets `terraform { source }`
+	 * names the module, and the literal `inputs` keys of the others count towards its required variables.
+	 *
+	 * Every outcome is explicit: a remote source is not checked and yields no state; a configuration or source that
+	 * cannot be determined, or a module that cannot be read, yields `unavailable` with the reason. Anything else that
+	 * goes wrong is a defect and propagates.
+	 */
+	private async moduleVariablesFor(
+		doc: ParsedDocument,
+		includes: { path: Token; block: Token }[],
+		includePaths: string[],
+		unitDir: string
+	): Promise<ModuleVariablesState | undefined> {
+		const merged = await this.mergedConfigurations(doc, includes, includePaths, unitDir);
+		if ('reason' in merged) return { status: 'unavailable', reason: merged.reason, sourceInThisFile: false };
+
+		let owner: ParsedDocument | undefined;
+		for (const configuration of merged.configurations) {
+			if (configuration.getAST() === null) {
+				return {
+					status: 'unavailable',
+					reason: `${this.displayPath(configuration.getUri(), unitDir)} does not parse, so the module source it may set is unknown`,
+					sourceInThisFile: false
+				};
+			}
+			if (this.findTerraformSourceToken(configuration) !== undefined) {
+				owner = configuration;
+				break;
+			}
+		}
+		if (!owner) return undefined;
+		const sourceInThisFile = owner === doc;
+
+		const resolution = await this.resolveModuleSource(this.findTerraformSourceToken(owner)!, owner.getUri(), unitDir);
+		if (resolution.kind === 'remote') return undefined;
+		if (resolution.kind === 'unresolvable') {
+			return { status: 'unavailable', reason: `the module source could not be resolved: ${resolution.reason}`, sourceInThisFile };
+		}
+		if (resolution.kind === 'missing') {
+			return { status: 'missing', moduleDir: resolution.moduleDir, sourceText: resolution.sourceText, sourceInThisFile };
+		}
+
+		let module: ModuleVariables;
+		try {
+			module = await this.moduleVariables.get(resolution.moduleDir);
+		} catch (error) {
+			if (!isFileSystemError(error)) throw error;
+			return { status: 'unavailable', reason: `module ${resolution.moduleDir} could not be read: ${error.message}`, sourceInThisFile };
+		}
+
+		const inheritedInputKeys = new Set<string>();
+		let inheritedInputsKnown = true;
+		let inheritedInputsProblem: string | undefined;
+		for (const configuration of merged.configurations) {
+			if (configuration === doc) continue;
+			if (configuration.getAST() === null) {
+				inheritedInputsKnown = false;
+				inheritedInputsProblem ??= `${this.displayPath(configuration.getUri(), unitDir)} does not parse, so the inputs it sets are unknown`;
+				continue;
+			}
+			const keys = configuration.getOwnInputKeys();
+			if (keys === undefined) inheritedInputsKnown = false;
+			else for (const key of keys) inheritedInputKeys.add(key);
+		}
+		return {
+			status: 'loaded',
+			moduleDir: resolution.moduleDir,
+			sourceText: resolution.sourceText,
+			sourceInThisFile,
+			variables: module.variables,
+			files: module.files,
+			unparsed: module.unparsed,
+			inheritedInputKeys,
+			inheritedInputsKnown,
+			inheritedInputsProblem
+		};
+	}
+
+	/**
+	 * The configurations Terragrunt merges into a unit, highest priority first, as far as `terraform { source }` and
+	 * `inputs` go. Terragrunt merges the sibling `terragrunt.autoinclude.hcl` over the unit, winning where both set
+	 * something, then merges each direct include beneath the result, the last include first, so a later include wins
+	 * over an earlier one and the unit over every include. An include with `merge_strategy = "no_merge"` is not
+	 * merged at all.
+	 *
+	 * What Terragrunt refuses -- an included configuration with include blocks of its own, `deep_map_only`, an
+	 * unknown strategy -- and what cannot be read statically -- an include path or strategy written as an expression
+	 * this does not evaluate -- is returned as a reason instead.
+	 *
+	 * @returns the configurations in priority order, or the reason they cannot be determined.
+	 */
+	private async mergedConfigurations(
+		doc: ParsedDocument,
+		includes: { path: Token; block: Token }[],
+		includePaths: string[],
+		unitDir: string
+	): Promise<{ configurations: ParsedDocument[] } | { reason: string }> {
+		const written = doc.getIncludeBlockTokens();
+		if (written.length !== includes.length) {
+			const unread = written.find(block => !includes.some(include => include.block.startPosition.line === block.startPosition.line
+				&& include.block.startPosition.character === block.startPosition.character));
+			return { reason: `the path of ${this.includeName(unread ?? written[0])} is not a string, interpolation or function call, so the configuration it merges in cannot be determined` };
+		}
+
+		const merged: ParsedDocument[] = [];
+		for (const [index, include] of includes.entries()) {
+			const strategy = this.includeMergeStrategy(include.block);
+			if ('reason' in strategy) return strategy;
+			const included = await this.getParsedDocument(includePaths[index]);
+			if (!included) {
+				return { reason: `${this.includeName(include.block)} names ${this.displayPath(includePaths[index], unitDir)}, which could not be read` };
+			}
+			if (included.getAST() !== null && included.getIncludeBlockTokens().length > 0) {
+				return {
+					reason: `${this.displayPath(includePaths[index], unitDir)}, included by ${this.includeName(include.block)}, has include blocks of its own; Terragrunt does not support nested includes`
+				};
+			}
+			if (strategy.strategy !== 'no_merge') merged.push(included);
+		}
+
+		const configurations = [doc, ...merged.reverse()];
+		const autoinclude = path.join(unitDir, 'terragrunt.autoinclude.hcl');
+		if (await this.fileExists(autoinclude)) {
+			const autoincludeDoc = await this.getParsedDocument(URI.file(autoinclude).toString());
+			if (!autoincludeDoc) return { reason: `${this.displayPath(URI.file(autoinclude).toString(), unitDir)} exists but could not be read` };
+			configurations.unshift(autoincludeDoc);
+		}
+		return { configurations };
+	}
+
+	/**
+	 * @param block an `include` block token.
+	 * @returns the strategy Terragrunt would merge the include with, or the reason it cannot be known or would be
+	 *   refused.
+	 */
+	private includeMergeStrategy(block: Token): { strategy: 'no_merge' | 'shallow' | 'deep' } | { reason: string } {
+		const attribute = block.children.find(child => child.type === 'attribute' && child.value === 'merge_strategy');
+		if (!attribute) return { strategy: 'shallow' };
+		const value = attribute.children.find(child => child.type !== 'attribute_identifier');
+		if (value?.type !== 'string_lit') {
+			return { reason: `${this.includeName(block)} sets merge_strategy with an expression, so whether its source and inputs are merged cannot be determined` };
+		}
+		const strategy = String(value.value);
+		if (strategy === 'no_merge' || strategy === 'shallow' || strategy === 'deep') return { strategy };
+		if (strategy === 'deep_map_only') {
+			return { reason: `${this.includeName(block)} uses merge_strategy "deep_map_only", which Terragrunt does not support on include blocks` };
+		}
+		return { reason: `${this.includeName(block)} has merge_strategy "${strategy}", which is not one of no_merge, shallow or deep` };
+	}
+
+	/** @returns `include "label"`, or `include` for an unlabelled block, as messages name it. */
+	private includeName(block: Token): string {
+		const label = block.children.find(child => child.type === 'parameter');
+		return label ? `include "${String(label.value)}"` : 'include';
+	}
+
+	/** @returns the file at `uri` relative to the unit's directory, as messages name it. */
+	private displayPath(uri: string, unitDir: string): string {
+		return path.relative(unitDir, URI.parse(uri).fsPath) || '.';
 	}
 
 	/** `unitDir` is the unit this resolution started from; it differs from the source file in an include chain. */

@@ -771,9 +771,16 @@ export class HoverProvider {
 		const state = doc.getModuleVariables();
 		if (!state) return [];
 		const contents: string[] = ['', '### Module', ''];
+		if (state.status === 'unavailable') {
+			contents.push(`Inputs are not checked: ${state.reason}`);
+			return contents;
+		}
 		if (state.status === 'missing') {
 			contents.push(`Module directory not found: \`${state.moduleDir}\``);
 			return contents;
+		}
+		for (const unparsed of state.unparsed) {
+			contents.push(`*\`${this.displayPath(doc, unparsed.file)}\` does not parse, so this list may be incomplete: ${unparsed.message}*`, '');
 		}
 		const entry = ['variables.tf', 'main.tf'].map(name => state.files.find(file => path.basename(file) === name)).find(Boolean) ?? state.files[0];
 		const label = this.displayPath(doc, state.moduleDir);
