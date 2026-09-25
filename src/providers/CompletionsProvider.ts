@@ -2,13 +2,26 @@ import type { CompletionItem, Position } from 'vscode-languageserver';
 import { CompletionItemKind, InsertTextFormat, MarkupKind } from 'vscode-languageserver';
 
 import type { AttributeDefinition, BlockDefinition, Token } from '../model';
+import type { ModuleType, ModuleVariableTypeKind } from '../module-variables';
+import { anyType, moduleTypeKind } from '../module-variables';
 import type { ParsedDocument } from '../ParsedDocument';
 import type { Schema } from '../Schema';
 
+/**
+ * A construct the cursor sits inside. `<inputs>` is the root `inputs = {` object, `<expression>` any other brace
+ * object and `<array>` a bracket, each carrying the key it is assigned to when one is on the same line.
+ */
 interface BlockFrame {
+	/** The block type from its header, or `<inputs>`, `<expression>` or `<array>` for a construct with none. */
 	type: string;
+	/** The block's quoted label, such as `root` in `include "root" {`. */
 	label?: string;
+	/** The key the brace or bracket is assigned to, when `key =` precedes it on the same line. */
+	key?: string;
 }
+
+/** Matches a line that assigns a value to a bare or quoted key, up to the `=`, capturing the key either way. */
+const keyPrefix = /^\s*(?:"([^"]*)"|([\w-]+))\s*=\s*$/;
 
 interface CursorContext {
 	beforeCursor: string;
@@ -38,11 +51,15 @@ export class CompletionsProvider {
 		const completions: CompletionItem[] = [];
 
 		if (structural !== undefined && !context.inString) {
-			if (context.blocks.length === 0) {
+			const current = context.blocks.at(-1);
+			if (!current) {
 				completions.push(...this.blockItems(this.schema.getRootBlockDefinitions(document.getUri()), structural));
 				completions.push(...this.attributeItems(this.schema.getRootAttributeDefinitions(document.getUri()), structural));
-			} else {
-				const current = context.blocks.at(-1)!;
+			} else if (current.type === '<inputs>') {
+				completions.push(...this.moduleVariableItems(document, structural));
+			} else if (current.type === '<expression>') {
+				completions.push(...this.nestedInputItems(document, context.blocks, structural));
+			} else if (current.type !== '<array>') {
 				const definition = this.definitionForFrame(current, context.blocks.at(-2), document.getUri());
 				if (definition) {
 					completions.push(...this.attributeItems(definition.attributes ?? [], structural));
@@ -152,26 +169,49 @@ export class CompletionsProvider {
 			if (char === '"' && !escaped) inString = !inString;
 			escaped = char === '\\' && !escaped;
 			if (char !== '\\') escaped = false;
-			if (inString) continue;
+			// String contents stay in the line prefix so a block label or a quoted key is still readable when the
+			// opening brace is reached.
+			if (inString) { linePrefix += char; continue; }
 
 			if (char === '\n') { linePrefix = ''; continue; }
 			linePrefix += char;
 
 			if (char === '{' && beforeCursor[index - 1] !== '$') {
-				const header = linePrefix.slice(0, -1).match(/^\s*([\w-]+)(?:\s+"([^"]+)")?\s*$/);
+				const prefix = linePrefix.slice(0, -1);
+				const header = prefix.match(/^\s*([\w-]+)(?:\s+"([^"]+)")?\s*$/);
 				if (header) blocks.push({ type: header[1], label: header[2] });
-				else blocks.push({ type: '<expression>' });
+				else if (/^\s*inputs\s*=\s*$/.test(prefix)) blocks.push({ type: '<inputs>' });
+				else blocks.push({ type: '<expression>', key: this.keyOf(prefix) });
 			}
+			if (char === '[') blocks.push({ type: '<array>', key: this.keyOf(linePrefix.slice(0, -1)) });
+			if (char === ']' && blocks.at(-1)?.type === '<array>') blocks.pop();
 			if (char === '}' && blocks.length > 0) blocks.pop();
+		}
+
+		// Expression and array frames only matter inside `inputs = {`, where they trace the path from the module
+		// variable to the value being written. Elsewhere they are dropped so the enclosing block's definition still
+		// applies.
+		const frames: BlockFrame[] = [];
+		for (const block of blocks) {
+			if ((block.type !== '<expression>' && block.type !== '<array>') || frames.some(frame => frame.type === '<inputs>')) frames.push(block);
 		}
 
 		return {
 			beforeCursor,
 			lineBeforeCursor: beforeCursor.slice(beforeCursor.lastIndexOf('\n') + 1),
-			blocks: blocks.filter(block => block.type !== '<expression>'),
+			blocks: frames,
 			inComment: inLineComment || inBlockComment,
 			inString
 		};
+	}
+
+	/**
+	 * @param prefix the text of the line before an opening brace or bracket.
+	 * @returns the key when the prefix is `key =` or `"key" =`, else undefined.
+	 */
+	private keyOf(prefix: string): string | undefined {
+		const match = prefix.match(keyPrefix);
+		return match ? match[1] ?? match[2] : undefined;
 	}
 
 	private offsetAt(text: string, position: Position): number {
@@ -245,6 +285,151 @@ export class CompletionsProvider {
 			case 'number': return `\${${index}:0}`;
 			case 'boolean': return `\${${index}|true,false|}`;
 			case 'array': return `[\${${index}}]`;
+			case 'object': return `{\n\t\${${index}}\n}`;
+			default: return `\${${index}}`;
+		}
+	}
+
+	/**
+	 * Variables of the module the unit sources, offered at the top level of its `inputs` object. Keys the object
+	 * already assigns are left out, and required variables sort ahead of optional ones. The document accessors are
+	 * optional because a provider driven without a workspace has no module state.
+	 *
+	 * @param document the document being completed.
+	 * @param partial the word typed so far, which item names must start with.
+	 * @returns one item per remaining variable, empty when no module is loaded.
+	 */
+	private moduleVariableItems(document: ParsedDocument, partial: string): CompletionItem[] {
+		const state = document.getModuleVariables?.();
+		if (state?.status !== 'loaded') return [];
+		const present = new Set(document.getOwnInputKeys?.() ?? []);
+		return state.variables
+			.filter(variable => variable.name.startsWith(partial) && !present.has(variable.name))
+			.map(variable => this.inputItem(
+				variable.name,
+				variable.typeText ?? 'any',
+				variable.typeKind,
+				variable.hasDefault,
+				variable.description,
+				variable.defaultText
+			));
+	}
+
+	/**
+	 * Attributes of the object the cursor is writing inside `inputs`, found by walking the frames since `inputs`
+	 * down the module variable's type: a keyed frame selects an object attribute or a map's element, an array frame
+	 * selects a list or set element, and a keyless object frame is only meaningful as a list element. Anything the
+	 * type does not describe offers nothing.
+	 *
+	 * @param document the document being completed.
+	 * @param blocks the frames enclosing the cursor, outermost first, including the `<inputs>` frame.
+	 * @param partial the word typed so far, which item names must start with.
+	 * @returns one item per attribute of the object at the cursor not already written, empty when the path does not
+	 *   lead to an object the type describes.
+	 */
+	private nestedInputItems(document: ParsedDocument, blocks: BlockFrame[], partial: string): CompletionItem[] {
+		const state = document.getModuleVariables?.();
+		const start = blocks.findIndex(block => block.type === '<inputs>');
+		if (state?.status !== 'loaded' || start < 0) return [];
+		const frames = blocks.slice(start + 1);
+
+		let type: ModuleType = {
+			kind: 'object',
+			text: 'inputs',
+			attributes: state.variables.map(variable => ({ name: variable.name, type: variable.type ?? anyType, optional: variable.hasDefault, defaultText: variable.defaultText }))
+		};
+		for (const [index, frame] of frames.entries()) {
+			if (frame.key !== undefined) {
+				if (type.kind === 'object') {
+					const attribute = type.attributes.find(candidate => candidate.name === frame.key);
+					if (!attribute) return [];
+					type = attribute.type;
+				} else if (type.kind === 'map') {
+					type = type.element;
+				} else return [];
+			} else if (frame.type === '<expression>' && frames[index - 1]?.type !== '<array>') return [];
+			if (frame.type === '<array>') {
+				if (type.kind === 'list' || type.kind === 'set') type = type.element;
+				else return [];
+			}
+		}
+		if (type.kind !== 'object') return [];
+
+		const present = new Set(this.presentKeysAt(document, frames));
+		return type.attributes
+			.filter(attribute => attribute.name.startsWith(partial) && !present.has(attribute.name))
+			.map(attribute => this.inputItem(attribute.name, attribute.type.text, moduleTypeKind(attribute.type), attribute.optional, undefined, attribute.defaultText));
+	}
+
+	/**
+	 * Keys already written in the nested object the frames lead to, when the document parses and the path has no
+	 * array in it.
+	 *
+	 * @param document the document being completed.
+	 * @param frames the frames inside `inputs`, outermost first.
+	 * @returns the key names, or an empty list whenever they cannot be read.
+	 */
+	private presentKeysAt(document: ParsedDocument, frames: BlockFrame[]): string[] {
+		let value = document.getInputsAssignment?.()?.children.find(child => child.type !== 'root_assignment_identifier');
+		for (const frame of frames) {
+			if (!value || value.type !== 'object' || frame.key === undefined || frame.type === '<array>') return [];
+			const attribute = value.children.find(child => child.type === 'attribute' && this.attributeName(child) === frame.key);
+			value = attribute?.children.find(child => child.type !== 'attribute_identifier');
+		}
+		if (!value || value.type !== 'object') return [];
+		return value.children.filter(child => child.type === 'attribute').map(child => this.attributeName(child)).filter((name): name is string => name !== undefined);
+	}
+
+	/**
+	 * @param attribute an `attribute` token of an object literal.
+	 * @returns its key, or undefined for a computed key such as `(local.k)`.
+	 */
+	private attributeName(attribute: Token): string | undefined {
+		return attribute.children.find(child => child.type === 'attribute_identifier')?.getDisplayText();
+	}
+
+	/**
+	 * A completion item for one input key, top-level or nested, whose snippet inserts `name = <value>`.
+	 *
+	 * @param name the key.
+	 * @param typeText the type as shown in the item's detail.
+	 * @param kind the flat type kind the value snippet is chosen by.
+	 * @param optional whether the key may be left out; required keys sort first.
+	 * @param description the variable's description, shown as documentation when present.
+	 * @param defaultText the authored default, shown as documentation when present.
+	 * @returns the item.
+	 */
+	private inputItem(name: string, typeText: string, kind: ModuleVariableTypeKind | undefined, optional: boolean, description?: string, defaultText?: string): CompletionItem {
+		const lines: string[] = [];
+		if (description) lines.push(description, '');
+		if (defaultText !== undefined) lines.push(`Default: \`${defaultText}\``);
+		return {
+			label: name,
+			kind: CompletionItemKind.Property,
+			detail: `${typeText} · ${optional ? 'optional' : 'required'}`,
+			documentation: { kind: MarkupKind.Markdown, value: lines.join('\n').trim() },
+			insertText: `${name} = ${this.moduleValueSnippet(kind, 1)}`,
+			insertTextFormat: InsertTextFormat.Snippet,
+			sortText: `${optional ? '1' : '0'}-${name}`
+		};
+	}
+
+	/**
+	 * The value placeholder for a module input, mirroring {@link valueSnippet} for schema attributes.
+	 *
+	 * @param kind the flat type kind of the input.
+	 * @param index the snippet tab stop to use.
+	 * @returns a snippet: a quoted string, a number, a true/false choice, brackets, braces, or a bare tab stop.
+	 */
+	private moduleValueSnippet(kind: ModuleVariableTypeKind | undefined, index: number): string {
+		switch (kind) {
+			case 'string': return `"\${${index}:value}"`;
+			case 'number': return `\${${index}:0}`;
+			case 'bool': return `\${${index}|true,false|}`;
+			case 'list':
+			case 'set':
+			case 'tuple': return `[\${${index}}]`;
+			case 'map':
 			case 'object': return `{\n\t\${${index}}\n}`;
 			default: return `\${${index}}`;
 		}
