@@ -106,6 +106,21 @@ JSON is currently the only output format, so `--json` (or `--format=json`) is re
 
 Experiment-gated language features must be enabled explicitly, for example `--experiment deep-merge`; the command fails when such a feature is used without its explicit switch.
 
+To see what the language service holds for a configuration, rather than what it evaluates to, inspect it:
+
+```sh
+tghclp inspect --json --working-dir ./infrastructure/app
+```
+
+This adds the configuration to a workspace exactly as the editor does and prints the result as JSON:
+
+- `diagnostics`, as the editor would show them
+- `moduleVariables`: the variables of the module named by `terraform { source }`, and the input keys included configurations already supply
+- `inlineFunctions`, declared and inherited, and `links`
+- `relationships`: the include, dependency and read edges. Each include is described by what it contributes: its label, root attributes, blocks, `inputs` keys, module source, inline functions, diagnostics and edges. Each file read during evaluation is described by its `locals` and `inputs` keys, or, for a file that is not HCL, by whether it exists.
+
+`--workspace-root` sets the folder the editor would have open, defaulting to the enclosing Git repository. When adding the configuration fails, for example on a missing include, whatever state the document has is printed with an `error` field and the command exits 2.
+
 ## Dependencies and mock outputs
 
 `dependency.<name>.outputs.<x>` is resolved by reading the dependency's outputs from its own directory. Commands that execute OpenTofu require that output to exist or an explicitly permitted mock.

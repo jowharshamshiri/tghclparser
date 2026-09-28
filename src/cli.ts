@@ -142,6 +142,7 @@ function rootUsage(): string {
 		'Configuration commands:',
 		'  hcl validate     Validate Terragrunt HCL files',
 		'  render           Print an evaluated configuration as JSON',
+		'  inspect          Print what the language service holds for a configuration as JSON',
 		'  info print       Print evaluation context',
 		'',
 		'OpenTofu shortcuts:',
@@ -182,6 +183,239 @@ function renderUsage(): string {
 		'  --config <file>       Configuration filename (default: terragrunt.hcl)',
 		'  --help                Show this help'
 	].join('\n');
+}
+
+/** @returns the help text for `tghclp inspect`. */
+function inspectUsage(): string {
+	return [
+		'Usage: tghclp inspect (--json | --format=json) [options]',
+		'',
+		'Prints the state the language service holds for a configuration after adding it to a workspace:',
+		'diagnostics, the variables of the sourced module, inline functions, document links, each included',
+		'configuration described by what it contributes, and each file read while evaluating described by',
+		'its locals and inputs keys.',
+		'',
+		'Options:',
+		'  --json                  Print the state as JSON',
+		'  --format=json          Equivalent to --json (also accepts --format json)',
+		'  --working-dir <path>    Directory containing the configuration (default: current directory)',
+		'  --config <file>         Configuration filename (default: terragrunt.hcl)',
+		'  --workspace-root <path> Workspace root, as the editor would open it (default: the enclosing',
+		'                          Git repository, else the working directory)',
+		'  --help                  Show this help'
+	].join('\n');
+}
+
+/**
+ * Reproduces what the language service sees for one configuration: a ParsedDocument added to a Workspace, then its
+ * diagnostics, module variables, inline functions, links and relationships. A failure while adding the document,
+ * such as an include that does not exist, is reported alongside the state the document still has, and the command
+ * exits 2 so the output cannot be mistaken for a complete view.
+ *
+ * @param argv the arguments after `inspect`.
+ * @returns 0 on success, 2 when the document could not be fully added.
+ * @throws when an option is unknown or incomplete, JSON output is not requested, or the configuration is missing
+ *   or lies outside the working directory.
+ */
+async function inspectDocument(argv: string[]): Promise<number> {
+	let workingDir = process.cwd();
+	let configName = 'terragrunt.hcl';
+	let workspaceRoot: string | undefined;
+	let json = false;
+	for (let index = 0; index < argv.length; index++) {
+		const argument = argv[index];
+		if (argument === '--help' || argument === '-h') {
+			console.log(inspectUsage());
+			return 0;
+		}
+		if (argument === '--json' || argument === '--format=json') { json = true; continue; }
+		if (argument === '--format') {
+			const format = argv[++index];
+			if (format !== 'json') throw new Error('Only JSON inspect output is supported');
+			json = true;
+			continue;
+		}
+		if (argument === '--working-dir') {
+			const value = argv[++index];
+			if (!value) throw new Error('--working-dir requires a path');
+			workingDir = path.resolve(value);
+			continue;
+		}
+		if (argument.startsWith('--working-dir=')) { workingDir = path.resolve(argument.slice('--working-dir='.length)); continue; }
+		if (argument === '--config') {
+			const value = argv[++index];
+			if (!value) throw new Error('--config requires a path');
+			configName = value;
+			continue;
+		}
+		if (argument === '--workspace-root') {
+			const value = argv[++index];
+			if (!value) throw new Error('--workspace-root requires a path');
+			workspaceRoot = path.resolve(value);
+			continue;
+		}
+		if (argument.startsWith('--workspace-root=')) { workspaceRoot = path.resolve(argument.slice('--workspace-root='.length)); continue; }
+		if (argument.startsWith('-')) throw new Error(`Unknown inspect option ${argument}`);
+	}
+	if (!json) throw new Error('Inspect output requires --json or --format=json');
+	const configPath = path.resolve(workingDir, configName);
+	const root = await fs.realpath(workingDir);
+	const realConfig = await fs.realpath(configPath);
+	const relative = path.relative(root, realConfig);
+	if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error(`Inspect configuration is outside the working directory: ${configPath}`);
+	if (!workspaceRoot) {
+		workspaceRoot = root;
+		for (let current = root; ; current = path.dirname(current)) {
+			if (fsSync.existsSync(path.join(current, '.git'))) { workspaceRoot = current; break; }
+			if (path.dirname(current) === current) break;
+		}
+	}
+
+	const uri = pathToFileURL(realConfig).toString();
+	const workspace = new Workspace();
+	workspace.setWorkspaceRoot(pathToFileURL(workspaceRoot).toString());
+	const document = new ParsedDocument(workspace, uri, await fs.readFile(realConfig, 'utf8'));
+	let workspaceError: string | undefined;
+	try {
+		await workspace.addDocument(document);
+	} catch (error) {
+		workspaceError = error instanceof Error ? error.message : String(error);
+	}
+
+	const state = document.getModuleVariables();
+	const own = document.getOwnInlineFunctions();
+	const inherited = [...document.getInlineFunctions().entries()].filter(([name]) => !own.has(name)).map(([, definition]) => definition);
+	let links: unknown[] = [];
+	try { links = await document.getLinks(); } catch (error) { workspaceError ??= error instanceof Error ? error.message : String(error); }
+	const relationships = workspace.getRelationships(uri);
+	const view = {
+		uri,
+		workspaceRoot: pathToFileURL(workspaceRoot).toString(),
+		diagnostics: document.getDiagnostics(),
+		moduleVariables: state === undefined
+			? null
+			: state.status === 'loaded' ? {...state, inheritedInputKeys: [...state.inheritedInputKeys].sort()} : state,
+		inlineFunctions: {own: [...own.values()], inherited},
+		links,
+		relationships: relationships
+			? {
+				...relationships,
+				includes: await inspectIncludes(workspace, document, relationships.includes, path.dirname(realConfig)),
+				reads: await inspectReads(workspace, relationships.reads)
+			}
+			: null,
+		...(workspaceError !== undefined ? {error: workspaceError} : {})
+	};
+	process.stdout.write(`${JSON.stringify(view)}\n`);
+	if (workspaceError !== undefined) process.stderr.write(`${workspaceError}\n`);
+	return workspaceError !== undefined ? 2 : 0;
+}
+
+/**
+ * Describes each configuration in a unit's include chain, nearest first, by what it contributes to the unit: the
+ * label it is included under, its root attributes as authored (`terraform_version_constraint`, `iam_role` and the
+ * like), the blocks it declares, whether its `inputs` can be enumerated and which keys it sets, the module source
+ * it names, the inline functions it declares, its own diagnostics and its own edges. Names come from the unit's
+ * include blocks, resolved for the unit; a configuration reached further up the chain is named by the block in
+ * the file that includes it.
+ *
+ * @param workspace the workspace the unit was added to.
+ * @param unit the unit whose chain is described.
+ * @param includeUris URIs of the configurations the unit includes directly.
+ * @param unitDir directory of the unit, which include paths resolve against.
+ * @returns one entry per configuration in the chain; an entry that cannot be loaded carries `missing: true`.
+ */
+async function inspectIncludes(workspace: Workspace, unit: ParsedDocument, includeUris: string[], unitDir: string): Promise<unknown[]> {
+	const names = new Map<string, string>();
+	const nameIncludesOf = async (document: ParsedDocument): Promise<void> => {
+		const ast = document.getAST();
+		if (!ast) return;
+		for (const include of document.findIncludeBlocks(ast)) {
+			const label = include.block.children.find(child => child.type === 'parameter')?.getDisplayText() ?? '';
+			try {
+				const resolved = await workspace.resolveIncludePath(include.path, document.getUri(), unitDir);
+				if (!names.has(resolved)) names.set(resolved, label);
+			} catch {}
+		}
+	};
+	await nameIncludesOf(unit);
+
+	const entries: unknown[] = [];
+	const visited = new Set<string>([unit.getUri()]);
+	const queue = [...includeUris];
+	while (queue.length > 0) {
+		const includeUri = queue.shift()!;
+		if (visited.has(includeUri)) continue;
+		visited.add(includeUri);
+		const included = await workspace.getParsedDocument(includeUri).catch(() => undefined);
+		if (!included) {
+			entries.push({uri: includeUri, name: names.get(includeUri) ?? null, missing: true});
+			continue;
+		}
+		await nameIncludesOf(included);
+		const keys = included.getOwnInputKeys();
+		const sourceToken = included.getTerraformSourceToken();
+		const edges = workspace.getRelationships(includeUri) ?? {includes: [], dependencies: [], reads: []};
+		const content = included.getContent();
+		const root = included.getTokens()[0];
+		const attributes: Record<string, string> = {};
+		for (const token of root?.children.filter(child => child.type === 'assignment' && child.getDisplayText() !== 'inputs') ?? []) {
+			const value = token.children.find(child => child.type !== 'root_assignment_identifier');
+			attributes[token.getDisplayText()] = value ? content.slice(value.location.start.offset, value.location.end.offset) : '';
+		}
+		const blocks = root?.children
+			.filter(child => child.type === 'block')
+			.map(block => [block.getDisplayText(), ...block.children.filter(child => child.type === 'parameter').map(parameter => JSON.stringify(parameter.getDisplayText()))].join(' ')) ?? [];
+		entries.push({
+			uri: includeUri,
+			name: names.get(includeUri) ?? null,
+			attributes,
+			blocks,
+			inputs: keys === undefined ? {literal: false, keys: []} : {literal: true, keys: [...keys].sort()},
+			terraformSource: sourceToken ? content.slice(sourceToken.location.start.offset, sourceToken.location.end.offset) : null,
+			inlineFunctions: [...included.getOwnInlineFunctions().keys()],
+			diagnostics: included.getDiagnostics(),
+			...edges,
+			reads: await inspectReads(workspace, edges.reads)
+		});
+		queue.push(...edges.includes);
+	}
+	return entries;
+}
+
+/**
+ * Describes each file read while evaluating a configuration. An HCL file is parsed as a configuration and reported
+ * by the keys of its `locals` block, its `inputs` keys and its own diagnostics, which is what a
+ * `read_terragrunt_config` call exposes. Any other file, such as YAML or a sops secret, is only checked for
+ * existence.
+ *
+ * @param workspace the workspace configurations are loaded through.
+ * @param readUris URIs of the files read.
+ * @returns one entry per file, in the order given; `locals`, `inputs` and `diagnostics` are null for a file that
+ *   is not an HCL configuration or does not exist.
+ */
+async function inspectReads(workspace: Workspace, readUris: string[]): Promise<unknown[]> {
+	return Promise.all(readUris.map(async readUri => {
+		const file = fileURLToPath(readUri);
+		const configuration = file.endsWith('.hcl');
+		let exists = true;
+		try { await fs.access(file); } catch { exists = false; }
+		const entry = {uri: readUri, exists, configuration, locals: null as string[] | null, inputs: null as unknown, diagnostics: null as unknown};
+		if (!configuration || !exists) return entry;
+		const document = await workspace.getParsedDocument(readUri).catch(() => undefined);
+		if (!document) return entry;
+		const root = document.getTokens()[0];
+		const locals = root?.children
+			.filter(token => token.type === 'block' && token.getDisplayText() === 'locals')
+			.flatMap(block => block.children.filter(child => child.type === 'attribute').map(child => child.getDisplayText())) ?? [];
+		const keys = document.getOwnInputKeys();
+		return {
+			...entry,
+			locals: [...new Set(locals)].sort(),
+			inputs: keys === undefined ? {literal: false, keys: []} : {literal: true, keys: [...keys].sort()},
+			diagnostics: document.getDiagnostics()
+		};
+	}));
 }
 
 function discoveryUsage(command: string): string {
@@ -1973,6 +2207,7 @@ async function main(argv: string[]): Promise<number> {
 	if (argv[0] === 'catalog') return catalogJSONL(argv.slice(1));
 	if (argv[0] === 'backend') return backendCommand(argv.slice(1));
 	if (argv[0] === 'render') return renderConfig(argv.slice(1));
+	if (argv[0] === 'inspect') return inspectDocument(argv.slice(1));
 	if (argv[0] === 'run') {
 		if (argv.includes('--help')) {
 			console.log(executionUsage());

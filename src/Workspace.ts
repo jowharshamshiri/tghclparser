@@ -1369,6 +1369,18 @@ export class Workspace {
 			.filter((c): c is TerragruntConfig => c !== undefined);
 	}
 
+	/**
+	 * The include, dependency and read edges recorded for a configuration once it has been added.
+	 *
+	 * @param uri URI of the configuration.
+	 * @returns copies of the three URI lists, or undefined when the configuration has not been added.
+	 */
+	getRelationships(uri: string): { includes: string[]; dependencies: string[]; reads: string[] } | undefined {
+		const config = this.configMap.get(uri);
+		if (!config) return undefined;
+		return { includes: [...config.includes], dependencies: [...config.dependencies], reads: [...config.reads] };
+	}
+
 	getEvaluationContext(uri: string): { referencingConfigs: TerragruntConfig[] } {
 		return {
 			referencingConfigs: this.getReferencingConfigs(uri)
