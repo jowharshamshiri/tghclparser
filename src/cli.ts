@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { ConfigEvaluator, UnresolvedDependencyOutputError, runtimeValueToPlain } from './Evaluator';
+import type { DependencyRequest } from './Evaluator';
 import { convertToRuntimeValue, makeObjectValue } from './functions/utils';
 import type { RuntimeValue, ValueType } from './model';
 import type { FunctionDefinition } from './model';
@@ -1161,8 +1162,8 @@ function evaluatorFor(options: {
 		// The executable is resolved here rather than when the evaluator is
 		// built, so a configuration with no dependency to read needs neither
 		// binary installed.
-		resolveDependency: (from, name) =>
-			dependencyOutputs(from, name, options.tfPath ?? tfPathForDependencies(), terraformCommand),
+		resolveDependency: request =>
+			dependencyOutputs(request, options.tfPath ?? tfPathForDependencies(), terraformCommand),
 	});
 }
 
@@ -1201,11 +1202,8 @@ function tfPathForDependencies(): string {
 	return process.env.TG_TF_PATH ?? process.env.TERRAGRUNT_TFPATH ?? defaultTfPath();
 }
 
-function mockedOutputs(mocks: Record<string, unknown>): RuntimeValue<ValueType> {
-	const outputs = new Map<string, RuntimeValue<ValueType>>();
-	for (const [key, value] of Object.entries(mocks)) {
-		outputs.set(key, convertToRuntimeValue(value));
-	}
+/** A dependency value whose outputs are the given map. */
+function outputsValue(outputs: Map<string, RuntimeValue<ValueType>>): RuntimeValue<ValueType> {
 	return makeObjectValue(new Map([['outputs', makeObjectValue(outputs)]]));
 }
 
@@ -1221,120 +1219,19 @@ class EmptyRenderOutputs extends Map<string, RuntimeValue<ValueType>> {
 }
 
 /**
- * A literal value out of a `mock_outputs` block.
+ * Reads a dependency's outputs by running `<tf> output -json` where the evaluator found it, applying its mocks only
+ * where the author allowed them for the command being run.
  *
- * Mock outputs stand in for a unit that has not been applied, so they cannot
- * themselves reference a dependency -- that is the circularity they exist to
- * break. They are static data, and this reads them as such: strings, numbers,
- * booleans, null, and lists and objects of the same.
- *
- * Anything else is refused by name rather than guessed at. A mock that
- * quietly evaluated to the wrong thing would be an invented value flowing
- * into a real command with nothing to say it was invented.
+ * The evaluator has already found the dependency block -- in the unit or a configuration merged into it -- and
+ * evaluated `config_path` and the mock settings; this decides only what the outputs are.
  */
-function literalFromNode(node: any, where: string): unknown {
-	switch (node.type) {
-		case 'string_lit': return String(node.value ?? '');
-		case 'number_lit': return Number(node.value);
-		case 'boolean_lit': return Boolean(node.value);
-		case 'null_lit': return null;
-		case 'array_lit':
-			return (node.children ?? []).map((child: any) => literalFromNode(child, where));
-		case 'object': {
-			const result: Record<string, unknown> = {};
-			for (const attribute of node.children ?? []) {
-				if (attribute.type !== 'attribute') continue;
-				const value = (attribute.children ?? []).find(
-					(child: any) => child.type !== 'attribute_identifier'
-				);
-				if (!value) throw new Error(`${where}: attribute "${String(attribute.value)}" has no value`);
-				result[String(attribute.value)] = literalFromNode(value, where);
-			}
-			return result;
-		}
-		default:
-			throw new Error(
-				`${where} must be a literal value, and this is a ${node.type}. ` +
-				'A mock stands in for a unit that has not been applied, so it cannot ' +
-				'reference one.'
-			);
-	}
-}
-
-/** A literal attribute of a block, or undefined when the block omits it. */
-function literalAttribute(block: any, attributeName: string, where: string): unknown {
-	const attribute = (block.children ?? []).find(
-		(child: any) => child.type === 'attribute' && child.value === attributeName
-	);
-	if (!attribute) return undefined;
-	const value = (attribute.children ?? []).find(
-		(child: any) => child.type !== 'attribute_identifier'
-	);
-	if (!value) throw new Error(`${where} "${attributeName}" has no value`);
-	return literalFromNode(value, `${where} "${attributeName}"`);
-}
-
-/** The `dependency "<name>"` block in a parsed config, or undefined. */
-function findDependencyBlock(ast: any, name: string): any {
-	let found: any;
-	const visit = (node: any): void => {
-		if (found) return;
-		if (node.type === 'block' && node.value === 'dependency') {
-			const label = node.children?.find((child: any) => child.type === 'parameter');
-			if (label && String(label.value) === name) {
-				found = node;
-				return;
-			}
-		}
-		for (const child of node.children ?? []) visit(child);
-	};
-	visit(ast);
-	return found;
-}
-
 async function dependencyOutputs(
-	configPath: string,
-	name: string,
+	request: DependencyRequest,
 	tfPath: string,
 	terraformCommand: string
 ): Promise<RuntimeValue<ValueType> | undefined> {
-	const content = await fs.readFile(configPath, 'utf8');
-	const ast: any = parse(content, {grammarSource: configPath, tracer: {trace() {}}});
-	const block = findDependencyBlock(ast, name);
-	if (!block) {
-		// Terragrunt merges dependency blocks from included configurations into the unit; this resolver reads only
-		// the unit's own. When the unit includes others, the block may be declared there, and saying it is missing
-		// would be false.
-		const includes = (ast.children ?? []).some((child: any) => child.type === 'block' && child.value === 'include');
-		throw new Error(includes
-			? `No dependency "${name}" block in ${configPath}. It may be declared in a configuration this unit includes, `
-				+ 'which is not resolved yet: declare the dependency block in the unit itself.'
-			: `No dependency "${name}" block in ${configPath}`);
-	}
-
-	const where = `dependency "${name}" in ${configPath}`;
-
-	const configAttribute = block.children?.find(
-		(child: any) => child.type === 'attribute' && child.value === 'config_path'
-	);
-	const valueNode = configAttribute?.children?.find((child: any) => child.type !== 'attribute_identifier');
-	if (!valueNode) throw new Error(`${where} is missing config_path`);
-	// Read as a literal, not evaluated. Evaluating an expression in this file
-	// re-enters evaluation of the whole unit -- including the
-	// `dependency.<name>.outputs` reference that called this -- and the
-	// recursion surfaces as the very error it is resolving.
-	//
-	// `config_path` is a path to a sibling unit. An interpolated one is refused
-	// rather than guessed at, because a path this cannot read is a dependency
-	// it would silently fail to find.
-	const literal = String(valueNode.value ?? '');
-	if (!literal) {
-		throw new Error(
-			`${where} has a config_path this cannot read without evaluating the ` +
-			'unit it belongs to. Write it as a literal path.'
-		);
-	}
-	const target = path.resolve(path.dirname(configPath), literal);
+	const {name, targetDir: target} = request;
+	const where = `dependency "${name}" in ${request.declaredIn}`;
 
 	// What this unit says to use when the dependency has no outputs to give.
 	//
@@ -1343,9 +1240,8 @@ async function dependencyOutputs(
 	// which means a mocked value can reach an `apply` and be written to real
 	// infrastructure. A unit that wants mocks says which commands may see
 	// them.
-	const mocks = literalAttribute(block, 'mock_outputs', where);
-	const allowedRaw = literalAttribute(block, 'mock_outputs_allowed_terraform_commands', where);
-	if (mocks !== undefined && allowedRaw === undefined) {
+	const mocks = request.mockOutputs?.value as Map<string, RuntimeValue<ValueType>> | undefined;
+	if (mocks !== undefined && request.mockOutputsAllowedTerraformCommands === undefined) {
 		throw new Error(
 			`${where} declares mock_outputs without ` +
 			'mock_outputs_allowed_terraform_commands. Name the commands that may ' +
@@ -1353,15 +1249,7 @@ async function dependencyOutputs(
 			'an apply cannot write one to real infrastructure.'
 		);
 	}
-	if (mocks !== undefined && (typeof mocks !== 'object' || mocks === null || Array.isArray(mocks))) {
-		throw new Error(`${where}: mock_outputs must be an object of output names to values.`);
-	}
-	if (allowedRaw !== undefined && !Array.isArray(allowedRaw)) {
-		throw new Error(
-			`${where}: mock_outputs_allowed_terraform_commands must be a list of command names.`
-		);
-	}
-	const allowed = (allowedRaw as unknown[] | undefined)?.map(entry => String(entry)) ?? [];
+	const allowed = request.mockOutputsAllowedTerraformCommands ?? [];
 	const mocksApply = mocks !== undefined && allowed.includes(terraformCommand);
 
 	const rendering = terraformCommand === 'render';
@@ -1371,8 +1259,8 @@ async function dependencyOutputs(
 	// credentials expired or the working directory was never initialised.
 	const unreadable = (reason: string): RuntimeValue<ValueType> | undefined => {
 		if (!rendering) throw new Error(`dependency "${name}" ${reason} in ${target}`);
-		if (mocksApply) return mockedOutputs(mocks as Record<string, unknown>);
-		return makeObjectValue(new Map([['outputs', makeObjectValue(new EmptyRenderOutputs(name, reason))]]));
+		if (mocksApply) return outputsValue(new Map(mocks));
+		return outputsValue(new EmptyRenderOutputs(name, reason));
 	};
 
 	const result = spawnSync(tfPath, ['output', '-json'], {cwd: target, encoding: 'utf8'});
@@ -1408,8 +1296,8 @@ async function dependencyOutputs(
 	// error. Mocks fill what is missing and never shadow what is real, so a
 	// value that exists is always preferred to one that was invented.
 	if (mocksApply) {
-		for (const [key, value] of Object.entries(mocks as Record<string, unknown>)) {
-			if (!outputs.has(key)) outputs.set(key, convertToRuntimeValue(value));
+		for (const [key, value] of mocks) {
+			if (!outputs.has(key)) outputs.set(key, value);
 		}
 	} else if (mocks !== undefined) {
 		// A mock is declared, this command may not see it, and the real output
@@ -1421,7 +1309,7 @@ async function dependencyOutputs(
 		// one of these, and a `destroy` that proceeds on the strength of an
 		// output nobody produced is exactly the undefined state mocks are
 		// scoped to prevent.
-		const absent = Object.keys(mocks as Record<string, unknown>).filter(key => !outputs.has(key));
+		const absent = [...mocks.keys()].filter(key => !outputs.has(key));
 		if (absent.length > 0 && terraformCommand !== 'render') {
 			throw new Error(
 				`dependency "${name}" has no ${absent.join(', ')} to read from ${target}, ` +
@@ -1433,10 +1321,7 @@ async function dependencyOutputs(
 			);
 		}
 	}
-	const renderOutputs = terraformCommand === 'render' && outputs.size === 0
-		? new EmptyRenderOutputs(name)
-		: outputs;
-	return makeObjectValue(new Map([['outputs', makeObjectValue(renderOutputs)]]));
+	return outputsValue(terraformCommand === 'render' && outputs.size === 0 ? new EmptyRenderOutputs(name) : outputs);
 }
 
 async function materializeGeneratedFiles(

@@ -59,12 +59,35 @@ export interface ConfigEvaluatorOptions {
 	 */
 	allowedPaths?: string[];
 	/**
-	 * Resolves to undefined when the dependency is declared but has no outputs to give yet, and throws when it is not
-	 * declared: the first is reported as unresolved, the second as a fault in the configuration.
+	 * Reads the outputs of a dependency the evaluator has found and evaluated (see {@link DependencyRequest}),
+	 * resolving to `{ outputs: … }`. Resolves to undefined when the dependency has no outputs to give yet, which is
+	 * reported as unresolved rather than as a fault. Whether a dependency is declared at all is decided by the
+	 * evaluator, before the resolver is asked.
 	 */
-	resolveDependency?: (configPath: string, name: string) => Promise<RuntimeValue<ValueType> | undefined>;
+	resolveDependency?: (request: DependencyRequest) => Promise<RuntimeValue<ValueType> | undefined>;
 	/** Omit fields that read unresolvable values, and expose them through unresolvedRenderFields(). */
 	partialRender?: boolean;
+}
+
+/**
+ * A dependency as Terragrunt would resolve it for a unit: its `dependency` block found in the configurations merged
+ * into the unit, and its attributes evaluated in the scope of the file that declares each of them.
+ */
+export interface DependencyRequest {
+	/** The block's label, which `dependency.<name>` reads. */
+	name: string;
+	/** Absolute path of the unit the dependency belongs to. */
+	unitPath: string;
+	/** Absolute path of the file whose block decided the dependency, as messages name it. */
+	declaredIn: string;
+	/** Absolute path of the configuration `config_path` names, resolved against the unit's directory. */
+	targetConfigPath: string;
+	/** Absolute path of the directory the target configuration is in, where its outputs are read. */
+	targetDir: string;
+	/** The evaluated `mock_outputs`, merged across included blocks; absent when none is declared. */
+	mockOutputs?: RuntimeValue<ValueType>;
+	/** The evaluated `mock_outputs_allowed_terraform_commands`, merged across included blocks; absent when none is declared. */
+	mockOutputsAllowedTerraformCommands?: string[];
 }
 
 /** A value a render cannot resolve: the field that reads it is omitted and reported rather than failing the render. */
@@ -152,7 +175,7 @@ export interface ConfigEvaluationResult {
 
 interface IncludeRef {
 	expose: boolean;
-	mergeStrategy: 'shallow' | 'deep' | 'no_merge';
+	mergeStrategy: MergeStrategy;
 	dir: string;
 	result: FileResult;
 }
@@ -206,11 +229,68 @@ interface Scope {
 	comprehension: Array<Map<string, RuntimeValue<ValueType>>>;
 	/** Inline functions declared by this file, by name. */
 	functions: Map<string, InlineFunctionDefinition<Scope>>;
+	/**
+	 * The unit this file was evaluated for, which a `dependency` reference in it resolves against. Held by the scope
+	 * rather than read from the asynchronous context, because a scope is evaluated in after its file's evaluation has
+	 * returned -- an inherited `generate` block when rendering, an expression under the cursor.
+	 */
+	unit?: UnitContext;
 }
 
 interface LocalResolution {
 	scope: Scope;
 	name: string;
+}
+
+/** An attribute of a `dependency` block with the scope of the file it is written in, where it is evaluated. */
+interface DependencyAttribute {
+	node: TNode;
+	scope: Scope;
+}
+
+/**
+ * A `dependency` block after Terragrunt's include merge: `config_path` from the highest-priority block that sets
+ * it, and the mock settings of every block deep-merged into it, lowest priority first.
+ */
+interface DependencyDeclaration {
+	declaredIn: string;
+	configPath?: DependencyAttribute;
+	mockOutputs: DependencyAttribute[];
+	mockOutputsAllowedTerraformCommands: DependencyAttribute[];
+}
+
+/**
+ * The unit an evaluation serves, shared by every file evaluated for it -- the unit itself, its includes and its
+ * autoinclude -- since Terragrunt resolves a `dependency` reference in any of them against the unit's merged
+ * blocks, and each dependency once.
+ */
+interface UnitContext {
+	unitPath: string;
+	unitDir: string;
+	/** The unit's own scope, set as soon as the unit's file is parsed. */
+	scope?: Scope;
+	/** The unit's merged dependency blocks by name, built on the first dependency reference. */
+	declarations?: Promise<Map<string, DependencyDeclaration>>;
+	/** Each dependency's resolution, so every reference to it shares one. */
+	resolved: Map<string, Promise<RuntimeValue<ValueType> | undefined>>;
+	/** Scopes for merged files that have not been evaluated when a dependency needs one, by path. */
+	structuralScopes: Map<string, Scope>;
+}
+
+type MergeStrategy = 'no_merge' | 'shallow' | 'deep';
+
+/**
+ * The merge strategy of an include, as Terragrunt accepts it: `no_merge`, `shallow` or `deep`. `deep_map_only` and
+ * any other value are refused as Terragrunt refuses them, not taken for the default.
+ */
+function readMergeStrategy(value: RuntimeValue<ValueType>, includeName: string, filePath: string): MergeStrategy {
+	if (value.type !== 'string') throw new Error(`include "${includeName}" in ${filePath}: merge_strategy must be a string`);
+	const strategy = String(value.value);
+	if (strategy === 'no_merge' || strategy === 'shallow' || strategy === 'deep') return strategy;
+	if (strategy === 'deep_map_only') {
+		throw new Error(`include "${includeName}" in ${filePath}: merge_strategy "deep_map_only" is not supported on include blocks`);
+	}
+	throw new Error(`include "${includeName}" in ${filePath}: merge_strategy "${strategy}" is not one of no_merge, shallow or deep`);
 }
 
 const AUTOINCLUDE_FILES = new Set(['terragrunt.autoinclude.hcl', 'terragrunt.autoinclude.stack.hcl']);
@@ -359,6 +439,13 @@ export class ConfigEvaluator {
 	 * preserves that distinction across every await.
 	 */
 	private readonly localResolutionPath = new AsyncLocalStorage<readonly LocalResolution[]>();
+	/** The unit the current evaluation serves; see {@link UnitContext}. */
+	private readonly unitContext = new AsyncLocalStorage<UnitContext>();
+	/**
+	 * The dependency whose block is being evaluated on this asynchronous chain, so a block whose attributes read a
+	 * dependency is refused, as Terragrunt refuses it, instead of waiting on itself.
+	 */
+	private readonly dependencyResolutionPath = new AsyncLocalStorage<readonly string[]>();
 	/** `options.allowedPaths` after realpath, resolved on first use. */
 	private allowedPathsResolved: string[] | undefined;
 
@@ -560,33 +647,7 @@ export class ConfigEvaluator {
 		}
 
 		const dir = path.dirname(filePath);
-		const scope: Scope = {
-			filePath,
-			content,
-			ast,
-			dir,
-			unitDir,
-			workspaceRoot,
-			locals: new Map(),
-			localCache: new Map(),
-			localPending: new Map(),
-			includes: new Map(),
-			autoinclude: null,
-			rootAttrs: new Map(),
-			terraform: new Map(),
-			generate: new Map(),
-			blocks: (ast.children ?? []).filter(child => child.type === 'block'),
-			comprehension: [],
-			functions: new Map()
-		};
-		for (const block of scope.blocks) {
-			if (block.value !== 'locals') continue;
-			for (const child of block.children ?? []) {
-				if (child.type !== 'attribute') continue;
-				const valueNode = child.children?.find(entry => entry.type !== 'attribute_identifier');
-				if (valueNode) scope.locals.set(String(child.value), valueNode);
-			}
-		}
+		const scope = structuralScope(filePath, content, ast, workspaceRoot, unitDir);
 
 		for (const block of scope.blocks) {
 			if (block.value !== 'include') continue;
@@ -739,7 +800,50 @@ export class ConfigEvaluator {
 		}
 	}
 
+	/**
+	 * An `include` block's label, the absolute path it names, whether it is exposed and how it is merged, evaluated in
+	 * the scope of the file it is written in.
+	 */
+	private async readIncludeBlock(block: TNode, scope: Scope): Promise<{ name: string; includePath: string; expose: boolean; mergeStrategy: MergeStrategy }> {
+		const nameNode = (block.children ?? []).find(child => child.type === 'parameter');
+		const name = nameNode ? String(nameNode.value) : 'root';
+		let expose = false;
+		let mergeStrategy: MergeStrategy = 'shallow';
+		let pathNode: TNode | undefined;
+		for (const child of block.children ?? []) {
+			if (child.type !== 'attribute') continue;
+			const attrName = String(child.value);
+			if (attrName === 'path') {
+				pathNode = child;
+			} else if (attrName === 'expose') {
+				expose = coerceToBool(await this.evalNode(requiredValueNode(child), scope));
+			} else if (attrName === 'merge_strategy') {
+				mergeStrategy = readMergeStrategy(await this.evalNode(requiredValueNode(child), scope), name, scope.filePath);
+			}
+		}
+		if (!pathNode) throw new Error(`include "${name}" in ${scope.filePath} is missing a path attribute`);
+		const pathValue = await this.evalNode(requiredValueNode(pathNode), scope);
+		if (pathValue.type !== 'string') throw new Error(`include "${name}" in ${scope.filePath} must have a string path`);
+		const includePath = path.isAbsolute(String(pathValue.value))
+			? String(pathValue.value)
+			: path.resolve(scope.dir, String(pathValue.value));
+		return { name, includePath, expose, mergeStrategy };
+	}
+
+	/** A fresh {@link UnitContext} for evaluating `filePath` as a unit. */
+	private newUnitContext(filePath: string, unitDir?: string): UnitContext {
+		const unitPath = path.resolve(filePath);
+		return { unitPath, unitDir: unitDir ?? path.dirname(unitPath), resolved: new Map(), structuralScopes: new Map() };
+	}
+
 	private async evaluateFile(filePath: string, content: string, workDir: string, unitDir?: string, skipInputs = false): Promise<FileResult> {
+		// The first file evaluated is the unit; the includes and autoinclude evaluated within it share its context.
+		if (!this.unitContext.getStore()) {
+			return this.unitContext.run(
+				this.newUnitContext(filePath, unitDir),
+				() => this.evaluateFile(filePath, content, workDir, unitDir, skipInputs)
+			);
+		}
 		const resolvedPath = path.resolve(filePath);
 		const chain = this.includeChain.getStore() ?? [];
 		const repeatedAt = chain.indexOf(resolvedPath);
@@ -792,6 +896,11 @@ export class ConfigEvaluator {
 			comprehension: [],
 			functions: new Map()
 		};
+
+		const unit = this.unitContext.getStore();
+		if (!unit) throw new Error(`${filePath} was evaluated outside the evaluation of a unit`);
+		scope.unit = unit;
+		if (!unit.scope && path.resolve(filePath) === unit.unitPath) unit.scope = scope;
 
 		for (const node of functionNodes) {
 			const definition = readInlineFunction(node, filePath, scope);
@@ -852,29 +961,7 @@ export class ConfigEvaluator {
 
 		for (const block of blocks) {
 			if (block.value !== 'include') continue;
-			const nameNode = (block.children ?? []).find(c => c.type === 'parameter');
-			const name = nameNode ? String(nameNode.value) : 'root';
-			let expose = false;
-			let mergeStrategy: IncludeRef['mergeStrategy'] = 'shallow';
-			let pathNode: TNode | undefined;
-			for (const child of block.children ?? []) {
-				if (child.type !== 'attribute') continue;
-				const attrName = String(child.value);
-				if (attrName === 'path') {
-					pathNode = child;
-				} else if (attrName === 'expose') {
-					expose = coerceToBool(await this.evalNode(requiredValueNode(child), scope));
-				} else if (attrName === 'merge_strategy') {
-					const value = await this.evalNode(requiredValueNode(child), scope);
-					mergeStrategy = value.type === 'string' && (value.value === 'deep' || value.value === 'no_merge') ? value.value : 'shallow';
-				}
-			}
-			if (!pathNode) throw new Error(`include "${name}" in ${filePath} is missing a path attribute`);
-			const pathValue = await this.evalNode(requiredValueNode(pathNode), scope);
-			if (pathValue.type !== 'string') throw new Error(`include "${name}" in ${filePath} must have a string path`);
-			const includePath = path.isAbsolute(String(pathValue.value))
-				? String(pathValue.value)
-				: path.resolve(dir, String(pathValue.value));
+			const { name, includePath, expose, mergeStrategy } = await this.readIncludeBlock(block, scope);
 			this.assertTrusted('Included configuration evaluation');
 			await this.assertPathAllowed(includePath, scope.workspaceRoot);
 			const includeContent = await fs.readFile(includePath, 'utf8');
@@ -1018,8 +1105,12 @@ export class ConfigEvaluator {
 				await this.assertPathAllowed(target, scope.workspaceRoot);
 				if (!(await pathExists(target))) return undefined;
 				const fileContent = await fs.readFile(target, 'utf8');
-					const result = await this.evaluateFile(target, fileContent, scope.workspaceRoot);
-					return this.readConfigObject(result);
+				// The configuration read is a unit of its own: its dependency blocks are its, not the reader's.
+				const result = await this.unitContext.run(
+					this.newUnitContext(target),
+					() => this.evaluateFile(target, fileContent, scope.workspaceRoot)
+				);
+				return this.readConfigObject(result);
 			},
 			readTFVarsFile: async (relativePath: string) => {
 				this.assertTrusted('read_tfvars_file');
@@ -1313,8 +1404,7 @@ export class ConfigEvaluator {
 
 		if (namespace === 'dependency') {
 			if (parts.length < 2) throw new Error('dependency reference requires a name');
-			const dependency = await this.options.resolveDependency?.(scope.filePath, parts[1]);
-			if (!dependency) throw new UnresolvedDependencyError(parts[1]);
+			const dependency = await this.dependencyValue(parts[1], scope);
 			return this.traverse(dependency, parts.slice(2), parts[1]);
 		}
 
@@ -1327,6 +1417,167 @@ export class ConfigEvaluator {
 		}
 
 		throw new Error(`Undefined reference "${parts.join('.')}"`);
+	}
+
+	/**
+	 * The value of `dependency.<name>` for the unit being evaluated. Every reference to a dependency, in the unit or
+	 * in a file merged into it, shares one resolution.
+	 *
+	 * @param name the dependency's label.
+	 * @param referencingScope the scope the reference is written in, which may be a merged file still being evaluated.
+	 * @returns `{ outputs: … }` as the resolver gives it.
+	 * @throws UnresolvedDependencyError when the dependency is declared but has no outputs yet; an Error when it is not
+	 *   declared, is declared incorrectly, or reads itself.
+	 */
+	private async dependencyValue(name: string, referencingScope: Scope): Promise<RuntimeValue<ValueType>> {
+		const unit = referencingScope.unit;
+		if (!unit?.scope) throw new Error(`dependency "${name}" was read in ${referencingScope.filePath}, which was not evaluated for a unit`);
+		// Terragrunt evaluates dependency blocks before any outputs exist, so a block's attributes -- config_path, the
+		// mocks -- cannot read a dependency, its own or another's.
+		const resolving = this.dependencyResolutionPath.getStore() ?? [];
+		if (resolving.length > 0) {
+			throw new Error(
+				`dependency "${resolving.at(-1)}" reads dependency.${name}: a dependency block cannot read dependency outputs, ` +
+				'since they are evaluated before any outputs exist'
+			);
+		}
+		let resolution = unit.resolved.get(name);
+		if (!resolution) {
+			resolution = this.dependencyResolutionPath.run(
+				[...resolving, name],
+				() => this.resolveUnitDependency(unit, name, referencingScope)
+			);
+			unit.resolved.set(name, resolution);
+		}
+		const value = await resolution;
+		if (!value) throw new UnresolvedDependencyError(name);
+		return value;
+	}
+
+	/**
+	 * Finds a dependency in the unit's merged blocks, evaluates its attributes where each is written, and asks the
+	 * resolver for its outputs.
+	 *
+	 * @returns what the resolver gives, or undefined when there is no resolver or it has no outputs to give.
+	 */
+	private async resolveUnitDependency(unit: UnitContext, name: string, referencingScope: Scope): Promise<RuntimeValue<ValueType> | undefined> {
+		unit.declarations ??= this.dependencyDeclarations(unit, referencingScope);
+		const declaration = (await unit.declarations).get(name);
+		if (!declaration) throw new Error(`No dependency "${name}" block in ${unit.unitPath} or the configurations it includes`);
+		const where = `dependency "${name}" in ${declaration.declaredIn}`;
+		if (!declaration.configPath) throw new Error(`${where} is missing config_path`);
+
+		const configPath = await this.evalNode(declaration.configPath.node, declaration.configPath.scope);
+		if (configPath.type !== 'string' || String(configPath.value) === '') throw new Error(`${where}: config_path must be a non-empty string`);
+		// Terragrunt resolves config_path against the unit's directory, wherever the block is written.
+		const target = path.resolve(unit.unitDir, String(configPath.value));
+		const targetConfigPath = await dependencyTargetConfig(target, where);
+
+		let mockOutputs: RuntimeValue<ValueType> | undefined;
+		for (const attribute of declaration.mockOutputs) {
+			const value = await this.evalNode(attribute.node, attribute.scope);
+			if (!isObjectValue(value)) {
+				throw new Error(`dependency "${name}" in ${attribute.scope.filePath}: mock_outputs must be an object of output names to values`);
+			}
+			// Lowest priority first, so a later block's value wins where both set one.
+			mockOutputs = mockOutputs === undefined
+				? value
+				: makeObjectValue(deepMergeInputs(
+					value.value as Map<string, RuntimeValue<ValueType>>,
+					mockOutputs.value as Map<string, RuntimeValue<ValueType>>
+				));
+		}
+
+		let mockOutputsAllowedTerraformCommands: string[] | undefined;
+		for (const attribute of declaration.mockOutputsAllowedTerraformCommands) {
+			const value = await this.evalNode(attribute.node, attribute.scope);
+			const commands = value.type === 'array'
+				? (value.value as RuntimeValue<ValueType>[]).map(entry => entry.type === 'string' ? String(entry.value) : undefined)
+				: undefined;
+			if (!commands || commands.includes(undefined)) {
+				throw new Error(`dependency "${name}" in ${attribute.scope.filePath}: mock_outputs_allowed_terraform_commands must be a list of command names`);
+			}
+			mockOutputsAllowedTerraformCommands = [...(mockOutputsAllowedTerraformCommands ?? []), ...commands as string[]];
+		}
+
+		const request: DependencyRequest = {
+			name,
+			unitPath: unit.unitPath,
+			declaredIn: declaration.declaredIn,
+			targetConfigPath,
+			targetDir: path.dirname(targetConfigPath),
+			...(mockOutputs !== undefined ? { mockOutputs } : {}),
+			...(mockOutputsAllowedTerraformCommands !== undefined ? { mockOutputsAllowedTerraformCommands } : {})
+		};
+		return this.options.resolveDependency?.(request);
+	}
+
+	/**
+	 * The unit's `dependency` blocks by name after Terragrunt's include merge. The sibling autoinclude's block
+	 * replaces the unit's of the same name; each direct include is then merged beneath, the last include first: a
+	 * shallow include's block is replaced whole by a higher one of the same name, a deep include's has `config_path`
+	 * overridden, its `mock_outputs` deep-merged and its allowed commands concatenated. An include with
+	 * `merge_strategy = "no_merge"` contributes nothing.
+	 */
+	private async dependencyDeclarations(unit: UnitContext, referencingScope: Scope): Promise<Map<string, DependencyDeclaration>> {
+		const unitScope = unit.scope!;
+		const declarations = new Map<string, DependencyDeclaration>();
+
+		const top: Scope[] = [unitScope];
+		if (!AUTOINCLUDE_FILES.has(path.basename(unit.unitPath))) {
+			const autoPath = path.join(path.dirname(unit.unitPath), 'terragrunt.autoinclude.hcl');
+			if (await pathExists(autoPath)) top.push(await this.mergedFileScope(unit, autoPath, referencingScope));
+		}
+		for (const scope of top) {
+			for (const [name, block] of dependencyBlocks(scope)) declarations.set(name, dependencyDeclaration(block, scope));
+		}
+
+		const includes: Array<{ scope: Scope; strategy: MergeStrategy }> = [];
+		for (const block of unitScope.blocks) {
+			if (block.value !== 'include') continue;
+			const { includePath, mergeStrategy } = await this.readIncludeBlock(block, unitScope);
+			if (mergeStrategy === 'no_merge') continue;
+			includes.push({ scope: await this.mergedFileScope(unit, includePath, referencingScope), strategy: mergeStrategy });
+		}
+		for (const { scope, strategy } of includes.reverse()) {
+			for (const [name, block] of dependencyBlocks(scope)) {
+				const lower = dependencyDeclaration(block, scope);
+				const higher = declarations.get(name);
+				if (!higher) {
+					declarations.set(name, lower);
+				} else if (strategy === 'deep') {
+					declarations.set(name, {
+						declaredIn: higher.declaredIn,
+						configPath: higher.configPath ?? lower.configPath,
+						mockOutputs: [...lower.mockOutputs, ...higher.mockOutputs],
+						mockOutputsAllowedTerraformCommands: [...lower.mockOutputsAllowedTerraformCommands, ...higher.mockOutputsAllowedTerraformCommands]
+					});
+				}
+			}
+		}
+		return declarations;
+	}
+
+	/**
+	 * The scope of a file merged into the unit: its evaluated scope when it has been evaluated or is the file a
+	 * reference is being read in, else one built from its syntax (see {@link structuralScope}).
+	 */
+	private async mergedFileScope(unit: UnitContext, filePath: string, referencingScope: Scope): Promise<Scope> {
+		const resolved = path.resolve(filePath);
+		if (path.resolve(referencingScope.filePath) === resolved) return referencingScope;
+		const unitScope = unit.scope!;
+		if (unitScope.autoinclude && path.resolve(unitScope.autoinclude.filePath) === resolved) return unitScope.autoinclude.scope;
+		for (const include of unitScope.includes.values()) {
+			if (path.resolve(include.result.filePath) === resolved) return include.result.scope;
+		}
+		const cached = unit.structuralScopes.get(resolved);
+		if (cached) return cached;
+		await this.assertPathAllowed(resolved, unitScope.workspaceRoot);
+		const content = await fs.readFile(resolved, 'utf8');
+		const scope = structuralScope(resolved, content, parse(content, { grammarSource: resolved, tracer: { trace() {} } }), unitScope.workspaceRoot, unit.unitDir);
+		scope.unit = unit;
+		unit.structuralScopes.set(resolved, scope);
+		return scope;
 	}
 
 	private async resolveIncludePath(include: IncludeRef, parts: string[]): Promise<RuntimeValue<ValueType>> {
@@ -2038,6 +2289,100 @@ function comparisonValue(value: RuntimeValue<ValueType>): string | number {
 		default:
 			return JSON.stringify(value.value);
 	}
+}
+
+/**
+ * A file's `dependency` blocks by label. Two blocks with one label in a file are refused, as Terragrunt refuses them,
+ * rather than one silently shadowing the other.
+ */
+function dependencyBlocks(scope: Scope): Map<string, TNode> {
+	const blocks = new Map<string, TNode>();
+	for (const block of scope.blocks) {
+		if (block.value !== 'dependency') continue;
+		const label = (block.children ?? []).find(child => child.type === 'parameter');
+		if (!label) throw new Error(`A dependency block in ${scope.filePath} has no name`);
+		const name = String(label.value);
+		if (blocks.has(name)) throw new Error(`dependency "${name}" is declared more than once in ${scope.filePath}`);
+		blocks.set(name, block);
+	}
+	return blocks;
+}
+
+/** One `dependency` block as a declaration, its attributes paired with the scope they are written in. */
+function dependencyDeclaration(block: TNode, scope: Scope): DependencyDeclaration {
+	const attribute = (name: string): DependencyAttribute | undefined => {
+		const child = (block.children ?? []).find(entry => entry.type === 'attribute' && String(entry.value) === name);
+		const node = child?.children?.find(entry => entry.type !== 'attribute_identifier');
+		return node ? { node, scope } : undefined;
+	};
+	const mockOutputs = attribute('mock_outputs');
+	const allowed = attribute('mock_outputs_allowed_terraform_commands');
+	return {
+		declaredIn: scope.filePath,
+		configPath: attribute('config_path'),
+		mockOutputs: mockOutputs ? [mockOutputs] : [],
+		mockOutputsAllowedTerraformCommands: allowed ? [allowed] : []
+	};
+}
+
+/** The configuration files Terragrunt looks for in a unit directory, in order. */
+const DEFAULT_CONFIG_FILES = ['terragrunt.hcl', 'terragrunt.hcl.json'];
+
+/**
+ * The configuration a dependency's `config_path` names: the path itself when it is a file, else the unit
+ * configuration in that directory.
+ *
+ * @throws when the path does not exist, or is a directory without a unit configuration.
+ */
+async function dependencyTargetConfig(target: string, where: string): Promise<string> {
+	let stats: Awaited<ReturnType<typeof fs.stat>>;
+	try {
+		stats = await fs.stat(target);
+	} catch {
+		throw new Error(`${where}: config_path ${target} does not exist`);
+	}
+	if (!stats.isDirectory()) return target;
+	for (const name of DEFAULT_CONFIG_FILES) {
+		const candidate = path.join(target, name);
+		if (await pathExists(candidate)) return candidate;
+	}
+	throw new Error(`${where}: config_path ${target} has no ${DEFAULT_CONFIG_FILES.join(' or ')}`);
+}
+
+/**
+ * A scope for a file known only by its syntax: its blocks and its locals, resolved on demand, without its includes,
+ * inputs or inline functions. Enough to evaluate an expression that reads the file's locals and the unit's
+ * directory -- an include path, or a dependency block's attributes in a merged file not yet evaluated.
+ */
+function structuralScope(filePath: string, content: string, ast: TNode, workspaceRoot: string, unitDir: string): Scope {
+	const scope: Scope = {
+		filePath,
+		content,
+		ast,
+		dir: path.dirname(filePath),
+		unitDir,
+		workspaceRoot,
+		locals: new Map(),
+		localCache: new Map(),
+		localPending: new Map(),
+		includes: new Map(),
+		autoinclude: null,
+		rootAttrs: new Map(),
+		terraform: new Map(),
+		generate: new Map(),
+		blocks: (ast.children ?? []).filter(child => child.type === 'block'),
+		comprehension: [],
+		functions: new Map()
+	};
+	for (const block of scope.blocks) {
+		if (block.value !== 'locals') continue;
+		for (const child of block.children ?? []) {
+			if (child.type !== 'attribute') continue;
+			const valueNode = child.children?.find(entry => entry.type !== 'attribute_identifier');
+			if (valueNode) scope.locals.set(String(child.value), valueNode);
+		}
+	}
+	return scope;
 }
 
 function deepMergeInputs(child: Map<string, RuntimeValue<ValueType>>, parent: Map<string, RuntimeValue<ValueType>>): Map<string, RuntimeValue<ValueType>> {

@@ -125,7 +125,7 @@ This adds the configuration to a workspace exactly as the editor does and prints
 
 ## Dependencies and mock outputs
 
-`dependency.<name>.outputs.<x>` is resolved by reading the dependency's outputs from its own directory. Commands that execute OpenTofu require that output to exist or an explicitly permitted mock.
+`dependency.<name>.outputs.<x>` is resolved the way Terragrunt resolves it. The `dependency "<name>"` block is found in the unit and the configurations merged into it — the sibling `terragrunt.autoinclude.hcl` over the unit, then its includes from the last to the first, leaving out any with `merge_strategy = "no_merge"`; a shallow include's block is replaced whole by a higher one of the same name, a deep include's is merged attribute by attribute. Its `config_path` and mocks are evaluated in the file that declares them, and `config_path` is resolved against the unit's directory wherever the block is written. So a dependency shared through a root or `_envcommon` file works as it does in Terragrunt, and a `root.hcl` can read a dependency its units declare. Each dependency's outputs are read once per evaluation, from the directory `config_path` names. Commands that execute OpenTofu require that output to exist or an explicitly permitted mock.
 
 `render --json` can print the known part of a configuration when a dependency's outputs cannot be had: the dependency returns an empty output map, or its `tofu output -json` command fails or returns something that is not an output map. It omits fields whose values cannot be evaluated, names each field and the reason on stderr, and exits with status 2 so the JSON cannot be mistaken for a complete render. An invalid dependency block, or an output missing from a nonempty output map, is an error: render exits 1 without JSON. Only `render` carries on past outputs it could not read; `run` and the commands it wraps stop, even with a mock allowed for them. To render a complete configuration before apply, declare `mock_outputs` and include `"render"` in `mock_outputs_allowed_terraform_commands`.
 
@@ -142,12 +142,12 @@ dependency "planning" {
 }
 ```
 
-Three rules, which differ from Terragrunt's defaults on purpose:
+Rules, most of which differ from Terragrunt's defaults on purpose:
 
 - **`mock_outputs_allowed_terraform_commands` is required.** Terragrunt treats an omitted list as *every* command, which lets an invented value reach an `apply` and be written to real infrastructure. Here a unit that declares mocks names the commands that may see them; one that does not is refused.
 - **A mock never shadows a real output.** Mocks fill in what the dependency does not have; a value it does have always wins, so a stale mock cannot quietly replace one.
 - **A failed output command is an error.** Mocks apply when the output command succeeds with an empty map; an absent executable, invalid working directory, or credential failure is not evidence that state is absent.
-- **Mock values are literals.** A mock stands in for a unit that has not been applied, so it cannot reference one. Strings, numbers, booleans, null, and lists and objects of those; anything else is refused by name.
+- **A dependency block cannot read a dependency.** `config_path` and the mocks may use locals and functions, as in Terragrunt, but not `dependency.*`: Terragrunt evaluates dependency blocks before any outputs exist, and a mock stands in for a unit that has not been applied. Such a read is refused by name.
 
 Note that a mocked path may still be read during evaluation — a module doing `jsondecode(file(var.path))` in a top-level local does so whatever the command — so a mock standing in for a file should name a real, minimal one rather than a path to nothing.
 

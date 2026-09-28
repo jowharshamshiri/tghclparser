@@ -768,12 +768,11 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(made.root, {recursive: true, force: true});
 	});
 
-	it('refuses a mock value that is not a literal', async () => {
+	it('refuses a mock that reads a dependency', async () => {
 		// A mock stands in for a unit that has not been applied, so it cannot
-		// reference one. Reading these literally is also what keeps resolving a
-		// dependency from re-entering evaluation of the unit that asked, so an
-		// expression is refused by name rather than silently becoming
-		// something else.
+		// read one: Terragrunt evaluates dependency blocks before any outputs
+		// exist, and refuses the read rather than letting it become something
+		// else.
 		const cli = path.resolve('dist/cli.cjs');
 		const made = await workspaceWithUnappliedDependency(
 			dependencyBlock(
@@ -788,7 +787,7 @@ describe('CLI configuration discovery', function () {
 		);
 		const output = `${result.stdout}${result.stderr}`;
 		expect(result.status).to.not.equal(0);
-		expect(output).to.contain('must be a literal value');
+		expect(output).to.contain('dependency "producer" reads dependency.producer: a dependency block cannot read dependency outputs');
 		await fs.rm(made.root, {recursive: true, force: true});
 	});
 
@@ -964,7 +963,7 @@ describe('CLI configuration discovery', function () {
 			'inputs = { child = "known" }'
 		]);
 		await fs.writeFile(path.join(made.root, 'terragrunt.hcl'), [
-			'dependency "producer" { config_path = "./producer" }',
+			'dependency "producer" { config_path = "../producer" }',
 			'inputs = { inherited = dependency.producer.outputs.answer stable = "known" }'
 		].join('\n'));
 		const args = [cli, 'render', '--json', '--working-dir', made.consumer];
@@ -991,7 +990,7 @@ describe('CLI configuration discovery', function () {
 			'generate "file" { path = "x.tf" contents = "known" }'
 		]);
 		await fs.writeFile(path.join(made.root, 'terragrunt.hcl'), [
-			'dependency "producer" { config_path = "./producer" }',
+			'dependency "producer" { config_path = "../producer" }',
 			'generate "file" { path = "x.tf" contents = dependency.producer.outputs.answer }'
 		].join('\n'));
 		const result = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', made.consumer],
@@ -1024,25 +1023,38 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(made.root, {recursive: true, force: true});
 	});
 
-	it('names a dependency with no block as a fault, and says when the block may be in an include', async () => {
+	it('names a dependency declared nowhere the unit merges as a fault', async () => {
 		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-no-block-')));
 		const cli = path.resolve('dist/cli.cjs');
-		const render = (dir: string) => spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', dir], {cwd: dir, encoding: 'utf8'});
-
-		const standalone = path.join(root, 'standalone');
-		await fs.mkdir(standalone);
-		await fs.writeFile(path.join(standalone, 'terragrunt.hcl'), 'inputs = { id = dependency.vpc.outputs.id }\n');
-		const typo = render(standalone);
+		const unit = path.join(root, 'app');
+		await fs.mkdir(unit);
+		await fs.writeFile(path.join(root, 'root.hcl'), 'dependency "network" {\n  config_path = "../network"\n}\n');
+		await fs.writeFile(path.join(unit, 'terragrunt.hcl'), 'include "root" {\n  path = "../root.hcl"\n}\n\ninputs = { id = dependency.vpc.outputs.id }\n');
+		const typo = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', unit], {cwd: unit, encoding: 'utf8'});
 		expect(typo.status).to.equal(1);
-		expect(typo.stderr.trim()).to.equal(`No dependency "vpc" block in ${path.join(standalone, 'terragrunt.hcl')}`);
+		expect(typo.stderr.trim()).to.equal(`No dependency "vpc" block in ${path.join(unit, 'terragrunt.hcl')} or the configurations it includes`);
+		await fs.rm(root, {recursive: true, force: true});
+	});
 
-		const including = path.join(root, 'including');
-		await fs.mkdir(including);
-		await fs.writeFile(path.join(root, 'root.hcl'), 'dependency "vpc" {\n  config_path = "../vpc"\n}\n');
-		await fs.writeFile(path.join(including, 'terragrunt.hcl'), 'include "root" {\n  path = "../root.hcl"\n}\n\ninputs = { id = dependency.vpc.outputs.id }\n');
-		const inherited = render(including);
-		expect(inherited.status).to.equal(1);
-		expect(inherited.stderr).to.contain('It may be declared in a configuration this unit includes, which is not resolved yet');
+	it('reads a dependency declared in an included configuration, with config_path relative to the unit', async () => {
+		// The layout Terragrunt merges dependency blocks for: shared ones in a root or _envcommon file, read by every
+		// unit that includes it. config_path in the included file is resolved against the unit, as Terragrunt does.
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-inherited-')));
+		const cli = path.resolve('dist/cli.cjs');
+		for (const dir of ['vpc', 'app', 'bin']) await fs.mkdir(path.join(root, dir));
+		await fs.writeFile(path.join(root, 'vpc', 'terragrunt.hcl'), 'inputs = {}\n');
+		await fs.writeFile(path.join(root, 'root.hcl'), [
+			'locals {', '  fake = "vpc-mock"', '}', '',
+			'dependency "vpc" {', '  config_path = "../vpc"',
+			'  mock_outputs = { id = local.fake }', '  mock_outputs_allowed_terraform_commands = ["render"]', '}'
+		].join('\n'));
+		await fs.writeFile(path.join(root, 'app', 'terragrunt.hcl'), 'include "root" {\n  path = "../root.hcl"\n}\n\ninputs = { vpc_id = dependency.vpc.outputs.id }\n');
+		// An unapplied dependency: the output command succeeds with no outputs.
+		await fs.writeFile(path.join(root, 'bin', 'tofu'), '#!/bin/sh\necho "{}"\n', {mode: 0o755});
+		const result = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', path.join(root, 'app')],
+			{cwd: path.join(root, 'app'), encoding: 'utf8', env: {...process.env, TG_TF_PATH: path.join(root, 'bin', 'tofu')}});
+		expect(result.status).to.equal(0, result.stderr);
+		expect(JSON.parse(result.stdout).inputs).to.deep.equal({vpc_id: 'vpc-mock'});
 		await fs.rm(root, {recursive: true, force: true});
 	});
 
