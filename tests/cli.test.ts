@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {fileURLToPath, pathToFileURL} from 'node:url';
 
 import {discoverConfigs} from '../src/cli';
 import {parseArgs} from '../src/cli';
@@ -94,6 +95,106 @@ describe('CLI configuration discovery', function () {
 		const result = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', root, '--config', 'terragrunt.hcl.json'], {encoding: 'utf8'});
 		expect(result.status).to.equal(0, result.stderr);
 		expect(JSON.parse(result.stdout)).to.deep.equal({inputs: {region: 'eu-west-1'}, terraform: {source: './module'}});
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
+	it('inspects a configuration the way the language service sees it', async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-inspect-'));
+		const unitDir = path.join(root, 'live', 'app');
+		const moduleDir = path.join(root, 'modules', 'app');
+		await fs.mkdir(unitDir, {recursive: true});
+		await fs.mkdir(moduleDir, {recursive: true});
+		await fs.mkdir(path.join(root, '.git'));
+		await fs.writeFile(path.join(moduleDir, 'variables.tf'), 'variable "name" { type = string }\nvariable "region" { type = string\n default = "eu-west-1" }\n');
+		await fs.writeFile(path.join(root, 'global.hcl'), 'locals { region = "eu-west-1"\n zone = "a" }\n');
+		await fs.writeFile(path.join(root, 'secrets.yaml'), 'token: x\n');
+		await fs.writeFile(path.join(root, 'root.hcl'), 'function greet(who) { return `hi ${who}`; }\nlocals {\n  global = read_terragrunt_config(find_in_parent_folders("global.hcl"))\n  secrets = yamldecode(sops_decrypt_file(find_in_parent_folders("secrets.yaml")))\n}\ngenerate "provider" {\n  path = "provider.tf"\n  if_exists = "overwrite"\n  contents = ""\n}\ninputs = { name = "shared" }\nterraform_version_constraint = "1.5.5"\nterraform_binary = "terraform"\n');
+		await fs.writeFile(path.join(unitDir, 'terragrunt.hcl'), 'include "root" { path = find_in_parent_folders("root.hcl") }\nterraform { source = "../../modules/app" }\ninputs = { regoin = "eu-west-2" }\n');
+		const cli = path.resolve('dist/cli.cjs');
+		const rejected = spawnSync(process.execPath, [cli, 'inspect', '--working-dir', unitDir], {encoding: 'utf8'});
+		expect(rejected.status).to.not.equal(0);
+		const result = spawnSync(process.execPath, [cli, 'inspect', '--json', '--working-dir', unitDir], {encoding: 'utf8'});
+		expect(result.status).to.equal(0, result.stderr);
+		const view = JSON.parse(result.stdout);
+		expect(view.uri).to.equal(pathToFileURL(await fs.realpath(path.join(unitDir, 'terragrunt.hcl'))).toString());
+		expect(view.workspaceRoot).to.equal(pathToFileURL(await fs.realpath(root)).toString());
+		expect(view.diagnostics.map((diagnostic: {message: string}) => diagnostic.message)).to.deep.equal(['Input "regoin" is not declared by module ../../modules/app']);
+		expect(view.moduleVariables.status).to.equal('loaded');
+		expect(view.moduleVariables.variables.map((variable: {name: string}) => variable.name)).to.deep.equal(['name', 'region']);
+		expect(view.moduleVariables.inheritedInputKeys).to.deep.equal(['name']);
+		expect(view.inlineFunctions.own).to.deep.equal([]);
+		expect(view.inlineFunctions.inherited.map((definition: {name: string}) => definition.name)).to.deep.equal(['greet']);
+		expect(view.links.map((link: {target: string}) => path.basename(fileURLToPath(link.target)))).to.deep.equal(['root.hcl', 'variables.tf']);
+		const rootUri = pathToFileURL(await fs.realpath(path.join(root, 'root.hcl'))).toString();
+		const globalUri = pathToFileURL(await fs.realpath(path.join(root, 'global.hcl'))).toString();
+		const secretsUri = pathToFileURL(await fs.realpath(path.join(root, 'secrets.yaml'))).toString();
+		expect(view.merge).to.deep.equal({configurations: [view.uri, rootUri]});
+		expect(view.autoinclude).to.equal(null);
+		expect(view.relationships.includes).to.deep.equal([{
+			uri: rootUri,
+			name: 'root',
+			includedBy: view.uri,
+			mergeStrategy: null,
+			attributes: {terraform_version_constraint: '"1.5.5"', terraform_binary: '"terraform"'},
+			blocks: ['locals', 'generate "provider"'],
+			inputs: {literal: true, keys: ['name']},
+			terraformSource: null,
+			inlineFunctions: ['greet'],
+			diagnostics: [],
+			includes: [],
+			dependencies: [],
+			reads: [
+				{uri: globalUri, exists: true, configuration: true, locals: ['region', 'zone'], inputs: {literal: true, keys: []}, diagnostics: []},
+				{uri: secretsUri, exists: true, configuration: false, locals: null, inputs: null, diagnostics: null}
+			]
+		}]);
+		expect(view.relationships.dependencies).to.deep.equal([]);
+		expect(view.relationships.reads).to.deep.equal([]);
+		expect(view.error).to.equal(undefined);
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
+	it('inspects what it can when an include is missing and exits 2', async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-inspect-missing-'));
+		await fs.writeFile(path.join(root, 'terragrunt.hcl'), 'include "root" { path = "missing.hcl" }\nlocals { x = unknown_function() }\n');
+		const cli = path.resolve('dist/cli.cjs');
+		const result = spawnSync(process.execPath, [cli, 'inspect', '--json', '--working-dir', root], {encoding: 'utf8'});
+		expect(result.status).to.equal(2);
+		const view = JSON.parse(result.stdout);
+		expect(view.error).to.include('Included configuration not found');
+		expect(view.diagnostics.map((diagnostic: {message: string}) => diagnostic.message)).to.deep.equal(['Unknown function: unknown_function']);
+		expect(view.moduleVariables).to.equal(null);
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
+	it('inspect shows what Terragrunt merges into the unit, and the autoinclude', async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-inspect-merge-'));
+		const unitDir = path.join(root, 'app');
+		await fs.mkdir(unitDir);
+		await fs.writeFile(path.join(root, 'shared.hcl'), 'inputs = { name = "shared" }\n');
+		await fs.writeFile(path.join(root, 'separate.hcl'), 'inputs = { size = 1 }\n');
+		await fs.writeFile(path.join(unitDir, 'terragrunt.autoinclude.hcl'), 'inputs = { tier = "gold" }\n');
+		await fs.writeFile(path.join(unitDir, 'terragrunt.hcl'), [
+			'include "shared" {', '  path = "../shared.hcl"', '}',
+			'include "separate" {', '  path           = "../separate.hcl"', '  merge_strategy = "no_merge"', '}'
+		].join('\n'));
+		const cli = path.resolve('dist/cli.cjs');
+		const result = spawnSync(process.execPath, [cli, 'inspect', '--json', '--working-dir', unitDir], {encoding: 'utf8'});
+		expect(result.status).to.equal(0, result.stderr);
+		const view = JSON.parse(result.stdout);
+		const uriOf = async (file: string) => pathToFileURL(await fs.realpath(file)).toString();
+		const autoincludeUri = await uriOf(path.join(unitDir, 'terragrunt.autoinclude.hcl'));
+		const sharedUri = await uriOf(path.join(root, 'shared.hcl'));
+		const separateUri = await uriOf(path.join(root, 'separate.hcl'));
+		// The autoinclude wins over the unit, and the no_merge include is not merged at all.
+		expect(view.merge).to.deep.equal({configurations: [autoincludeUri, view.uri, sharedUri]});
+		expect(view.autoinclude.uri).to.equal(autoincludeUri);
+		expect(view.autoinclude.inputs).to.deep.equal({literal: true, keys: ['tier']});
+		expect(view.relationships.includes.map((include: {uri: string; mergeStrategy: string | null}) => [include.uri, include.mergeStrategy]).sort()).to.deep.equal([
+			[separateUri, '"no_merge"'],
+			[sharedUri, null]
+		].sort());
+
 		await fs.rm(root, {recursive: true, force: true});
 	});
 
