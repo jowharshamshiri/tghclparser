@@ -117,7 +117,9 @@ This adds the configuration to a workspace exactly as the editor does and prints
 - `diagnostics`, as the editor would show them
 - `moduleVariables`: the variables of the module named by `terraform { source }`, and the input keys included configurations already supply
 - `inlineFunctions`, declared and inherited, and `links`
-- `relationships`: the include, dependency and read edges. Each include is described by what it contributes: its label, root attributes, blocks, `inputs` keys, module source, inline functions, diagnostics and edges. Each file read during evaluation is described by its `locals` and `inputs` keys, or, for a file that is not HCL, by whether it exists.
+- `merge`: the configurations Terragrunt merges into the unit, highest priority first — the sibling `terragrunt.autoinclude.hcl`, the unit, then its direct includes from the last to the first, leaving out any with `merge_strategy = "no_merge"` — or the `reason` that cannot be determined or would be refused
+- `autoinclude`: the sibling `terragrunt.autoinclude.hcl`, described like an include, or `null`
+- `relationships`: the include, dependency and read edges. Each include is described by how it is included — its label, the file that includes it and the `merge_strategy` written there — and by what it contributes: root attributes, blocks, `inputs` keys, module source, inline functions, diagnostics and edges. Each file read during evaluation is described by its `locals` and `inputs` keys, or, for a file that is not HCL, by whether it exists. An include path that cannot be resolved, or a file that cannot be loaded, is listed with its `error`.
 
 `--workspace-root` sets the folder the editor would have open, defaulting to the enclosing Git repository. When adding the configuration fails, for example on a missing include, whatever state the document has is printed with an `error` field and the command exits 2.
 

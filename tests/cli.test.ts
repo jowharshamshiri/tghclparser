@@ -128,9 +128,13 @@ describe('CLI configuration discovery', function () {
 		const rootUri = pathToFileURL(await fs.realpath(path.join(root, 'root.hcl'))).toString();
 		const globalUri = pathToFileURL(await fs.realpath(path.join(root, 'global.hcl'))).toString();
 		const secretsUri = pathToFileURL(await fs.realpath(path.join(root, 'secrets.yaml'))).toString();
+		expect(view.merge).to.deep.equal({configurations: [view.uri, rootUri]});
+		expect(view.autoinclude).to.equal(null);
 		expect(view.relationships.includes).to.deep.equal([{
 			uri: rootUri,
 			name: 'root',
+			includedBy: view.uri,
+			mergeStrategy: null,
 			attributes: {terraform_version_constraint: '"1.5.5"', terraform_binary: '"terraform"'},
 			blocks: ['locals', 'generate "provider"'],
 			inputs: {literal: true, keys: ['name']},
@@ -160,6 +164,37 @@ describe('CLI configuration discovery', function () {
 		expect(view.error).to.include('Included configuration not found');
 		expect(view.diagnostics.map((diagnostic: {message: string}) => diagnostic.message)).to.deep.equal(['Unknown function: unknown_function']);
 		expect(view.moduleVariables).to.equal(null);
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
+	it('inspect shows what Terragrunt merges into the unit, and the autoinclude', async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-inspect-merge-'));
+		const unitDir = path.join(root, 'app');
+		await fs.mkdir(unitDir);
+		await fs.writeFile(path.join(root, 'shared.hcl'), 'inputs = { name = "shared" }\n');
+		await fs.writeFile(path.join(root, 'separate.hcl'), 'inputs = { size = 1 }\n');
+		await fs.writeFile(path.join(unitDir, 'terragrunt.autoinclude.hcl'), 'inputs = { tier = "gold" }\n');
+		await fs.writeFile(path.join(unitDir, 'terragrunt.hcl'), [
+			'include "shared" {', '  path = "../shared.hcl"', '}',
+			'include "separate" {', '  path           = "../separate.hcl"', '  merge_strategy = "no_merge"', '}'
+		].join('\n'));
+		const cli = path.resolve('dist/cli.cjs');
+		const result = spawnSync(process.execPath, [cli, 'inspect', '--json', '--working-dir', unitDir], {encoding: 'utf8'});
+		expect(result.status).to.equal(0, result.stderr);
+		const view = JSON.parse(result.stdout);
+		const uriOf = async (file: string) => pathToFileURL(await fs.realpath(file)).toString();
+		const autoincludeUri = await uriOf(path.join(unitDir, 'terragrunt.autoinclude.hcl'));
+		const sharedUri = await uriOf(path.join(root, 'shared.hcl'));
+		const separateUri = await uriOf(path.join(root, 'separate.hcl'));
+		// The autoinclude wins over the unit, and the no_merge include is not merged at all.
+		expect(view.merge).to.deep.equal({configurations: [autoincludeUri, view.uri, sharedUri]});
+		expect(view.autoinclude.uri).to.equal(autoincludeUri);
+		expect(view.autoinclude.inputs).to.deep.equal({literal: true, keys: ['tier']});
+		expect(view.relationships.includes.map((include: {uri: string; mergeStrategy: string | null}) => [include.uri, include.mergeStrategy]).sort()).to.deep.equal([
+			[separateUri, '"no_merge"'],
+			[sharedUri, null]
+		].sort());
+
 		await fs.rm(root, {recursive: true, force: true});
 	});
 

@@ -191,9 +191,10 @@ function inspectUsage(): string {
 		'Usage: tghclp inspect (--json | --format=json) [options]',
 		'',
 		'Prints the state the language service holds for a configuration after adding it to a workspace:',
-		'diagnostics, the variables of the sourced module, inline functions, document links, each included',
-		'configuration described by what it contributes, and each file read while evaluating described by',
-		'its locals and inputs keys.',
+		'diagnostics, the variables of the sourced module, inline functions, document links, the configurations',
+		'Terragrunt merges into the unit in priority order, the sibling autoinclude, each included configuration',
+		'described by what it contributes and how it is included, and each file read while evaluating described',
+		'by its locals and inputs keys.',
 		'',
 		'Options:',
 		'  --json                  Print the state as JSON',
@@ -288,6 +289,22 @@ async function inspectDocument(argv: string[]): Promise<number> {
 	let links: unknown[] = [];
 	try { links = await document.getLinks(); } catch (error) { workspaceError ??= error instanceof Error ? error.message : String(error); }
 	const relationships = workspace.getRelationships(uri);
+	// What Terragrunt merges into the unit, highest priority first, by the rules the module inputs are checked with.
+	let merge: unknown;
+	try {
+		merge = await workspace.getMergedConfigurations(document);
+	} catch (error) {
+		merge = {error: error instanceof Error ? error.message : String(error)};
+	}
+	const autoincludePath = path.join(path.dirname(realConfig), 'terragrunt.autoinclude.hcl');
+	let autoinclude: unknown = null;
+	if (fsSync.existsSync(autoincludePath)) {
+		const autoincludeUri = pathToFileURL(autoincludePath).toString();
+		const loaded = await loadConfiguration(workspace, autoincludeUri);
+		autoinclude = 'error' in loaded
+			? {uri: autoincludeUri, missing: true, error: loaded.error}
+			: {uri: autoincludeUri, ...await describeConfiguration(workspace, loaded.document)};
+	}
 	const view = {
 		uri,
 		workspaceRoot: pathToFileURL(workspaceRoot).toString(),
@@ -297,6 +314,8 @@ async function inspectDocument(argv: string[]): Promise<number> {
 			: state.status === 'loaded' ? {...state, inheritedInputKeys: [...state.inheritedInputKeys].sort()} : state,
 		inlineFunctions: {own: [...own.values()], inherited},
 		links,
+		merge,
+		autoinclude,
 		relationships: relationships
 			? {
 				...relationships,
@@ -313,74 +332,127 @@ async function inspectDocument(argv: string[]): Promise<number> {
 
 /**
  * Describes each configuration in a unit's include chain, nearest first, by what it contributes to the unit: the
- * label it is included under, its root attributes as authored (`terraform_version_constraint`, `iam_role` and the
- * like), the blocks it declares, whether its `inputs` can be enumerated and which keys it sets, the module source
- * it names, the inline functions it declares, its own diagnostics and its own edges. Names come from the unit's
- * include blocks, resolved for the unit; a configuration reached further up the chain is named by the block in
- * the file that includes it.
+ * label it is included under, the file that includes it and the `merge_strategy` written there, its root attributes
+ * as authored (`terraform_version_constraint`, `iam_role` and the like), the blocks it declares, whether its `inputs`
+ * can be enumerated and which keys it sets, the module source it names, the inline functions it declares, its own
+ * diagnostics and its own edges. Which of these Terragrunt actually merges into the unit is the view's `merge`.
+ *
+ * Nothing that fails is left out: an include path that cannot be resolved is an entry with its `error` and no
+ * `uri`, and a configuration that cannot be loaded is an entry with `missing: true` and its `error`.
  *
  * @param workspace the workspace the unit was added to.
  * @param unit the unit whose chain is described.
  * @param includeUris URIs of the configurations the unit includes directly.
  * @param unitDir directory of the unit, which include paths resolve against.
- * @returns one entry per configuration in the chain; an entry that cannot be loaded carries `missing: true`.
+ * @returns one entry per include block reached in the chain.
  */
 async function inspectIncludes(workspace: Workspace, unit: ParsedDocument, includeUris: string[], unitDir: string): Promise<unknown[]> {
-	const names = new Map<string, string>();
-	const nameIncludesOf = async (document: ParsedDocument): Promise<void> => {
+	const entries: unknown[] = [];
+	const inclusions = new Map<string, {name: string; includedBy: string; mergeStrategy: string | null}>();
+	const recordIncludesOf = async (document: ParsedDocument): Promise<void> => {
 		const ast = document.getAST();
 		if (!ast) return;
+		const content = document.getContent();
 		for (const include of document.findIncludeBlocks(ast)) {
-			const label = include.block.children.find(child => child.type === 'parameter')?.getDisplayText() ?? '';
+			const name = include.block.children.find(child => child.type === 'parameter')?.getDisplayText() ?? '';
+			const strategy = include.block.children
+				.find(child => child.type === 'attribute' && child.value === 'merge_strategy')
+				?.children.find(child => child.type !== 'attribute_identifier');
+			const inclusion = {
+				name,
+				includedBy: document.getUri(),
+				mergeStrategy: strategy ? content.slice(strategy.location.start.offset, strategy.location.end.offset) : null
+			};
+			let resolved: string;
 			try {
-				const resolved = await workspace.resolveIncludePath(include.path, document.getUri(), unitDir);
-				if (!names.has(resolved)) names.set(resolved, label);
-			} catch {}
+				resolved = await workspace.resolveIncludePath(include.path, document.getUri(), unitDir);
+			} catch (error) {
+				entries.push({uri: null, ...inclusion, error: error instanceof Error ? error.message : String(error)});
+				continue;
+			}
+			if (!inclusions.has(resolved)) inclusions.set(resolved, inclusion);
 		}
 	};
-	await nameIncludesOf(unit);
+	await recordIncludesOf(unit);
 
-	const entries: unknown[] = [];
 	const visited = new Set<string>([unit.getUri()]);
 	const queue = [...includeUris];
 	while (queue.length > 0) {
 		const includeUri = queue.shift()!;
 		if (visited.has(includeUri)) continue;
 		visited.add(includeUri);
-		const included = await workspace.getParsedDocument(includeUri).catch(() => undefined);
-		if (!included) {
-			entries.push({uri: includeUri, name: names.get(includeUri) ?? null, missing: true});
+		const inclusion = inclusions.get(includeUri) ?? {name: null, includedBy: null, mergeStrategy: null};
+		const loaded = await loadConfiguration(workspace, includeUri);
+		if ('error' in loaded) {
+			entries.push({uri: includeUri, ...inclusion, missing: true, error: loaded.error});
 			continue;
 		}
-		await nameIncludesOf(included);
-		const keys = included.getOwnInputKeys();
-		const sourceToken = included.getTerraformSourceToken();
-		const edges = workspace.getRelationships(includeUri) ?? {includes: [], dependencies: [], reads: []};
-		const content = included.getContent();
-		const root = included.getTokens()[0];
-		const attributes: Record<string, string> = {};
-		for (const token of root?.children.filter(child => child.type === 'assignment' && child.getDisplayText() !== 'inputs') ?? []) {
-			const value = token.children.find(child => child.type !== 'root_assignment_identifier');
-			attributes[token.getDisplayText()] = value ? content.slice(value.location.start.offset, value.location.end.offset) : '';
-		}
-		const blocks = root?.children
-			.filter(child => child.type === 'block')
-			.map(block => [block.getDisplayText(), ...block.children.filter(child => child.type === 'parameter').map(parameter => JSON.stringify(parameter.getDisplayText()))].join(' ')) ?? [];
-		entries.push({
-			uri: includeUri,
-			name: names.get(includeUri) ?? null,
-			attributes,
-			blocks,
-			inputs: keys === undefined ? {literal: false, keys: []} : {literal: true, keys: [...keys].sort()},
-			terraformSource: sourceToken ? content.slice(sourceToken.location.start.offset, sourceToken.location.end.offset) : null,
-			inlineFunctions: [...included.getOwnInlineFunctions().keys()],
-			diagnostics: included.getDiagnostics(),
-			...edges,
-			reads: await inspectReads(workspace, edges.reads)
-		});
-		queue.push(...edges.includes);
+		await recordIncludesOf(loaded.document);
+		const description = await describeConfiguration(workspace, loaded.document);
+		entries.push({uri: includeUri, ...inclusion, ...description});
+		queue.push(...description.includes);
 	}
 	return entries;
+}
+
+/**
+ * @param workspace the workspace configurations are loaded through.
+ * @param uri the configuration to load.
+ * @returns the parsed document, or why it could not be loaded.
+ */
+async function loadConfiguration(workspace: Workspace, uri: string): Promise<{document: ParsedDocument} | {error: string}> {
+	try {
+		const document = await workspace.getParsedDocument(uri);
+		return document ? {document} : {error: `${fileURLToPath(uri)} could not be loaded`};
+	} catch (error) {
+		return {error: error instanceof Error ? error.message : String(error)};
+	}
+}
+
+/**
+ * Describes one configuration by what it can contribute to a unit that merges it: its root attributes as authored,
+ * the blocks it declares, its `inputs` keys, the module source it names, its inline functions, its own diagnostics,
+ * its edges and the files it reads.
+ *
+ * @param workspace the workspace the configuration was loaded through.
+ * @param document the configuration.
+ * @returns the description.
+ */
+async function describeConfiguration(workspace: Workspace, document: ParsedDocument): Promise<{
+	attributes: Record<string, string>;
+	blocks: string[];
+	inputs: {literal: boolean; keys: string[]};
+	terraformSource: string | null;
+	inlineFunctions: string[];
+	diagnostics: unknown[];
+	includes: string[];
+	dependencies: string[];
+	reads: unknown[];
+}> {
+	const keys = document.getOwnInputKeys();
+	const sourceToken = document.getTerraformSourceToken();
+	const edges = workspace.getRelationships(document.getUri()) ?? {includes: [], dependencies: [], reads: []};
+	const content = document.getContent();
+	const root = document.getTokens()[0];
+	const attributes: Record<string, string> = {};
+	for (const token of root?.children.filter(child => child.type === 'assignment' && child.getDisplayText() !== 'inputs') ?? []) {
+		const value = token.children.find(child => child.type !== 'root_assignment_identifier');
+		attributes[token.getDisplayText()] = value ? content.slice(value.location.start.offset, value.location.end.offset) : '';
+	}
+	const blocks = root?.children
+		.filter(child => child.type === 'block')
+		.map(block => [block.getDisplayText(), ...block.children.filter(child => child.type === 'parameter').map(parameter => JSON.stringify(parameter.getDisplayText()))].join(' ')) ?? [];
+	return {
+		attributes,
+		blocks,
+		inputs: keys === undefined ? {literal: false, keys: []} : {literal: true, keys: [...keys].sort()},
+		terraformSource: sourceToken ? content.slice(sourceToken.location.start.offset, sourceToken.location.end.offset) : null,
+		inlineFunctions: [...document.getOwnInlineFunctions().keys()],
+		diagnostics: document.getDiagnostics(),
+		includes: edges.includes,
+		dependencies: edges.dependencies,
+		reads: await inspectReads(workspace, edges.reads)
+	};
 }
 
 /**
@@ -392,7 +464,7 @@ async function inspectIncludes(workspace: Workspace, unit: ParsedDocument, inclu
  * @param workspace the workspace configurations are loaded through.
  * @param readUris URIs of the files read.
  * @returns one entry per file, in the order given; `locals`, `inputs` and `diagnostics` are null for a file that
- *   is not an HCL configuration or does not exist.
+ *   is not an HCL configuration or does not exist, and an HCL file that cannot be loaded carries its `error`.
  */
 async function inspectReads(workspace: Workspace, readUris: string[]): Promise<unknown[]> {
 	return Promise.all(readUris.map(async readUri => {
@@ -402,18 +474,18 @@ async function inspectReads(workspace: Workspace, readUris: string[]): Promise<u
 		try { await fs.access(file); } catch { exists = false; }
 		const entry = {uri: readUri, exists, configuration, locals: null as string[] | null, inputs: null as unknown, diagnostics: null as unknown};
 		if (!configuration || !exists) return entry;
-		const document = await workspace.getParsedDocument(readUri).catch(() => undefined);
-		if (!document) return entry;
-		const root = document.getTokens()[0];
+		const loaded = await loadConfiguration(workspace, readUri);
+		if ('error' in loaded) return {...entry, error: loaded.error};
+		const root = loaded.document.getTokens()[0];
 		const locals = root?.children
 			.filter(token => token.type === 'block' && token.getDisplayText() === 'locals')
 			.flatMap(block => block.children.filter(child => child.type === 'attribute').map(child => child.getDisplayText())) ?? [];
-		const keys = document.getOwnInputKeys();
+		const keys = loaded.document.getOwnInputKeys();
 		return {
 			...entry,
 			locals: [...new Set(locals)].sort(),
 			inputs: keys === undefined ? {literal: false, keys: []} : {literal: true, keys: [...keys].sort()},
-			diagnostics: document.getDiagnostics()
+			diagnostics: loaded.document.getDiagnostics()
 		};
 	}));
 }
