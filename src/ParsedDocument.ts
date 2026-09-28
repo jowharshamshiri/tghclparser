@@ -6,6 +6,7 @@ import { URI } from 'vscode-uri';
 import { readInlineFunction, synthesizeDefinition, tokenToNode } from './inline-functions';
 import type { FunctionContext, FunctionDefinition, ResolvedReference, RuntimeValue, TerragruntConfig, TokenType, ValueType } from './model';
 import { Token } from './model';
+import type { ModuleFileError, ModuleVariable } from './module-variables';
 import { parse as tg_parse, SyntaxError } from './parser';
 import type { ParserTracerEvent } from './parser';
 import { CompletionsProvider } from './providers/CompletionsProvider';
@@ -15,6 +16,55 @@ import { LinkProvider } from './providers/LinkProvider';
 import { Schema } from './Schema';
 import { StateManager } from './tf/StateManager';
 import type { Workspace } from './Workspace';
+
+/**
+ * What is known about the Terraform module a unit's `terraform { source }` names. `loaded` carries the module's
+ * variables plus the input keys the autoinclude and included configurations supply; `missing` means the source
+ * resolved to a local directory that does not exist; `unavailable` means the module or the configuration that names
+ * it could not be determined, with the reason. A remote source leaves the document with no state at all: it is a
+ * source this does not fetch, not a failure.
+ */
+export type ModuleVariablesState =
+	| {
+		status: 'loaded';
+		/** Absolute path of the module directory the source resolved to. */
+		moduleDir: string;
+		/** The source after path functions and interpolations were evaluated. */
+		sourceText: string;
+		/** True when the `terraform { source }` is in this document rather than in an included configuration. */
+		sourceInThisFile: boolean;
+		/** The module's variables, as {@link readModuleVariables} returns them. */
+		variables: ModuleVariable[];
+		/** Absolute paths of the module's `.tf` files, sorted. */
+		files: string[];
+		/** The module files that did not parse; while any are listed, `variables` may be missing some. */
+		unparsed: ModuleFileError[];
+		/** Keys set by literal `inputs` objects the unit merges in, which count towards required variables. */
+		inheritedInputKeys: Set<string>;
+		/** False when a merged configuration's `inputs` could not be enumerated, which switches coverage off. */
+		inheritedInputsKnown: boolean;
+		/**
+		 * Why a merged configuration's `inputs` are unknown when that is a failure, such as a configuration that does
+		 * not parse, rather than a value this does not enumerate, such as `merge(...)`.
+		 */
+		inheritedInputsProblem?: string;
+	}
+	| {
+		status: 'unavailable';
+		/** Why the module or its inputs could not be determined, as the diagnostic states it. */
+		reason: string;
+		/** True when the `terraform { source }` involved is in this document, so the diagnostic can sit on it. */
+		sourceInThisFile: boolean;
+	}
+	| {
+		status: 'missing';
+		/** Absolute path of the directory the source resolved to, which does not exist. */
+		moduleDir: string;
+		/** The source after path functions and interpolations were evaluated. */
+		sourceText: string;
+		/** True when the `terraform { source }` is in this document rather than in an included configuration. */
+		sourceInThisFile: boolean;
+	};
 
 export class ParsedDocument {
 	private ast: any | null = null;
@@ -28,6 +78,8 @@ export class ParsedDocument {
 	private stateManager: StateManager;
 	/** Inline functions inherited through includes; see setInheritedInlineFunctions. */
 	private inheritedInlineFunctions: Map<string, FunctionDefinition> = new Map();
+	/** Variables of the module this unit sources; see setModuleVariables. */
+	private moduleVariables: ModuleVariablesState | undefined;
 
 	private parserTracer() {
 		const maximumEvents = Math.max(100_000, this.content.length * 250);
@@ -799,6 +851,72 @@ export class ParsedDocument {
 		if (this.ast !== null) {
 			this.diagnostics = this.diagnosticsProvider.getDiagnostics(this);
 		}
+	}
+
+	/**
+	 * Supplies the variables of the module named by `terraform { source }`, then recomputes diagnostics so the
+	 * `inputs` object can be checked against them. Only the workspace can resolve a source, since that means reading
+	 * the module directory; a document analyzed on its own has no state and every inputs feature stays off.
+	 *
+	 * @param state the resolved module state, or undefined to switch every inputs feature off.
+	 */
+	public setModuleVariables(state: ModuleVariablesState | undefined): void {
+		this.moduleVariables = state;
+		if (this.ast !== null) {
+			this.diagnostics = this.diagnosticsProvider.getDiagnostics(this);
+		}
+	}
+
+	/** @returns the state supplied by {@link setModuleVariables}, or undefined when no module is known. */
+	public getModuleVariables(): ModuleVariablesState | undefined {
+		return this.moduleVariables;
+	}
+
+	/**
+	 * The value of `source` in this document's root `terraform` block, whatever form it takes. A form the path
+	 * helpers cannot read is still returned, so that resolving it reports why rather than the source going unseen
+	 * and a lower-priority configuration's source being used in its place.
+	 *
+	 * @returns the value token, or undefined when the document sets no `source`.
+	 */
+	public getTerraformSourceToken(): Token | undefined {
+		const root = this.tokens[0];
+		const block = root?.children.find(child => child.type === 'block' && child.value === 'terraform');
+		const attribute = block?.children.find(child => child.type === 'attribute' && child.value === 'source');
+		return attribute?.children.find(child => child.type !== 'attribute_identifier');
+	}
+
+	/** @returns the root `include` block tokens of this document, in the order they are written. */
+	public getIncludeBlockTokens(): Token[] {
+		const root = this.tokens[0];
+		return root?.children.filter(child => child.type === 'block' && child.value === 'include') ?? [];
+	}
+
+	/** @returns the root `inputs = …` assignment token of this document, or undefined when there is none. */
+	public getInputsAssignment(): Token | undefined {
+		const root = this.tokens[0];
+		if (!root) return undefined;
+		return root.children.find(token => token.type === 'assignment' && token.getDisplayText() === 'inputs');
+	}
+
+	/**
+	 * Keys this document assigns in a literal `inputs` object. An absent `inputs` contributes no keys; an `inputs`
+	 * whose value is not an object literal, such as a `merge(...)` call, cannot be enumerated and yields undefined,
+	 * as does a document that did not parse.
+	 *
+	 * @returns the key names in declaration order, an empty list when there is no `inputs`, or undefined when the
+	 *   keys cannot be known.
+	 */
+	public getOwnInputKeys(): string[] | undefined {
+		if (this.ast === null) return undefined;
+		const assignment = this.getInputsAssignment();
+		if (!assignment) return [];
+		const value = assignment.children.find(child => child.type !== 'root_assignment_identifier');
+		if (!value || value.type !== 'object') return undefined;
+		return value.children
+			.filter(child => child.type === 'attribute')
+			.map(child => child.children.find(grandchild => grandchild.type === 'attribute_identifier')?.getDisplayText())
+			.filter((key): key is string => key !== undefined && key !== '');
 	}
 
 	/** True when this document includes another configuration. */

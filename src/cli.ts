@@ -10,6 +10,7 @@ import { ConfigEvaluator, UnresolvedDependencyOutputError, runtimeValueToPlain }
 import { convertToRuntimeValue, makeObjectValue } from './functions/utils';
 import type { RuntimeValue, ValueType } from './model';
 import type { FunctionDefinition } from './model';
+import { isLocalSource, splitModuleSource } from './module-variables';
 import { ParsedDocument } from './ParsedDocument';
 import { Workspace } from './Workspace';
 import { parse } from './parser';
@@ -1192,29 +1193,6 @@ interface AcquiredSource {
 	cleanup: () => Promise<void>;
 }
 
-function splitModuleSource(source: string): {repository: string; subdirectory: string; ref?: string; forced?: string} {
-	let value = source.trim();
-	let forced: string | undefined;
-	const forcedMatch = value.match(/^([a-z][a-z0-9+.-]*):\:/i);
-	if (forcedMatch) {
-		forced = forcedMatch[1].toLowerCase();
-		value = value.slice(forcedMatch[0].length);
-	}
-	const queryIndex = value.indexOf('?');
-	const query = queryIndex >= 0 ? new URLSearchParams(value.slice(queryIndex + 1)) : new URLSearchParams();
-	if (queryIndex >= 0) value = value.slice(0, queryIndex);
-	let repository = value;
-	let subdirectory = '';
-	const protocolEnd = value.indexOf('://');
-	const searchStart = protocolEnd >= 0 ? protocolEnd + 3 : 0;
-	const separator = value.indexOf('//', searchStart);
-	if (separator >= 0) {
-		repository = value.slice(0, separator);
-		subdirectory = value.slice(separator + 2);
-	}
-	return {repository, subdirectory, ref: query.get('ref') || undefined, forced};
-}
-
 function providerCommand(name: string, args: string[], workingDir: string): void {
 	const result = spawnSync(name, args, {cwd: workingDir, encoding: 'utf8', shell: false, stdio: ['ignore', 'pipe', 'pipe']});
 	if (result.error) throw new Error(`Unable to execute provider command ${name}: ${result.error.message}`);
@@ -1336,10 +1314,6 @@ function backendDelete(backend: string, config: Record<string, unknown>, working
 		return;
 	}
 	throw new Error(`Unsupported remote state backend: ${backend}`);
-}
-
-function isLocalSource(source: string): boolean {
-	return source.startsWith('./') || source.startsWith('../') || source.startsWith('/') || source.startsWith('file://');
 }
 
 function isArchiveSource(source: string): boolean {

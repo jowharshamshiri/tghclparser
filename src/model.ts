@@ -28,6 +28,7 @@ export type TokenType =
 	| 'block_identifier'
 	| 'root_assignment_identifier'
 	| 'attribute_identifier'
+	| 'object_key'
 	| 'reference_identifier'
 	| 'function_identifier'
 

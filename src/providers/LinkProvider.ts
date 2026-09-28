@@ -1,4 +1,5 @@
 import type { DocumentLink } from 'vscode-languageserver';
+import { URI } from 'vscode-uri';
 
 import type { Token } from '../model';
 import type { ParsedDocument } from '../ParsedDocument';
@@ -20,6 +21,14 @@ export class LinkProvider {
 			}
 			if (token.parent.value === 'path' && block?.type === 'block' && block.value === 'include') {
 				links.push(this.link(token, await this.document.getWorkspace().resolveIncludePath(token, this.document.getUri())));
+			}
+			if (token.parent.value === 'source' && block?.type === 'block' && block.value === 'terraform') {
+				const workspace = this.document.getWorkspace();
+				const resolution = await workspace.resolveModuleSource(token, this.document.getUri());
+				if (resolution.kind === 'local') {
+					const target = await workspace.moduleEntryFile(resolution.moduleDir);
+					if (target) links.push(this.link(token, URI.file(target).toString()));
+				}
 			}
 		}
 
