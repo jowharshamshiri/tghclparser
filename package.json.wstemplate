@@ -61,6 +61,7 @@
 		"parser": "peggy --cache --trace --format 'es' --dts --dependency \"{Schema}:./Schema.ts\" --output src/parser.js grammar.peggy",
 		"prepare": "npm run build",
 		"prepublishOnly": "npm test && npm run lint",
+		"pretest": "npm run build",
 		"test": "mocha"
 	},
 	"peerDependencies": {
