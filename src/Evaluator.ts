@@ -58,6 +58,10 @@ export interface ConfigEvaluatorOptions {
 	 * entry says one place, so what was opened up stays legible.
 	 */
 	allowedPaths?: string[];
+	/**
+	 * Resolves to undefined when the dependency is declared but has no outputs to give yet, and throws when it is not
+	 * declared: the first is reported as unresolved, the second as a fault in the configuration.
+	 */
 	resolveDependency?: (configPath: string, name: string) => Promise<RuntimeValue<ValueType> | undefined>;
 	/** Omit fields that read unresolvable values, and expose them through unresolvedRenderFields(). */
 	partialRender?: boolean;
@@ -81,6 +85,13 @@ export class UnresolvedDependencyOutputError extends UnresolvedRenderValueError 
 				: `dependency "${dependency}" output "${output}" could not be read: ${reason}`
 		);
 		this.name = 'UnresolvedDependencyOutputError';
+	}
+}
+
+export class UnresolvedDependencyError extends UnresolvedRenderValueError {
+	constructor(dependency: string) {
+		super(`Dependency "${dependency}" has no evaluated outputs`);
+		this.name = 'UnresolvedDependencyError';
 	}
 }
 
@@ -135,6 +146,8 @@ export interface ConfigEvaluationResult {
 	valid: boolean;
 	inputs: RuntimeValue<ValueType> | null;
 	error?: string;
+	/** The error is a value that cannot be known yet, such as a dependency never applied, not a fault in the configuration. */
+	unresolved?: boolean;
 }
 
 interface IncludeRef {
@@ -448,7 +461,8 @@ export class ConfigEvaluator {
 			return {
 				valid: false,
 				inputs: null,
-				error: error instanceof Error ? error.message : String(error)
+				error: error instanceof Error ? error.message : String(error),
+				...(error instanceof UnresolvedRenderValueError ? { unresolved: true } : {})
 			};
 		}
 	}
@@ -1300,7 +1314,7 @@ export class ConfigEvaluator {
 		if (namespace === 'dependency') {
 			if (parts.length < 2) throw new Error('dependency reference requires a name');
 			const dependency = await this.options.resolveDependency?.(scope.filePath, parts[1]);
-			if (!dependency) throw new Error(`Dependency "${parts[1]}" has no evaluated outputs`);
+			if (!dependency) throw new UnresolvedDependencyError(parts[1]);
 			return this.traverse(dependency, parts.slice(2), parts[1]);
 		}
 

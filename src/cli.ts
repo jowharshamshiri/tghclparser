@@ -995,7 +995,7 @@ async function dependencyOutputs(
 	const content = await fs.readFile(configPath, 'utf8');
 	const ast: any = parse(content, {grammarSource: configPath, tracer: {trace() {}}});
 	const block = findDependencyBlock(ast, name);
-	if (!block) return undefined;
+	if (!block) throw new Error(`No dependency "${name}" block in ${configPath}`);
 
 	const where = `dependency "${name}" in ${configPath}`;
 

@@ -43,6 +43,45 @@ describe('semantic configuration evaluation', () => {
 		);
 		assert.equal(result.valid, false);
 		assert.match(result.error ?? '', /Unknown function/);
+		assert.equal(result.unresolved, undefined);
+	});
+
+	it('reports a declared dependency with no outputs as unresolved rather than as a fault', async () => {
+		const evaluator = new ConfigEvaluator({
+			environmentVariables: {},
+			terraformCommand: '',
+			terraformCliArgs: [],
+			workspaceTrusted: true,
+			resolveDependency: async () => undefined
+		});
+		const result = await evaluator.evaluateUnit(
+			configPath,
+			'inputs = { issuer = dependency.openid_provider.outputs.issuer }',
+			process.cwd()
+		);
+		assert.equal(result.valid, false);
+		assert.equal(result.unresolved, true);
+		assert.match(result.error ?? '', /Dependency "openid_provider" has no evaluated outputs/);
+	});
+
+	it('reports a dependency the resolver refuses as a fault', async () => {
+		const evaluator = new ConfigEvaluator({
+			environmentVariables: {},
+			terraformCommand: '',
+			terraformCliArgs: [],
+			workspaceTrusted: true,
+			resolveDependency: async (_configPath, name) => {
+				throw new Error(`No dependency "${name}" block`);
+			}
+		});
+		const result = await evaluator.evaluateUnit(
+			configPath,
+			'inputs = { issuer = dependency.openid_provdier.outputs.issuer }',
+			process.cwd()
+		);
+		assert.equal(result.valid, false);
+		assert.equal(result.unresolved, undefined);
+		assert.match(result.error ?? '', /No dependency "openid_provdier" block/);
 	});
 
 	it('denies semantic evaluation until the caller establishes workspace trust', async () => {
