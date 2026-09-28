@@ -995,7 +995,16 @@ async function dependencyOutputs(
 	const content = await fs.readFile(configPath, 'utf8');
 	const ast: any = parse(content, {grammarSource: configPath, tracer: {trace() {}}});
 	const block = findDependencyBlock(ast, name);
-	if (!block) throw new Error(`No dependency "${name}" block in ${configPath}`);
+	if (!block) {
+		// Terragrunt merges dependency blocks from included configurations into the unit; this resolver reads only
+		// the unit's own. When the unit includes others, the block may be declared there, and saying it is missing
+		// would be false.
+		const includes = (ast.children ?? []).some((child: any) => child.type === 'block' && child.value === 'include');
+		throw new Error(includes
+			? `No dependency "${name}" block in ${configPath}. It may be declared in a configuration this unit includes, `
+				+ 'which is not resolved yet: declare the dependency block in the unit itself.'
+			: `No dependency "${name}" block in ${configPath}`);
+	}
 
 	const where = `dependency "${name}" in ${configPath}`;
 
