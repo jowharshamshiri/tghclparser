@@ -1024,6 +1024,28 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(made.root, {recursive: true, force: true});
 	});
 
+	it('names a dependency with no block as a fault, and says when the block may be in an include', async () => {
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-no-block-')));
+		const cli = path.resolve('dist/cli.cjs');
+		const render = (dir: string) => spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', dir], {cwd: dir, encoding: 'utf8'});
+
+		const standalone = path.join(root, 'standalone');
+		await fs.mkdir(standalone);
+		await fs.writeFile(path.join(standalone, 'terragrunt.hcl'), 'inputs = { id = dependency.vpc.outputs.id }\n');
+		const typo = render(standalone);
+		expect(typo.status).to.equal(1);
+		expect(typo.stderr.trim()).to.equal(`No dependency "vpc" block in ${path.join(standalone, 'terragrunt.hcl')}`);
+
+		const including = path.join(root, 'including');
+		await fs.mkdir(including);
+		await fs.writeFile(path.join(root, 'root.hcl'), 'dependency "vpc" {\n  config_path = "../vpc"\n}\n');
+		await fs.writeFile(path.join(including, 'terragrunt.hcl'), 'include "root" {\n  path = "../root.hcl"\n}\n\ninputs = { id = dependency.vpc.outputs.id }\n');
+		const inherited = render(including);
+		expect(inherited.status).to.equal(1);
+		expect(inherited.stderr).to.contain('It may be declared in a configuration this unit includes, which is not resolved yet');
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
 	it('renders without the field when an output command cannot run', async () => {
 		const cli = path.resolve('dist/cli.cjs');
 		const made = await workspaceWithUnappliedDependency(dependencyBlock([]));
