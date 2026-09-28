@@ -1369,6 +1369,37 @@ export class Workspace {
 			.filter((c): c is TerragruntConfig => c !== undefined);
 	}
 
+	/**
+	 * The include, dependency and read edges recorded for a configuration once it has been added.
+	 *
+	 * @param uri URI of the configuration.
+	 * @returns copies of the three URI lists, or undefined when the configuration has not been added.
+	 */
+	/**
+	 * The configurations Terragrunt merges into a unit, highest priority first, by the same rules the unit's module
+	 * inputs are checked with: the sibling `terragrunt.autoinclude.hcl`, the unit, then its direct includes from
+	 * the last to the first, leaving out any with `merge_strategy = "no_merge"`.
+	 *
+	 * @param doc the unit.
+	 * @returns the URIs in priority order, or the reason the merge cannot be determined or would be refused.
+	 * @throws when an include path cannot be resolved or an included configuration cannot be read.
+	 */
+	async getMergedConfigurations(doc: ParsedDocument): Promise<{ configurations: string[] } | { reason: string }> {
+		const ast = doc.getAST();
+		if (!ast) return { reason: `${doc.getUri()} does not parse` };
+		const unitDir = path.dirname(URI.parse(doc.getUri()).fsPath);
+		const includes = doc.findIncludeBlocks(ast);
+		const includePaths = await Promise.all(includes.map(include => this.resolveIncludePath(include.path, doc.getUri(), unitDir)));
+		const merged = await this.mergedConfigurations(doc, includes, includePaths, unitDir);
+		return 'reason' in merged ? merged : { configurations: merged.configurations.map(configuration => configuration.getUri()) };
+	}
+
+	getRelationships(uri: string): { includes: string[]; dependencies: string[]; reads: string[] } | undefined {
+		const config = this.configMap.get(uri);
+		if (!config) return undefined;
+		return { includes: [...config.includes], dependencies: [...config.dependencies], reads: [...config.reads] };
+	}
+
 	getEvaluationContext(uri: string): { referencingConfigs: TerragruntConfig[] } {
 		return {
 			referencingConfigs: this.getReferencingConfigs(uri)
