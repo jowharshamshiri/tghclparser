@@ -521,7 +521,7 @@ tghclp run --tf-path terraform --working-dir ./app -- apply</code></pre></div>
 });</code></pre></div>
         <table class="reference-table"><thead><tr><th>Method</th><th>Returns / effect</th></tr></thead><tbody>
           <tr><td>setWorkspaceTrusted(value)</td><td>Changes the evaluator trust state.</td></tr>
-          <tr><td>evaluateUnit(path, content, workDir)</td><td><code>{ valid, inputs, error? }</code>; evaluation errors are captured.</td></tr>
+          <tr><td>evaluateUnit(path, content, workDir)</td><td><code>{ valid, inputs, error?, unresolved? }</code>; evaluation errors are captured. <code>unresolved</code> is <code>true</code> when the error is a value that cannot be known yet, such as a declared dependency with no outputs, rather than a fault in the configuration.</td></tr>
           <tr><td>evaluateRenderedConfig(path, content, workDir)</td><td>A complete <code>RuntimeValue</code>; errors are thrown.</td></tr>
           <tr><td>evaluateAtPosition(path, content, workDir, position)</td><td>The value of the function call at the zero-based position, if any.</td></tr>
           <tr><td>evaluatedSpans(path, content, workDir)</td><td><code>EvaluatedSpan[]</code> — <code>{ start, end, kind, value }</code> by character offset for every expression, and every attribute name (<code>kind</code> says which), whose value is not already spelled out in its source; literals written as their value are left out. One evaluation of the file.</td></tr>
