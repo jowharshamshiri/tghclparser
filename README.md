@@ -71,6 +71,19 @@ Declarations are inherited through `include`, so shared helpers live in `root.hc
 - Dependency output discovery from state
 - Hover and document-link providers
 - Inline function signatures in completion, hover, and call diagnostics
+- Completion, hover and checking of `inputs` against the variables of the module `terraform { source }` names
+
+### Remote module sources
+
+A local `terraform { source }` is read in place. A registry source (`tfr:///namespace/name/provider?version=…`) is fetched, so its variables drive the same completion, hover and checks.
+
+- **Enabling:** `Workspace.configureRemoteModules({ enabled, trusted }, options)`. Fetching starts once both are true. A fetch runs in the background: the unit reports `loading`, then `onModuleVariablesChanged` listeners are told to republish its diagnostics.
+- **What is fetched:** the top-level `.tf` files of the module, read straight from the git repository or tar.gz archive the registry points to.
+- **Cache:** `TGHCLPARSER_CACHE_DIR`, else the platform cache directory under `tghclparser`, owner-only and keyed by the resolved version, so each version is fetched once. Clear it with `Workspace.clearRemoteModuleCache()`, which also refetches open units, or `tghclp cache clear`.
+- **Credentials:** `TF_TOKEN_<host>`, then `credentials` blocks in the Terraform CLI configuration (`TF_CLI_CONFIG_FILE` or `~/.terraformrc`, then `~/.terraform.d/*.tfrc*`), then `TG_TF_REGISTRY_TOKEN` for private registries. Add your own with `chainCredentials`. A token is sent to its registry host alone; git uses its own credential helpers and ssh agent. Messages show credentials redacted.
+- **Hosts:** the `approveHost` callback is asked before the first contact with a registry or git host; `allowedHosts` are contacted straight away. Approving a registry covers the download host it points to. Hosts are contacted by name and must resolve outside the loopback and link-local ranges; `localhost`, `*.local` and `*.internal` are refused.
+- **Default registry:** `tfr:///` means `TG_TF_DEFAULT_REGISTRY_HOST`, else the policy's `defaultRegistryHost`, else `registry.opentofu.org` when `terraform_binary` names OpenTofu, else `registry.terraform.io`.
+- **Requirements:** git 2.31 or newer on `PATH` for modules served from git.
 
 ## Command line
 
@@ -115,13 +128,21 @@ tghclp inspect --json --working-dir ./infrastructure/app
 This adds the configuration to a workspace exactly as the editor does and prints the result as JSON:
 
 - `diagnostics`, as the editor would show them
-- `moduleVariables`: the variables of the module named by `terraform { source }`, and the input keys included configurations already supply
+- `moduleVariables`: the variables of the module named by `terraform { source }`, and the input keys included configurations already supply. A registry source is fetched first, with the ambient credentials and every host approved
 - `inlineFunctions`, declared and inherited, and `links`
 - `merge`: the configurations Terragrunt merges into the unit, highest priority first — the sibling `terragrunt.autoinclude.hcl`, the unit, then its direct includes from the last to the first, leaving out any with `merge_strategy = "no_merge"` — or the `reason` that cannot be determined or would be refused
 - `autoinclude`: the sibling `terragrunt.autoinclude.hcl`, described like an include, or `null`
 - `relationships`: the include, dependency and read edges. Each include is described by how it is included — its label, the file that includes it and the `merge_strategy` written there — and by what it contributes: root attributes, blocks, `inputs` keys, module source, inline functions, diagnostics and edges. Each file read during evaluation is described by its `locals` and `inputs` keys, or, for a file that is not HCL, by whether it exists. An include path that cannot be resolved, or a file that cannot be loaded, is listed with its `error`.
 
 `--workspace-root` sets the folder the editor would have open, defaulting to the enclosing Git repository. When adding the configuration fails, for example on a missing include, whatever state the document has is printed with an `error` field and the command exits 2.
+
+Fetched modules stay in the per-user cache until it is cleared:
+
+```sh
+tghclp cache clear
+```
+
+This removes the fetched modules and nothing else under the cache directory, so the next `inspect` or editor session fetches them again.
 
 ## Dependencies and mock outputs
 
