@@ -142,7 +142,7 @@ Fetched modules stay in the per-user cache until it is cleared:
 tghclp cache clear
 ```
 
-This removes the fetched modules and nothing else under the cache directory, so the next `inspect` or editor session fetches them again.
+This removes the fetched modules under the cache directory, so the next `inspect` or editor session fetches them again.
 
 ## Dependencies and mock outputs
 
