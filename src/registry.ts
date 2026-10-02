@@ -1,9 +1,8 @@
-import type { CredentialProvider } from './credentials';
 import { tokenEnvName } from './credentials';
 import { canonicalHost } from './module-source';
 import type { RemoteSourceErrorCode } from './remote-errors';
 import { asRemoteSourceError, RemoteSourceError } from './remote-errors';
-import type { RegistryModule, RegistryResolver } from './remote-modules';
+import type { RegistryModule, RegistryRequest, RegistryResolver } from './remote-modules';
 import { resolveVersion } from './versions';
 
 /** How the registry client reaches registries. */
@@ -31,15 +30,9 @@ interface RegistryResponse {
 }
 
 /** Who a request may carry a token to and what it must pass on the way. */
-interface AuthorizedRequest {
+interface AuthorizedRequest extends RegistryRequest {
 	/** The canonical registry host; the token is sent to no other. */
 	tokenHost: string;
-	/** Where the token for `tokenHost` comes from. */
-	credentials: CredentialProvider;
-	/** Aborts the request, redirects included. */
-	signal: AbortSignal;
-	/** Throws when a host on the redirect chain must not be contacted; no check when omitted. */
-	checkHost?: (host: string) => Promise<void>;
 }
 
 const discoveryTtlMs = 24 * 60 * 60 * 1000;
@@ -77,8 +70,8 @@ export function createRegistryResolver(options: RegistryClientOptions = {}): Reg
 	const schemeFor = (host: string): 'https' | 'http' => insecure.has(host.replace(/:\d+$/, '')) ? 'http' : 'https';
 
 	/**
-	 * Sends a GET, following redirects by hand so each hop is checked: HTTPS unless the host is insecure-allowed,
-	 * the caller's host check, and the token only for the host it was looked up for.
+	 * Sends a GET, following redirects by hand so each hop is checked, the first included: HTTPS unless the host is
+	 * insecure-allowed, the caller's host check, and the token only for the host it was looked up for.
 	 *
 	 * @param url the URL.
 	 * @param auth the token host, credentials, signal and host check.
@@ -93,7 +86,7 @@ export function createRegistryResolver(options: RegistryClientOptions = {}): Reg
 			if (target.protocol !== 'https:' && !(target.protocol === 'http:' && insecure.has(target.hostname.toLowerCase()))) {
 				throw new RemoteSourceError('HostUnreachable', `${redactedUrl(target)} is not an https URL; registries are only contacted over TLS`);
 			}
-			await auth.checkHost?.(canonicalHost(target.host));
+			await auth.checkHost(canonicalHost(target.host));
 			const headers: Record<string, string> = { accept, 'user-agent': options.userAgent ?? 'tghclparser' };
 			if (canonicalHost(target.host) === auth.tokenHost) {
 				const token = await auth.credentials.tokenFor(auth.tokenHost);
@@ -205,15 +198,14 @@ export function createRegistryResolver(options: RegistryClientOptions = {}): Reg
 		 *
 		 * @param module the module.
 		 * @param constraint the `?version=` constraint, or undefined for the highest release.
-		 * @param credentials where the registry token comes from.
-		 * @param signal aborts the requests.
+		 * @param access where the registry token comes from, what aborts the requests and the host check.
 		 * @returns the chosen version and every version listed.
 		 * @throws {RemoteSourceError} `InvalidConstraint` for a constraint that does not parse, `NoStableVersion` when
 		 *   there is no constraint and only pre-releases exist, `NoMatchingVersion` naming the newest versions when
 		 *   none matches, and whatever listing the versions throws.
 		 */
-		async resolveVersion(module, constraint, credentials, signal) {
-			const auth: AuthorizedRequest = { tokenHost: module.host, credentials, signal };
+		async resolveVersion(module, constraint, access) {
+			const auth: AuthorizedRequest = { ...access, tokenHost: module.host };
 			const available = await listVersions(module, auth);
 			let version: string | undefined;
 			try {
@@ -237,14 +229,13 @@ export function createRegistryResolver(options: RegistryClientOptions = {}): Reg
 		 *
 		 * @param module the module.
 		 * @param version the resolved version.
-		 * @param credentials where the registry token comes from.
-		 * @param signal aborts the requests.
+		 * @param access where the registry token comes from, what aborts the requests and the host check.
 		 * @returns the download location.
 		 * @throws {RemoteSourceError} `VersionNotFound` for 404, `RegistryAuth` for 401 and 403, `NoDownloadLocation`
 		 *   when the answer names none, `HostUnreachable` for any other failing status.
 		 */
-		async downloadLocation(module, version, credentials, signal) {
-			const auth: AuthorizedRequest = { tokenHost: module.host, credentials, signal };
+		async downloadLocation(module, version, access) {
+			const auth: AuthorizedRequest = { ...access, tokenHost: module.host };
 			const base = await discover(module.host, auth);
 			const url = `${base}${modulePath(module)}/${version}/download`;
 			const response = await request(url, auth);

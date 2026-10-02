@@ -198,7 +198,16 @@ variable "ipam" {
 		}
 	});
 
-	it('reports a remote source as not fetched while remote modules are off', async () => {
+	it('leaves remote sources alone in a workspace that was never told about remote modules', async () => {
+		for (const source of ['tfr:///terraform-aws-modules/vpc/aws?version=5.0.0', 'git::https://host.example/repo.git?ref=v1', 'hg::https://host.example/repo', 'tfr://not a source']) {
+			const document = await openUnit(unit(`"${source}"`, '  anything = true'));
+			expect(document.getModuleVariables(), source).to.equal(undefined);
+			expect(document.getDiagnostics(), source).to.deep.equal([]);
+		}
+	});
+
+	it('reports a remote source as not fetched in an untrusted workspace, whatever the setting', async () => {
+		workspace.configureRemoteModules({ enabled: true, trusted: false });
 		const document = await openUnit(unit('"tfr:///terraform-aws-modules/vpc/aws?version=5.0.0"', '  anything = true'));
 		expect(document.getModuleVariables()).to.deep.include({ status: 'disabled', reason: 'untrusted', sourceText: 'tfr:///terraform-aws-modules/vpc/aws?version=5.0.0', sourceInThisFile: true });
 		const diagnostics = document.getDiagnostics();
@@ -227,6 +236,7 @@ variable "ipam" {
 	});
 
 	it('does not show a credential written into a source', async () => {
+		workspace.configureRemoteModules({ enabled: false, trusted: false });
 		const document = await openUnit(unit('"git::https://user:s3cr3t@host.example/repo.git"', '  anything = true'));
 		const serialised = JSON.stringify([document.getModuleVariables(), document.getDiagnostics(), (await document.getHoverInfo({ line: 4, character: 2 }))?.value]);
 		expect(serialised).not.to.include('s3cr3t');

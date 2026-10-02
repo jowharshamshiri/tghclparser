@@ -17,7 +17,7 @@ export type {CredentialProvider, AmbientCredentialOptions} from './credentials';
 export {ambientCredentials, chainCredentials, hostFromTokenEnvName, tokenEnvName} from './credentials';
 export type {RemoteSourceErrorCode} from './remote-errors';
 export {RemoteSourceError} from './remote-errors';
-export type {HostApprover, RegistryModule, RegistryResolver, RemoteModuleCheckout, RemoteModuleOptions} from './remote-modules';
+export type {ArchiveRequest, HostApprover, RegistryModule, RegistryRequest, RegistryResolver, RemoteModuleCheckout, RemoteModuleOptions} from './remote-modules';
 export {defaultCacheDir, gitEnvironment, RemoteModuleStore} from './remote-modules';
 export type {RegistryClientOptions} from './registry';
 export {createRegistryResolver} from './registry';

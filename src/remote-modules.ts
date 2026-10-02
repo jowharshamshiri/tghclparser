@@ -33,21 +33,19 @@ export interface RegistryResolver {
 	 *
 	 * @param module the module.
 	 * @param constraint the version constraint, or undefined for the latest release.
-	 * @param credentials where a token for the registry host comes from.
-	 * @param signal aborts the requests.
+	 * @param request whose token may be sent, what aborts the requests, and the check every host on the way must pass.
 	 * @returns the chosen version as the registry lists it, and every version listed.
 	 */
-	resolveVersion(module: RegistryModule, constraint: string | undefined, credentials: CredentialProvider, signal: AbortSignal): Promise<{ version: string; available: string[] }>;
+	resolveVersion(module: RegistryModule, constraint: string | undefined, request: RegistryRequest): Promise<{ version: string; available: string[] }>;
 	/**
 	 * Asks the registry where a version is downloaded from.
 	 *
 	 * @param module the module.
 	 * @param version the resolved version.
-	 * @param credentials where a token for the registry host comes from.
-	 * @param signal aborts the requests.
+	 * @param request whose token may be sent, what aborts the requests, and the check every host on the way must pass.
 	 * @returns the download location the registry serves for the version, made absolute.
 	 */
-	downloadLocation(module: RegistryModule, version: string, credentials: CredentialProvider, signal: AbortSignal): Promise<{ location: string }>;
+	downloadLocation(module: RegistryModule, version: string, request: RegistryRequest): Promise<{ location: string }>;
 	/**
 	 * Downloads an archive a registry named as a module's location.
 	 *
@@ -58,16 +56,23 @@ export interface RegistryResolver {
 	downloadArchive(location: string, request: ArchiveRequest): Promise<Buffer>;
 }
 
+/** How a registry is asked about a module. */
+export interface RegistryRequest {
+	/** Where the token for the registry host comes from. */
+	credentials: CredentialProvider;
+	/** Aborts the requests, redirects included. */
+	signal: AbortSignal;
+	/**
+	 * Throws when a host must not be contacted. Every host a request reaches passes it: the registry itself, the
+	 * host its discovery document places the module API on, and each host a redirect names.
+	 */
+	checkHost: (host: string) => Promise<void>;
+}
+
 /** How an archive download is made. */
-export interface ArchiveRequest {
+export interface ArchiveRequest extends RegistryRequest {
 	/** The registry host, the only one the token is sent to. */
 	tokenHost: string;
-	/** Where the token for `tokenHost` comes from. */
-	credentials: CredentialProvider;
-	/** Aborts the download, redirects included. */
-	signal: AbortSignal;
-	/** Throws when a host on the redirect chain must not be contacted. */
-	checkHost: (host: string) => Promise<void>;
 }
 
 /** How the store fetches and where it keeps what it fetched. */
@@ -263,7 +268,7 @@ export class RemoteModuleStore {
 	private inFlight = new Map<string, Promise<RemoteModuleCheckout>>();
 	private resolved = new Map<string, RemoteModuleCheckout>();
 	private failed = new Map<string, { error: RemoteSourceError; at: number }>();
-	private approvals = new Map<string, boolean>();
+	private approvals = new Map<string, Promise<boolean>>();
 	private gitProbe: Promise<{ version: string; sshCommandConfigured: boolean }> | undefined;
 	private cacheReady: Promise<string> | undefined;
 
@@ -405,8 +410,8 @@ export class RemoteModuleStore {
 		await this.checkHost(host, 'registry');
 		const module: RegistryModule = { host, namespace: source.namespace, name: source.name, provider: source.provider };
 		const credentials = this.options.credentials ?? { tokenFor: async () => undefined };
-		const signal = AbortSignal.timeout(this.timeoutMs());
-		const { version } = await resolver.resolveVersion(module, source.constraint, credentials, signal);
+		const request: RegistryRequest = { credentials, signal: AbortSignal.timeout(this.timeoutMs()), checkHost: contacted => this.checkRedirectHost(contacted) };
+		const { version } = await resolver.resolveVersion(module, source.constraint, request);
 		const key = `tfr|${host}|${module.namespace}/${module.name}/${module.provider}|${version}|${source.subdirectory}`;
 		const sourceLabel = `tfr://${source.hostGiven ? source.host : ''}/${module.namespace}/${module.name}/${module.provider}`;
 		const entryDir = this.entryDir(cacheDir, key);
@@ -427,7 +432,7 @@ export class RemoteModuleStore {
 		if (existing && !existing.underlyingKey) {
 			return { key, entryDir, moduleDir: path.join(entryDir, 'files'), label: `${sourceLabel}@${version}`, resolved: { version }, immutable: true };
 		}
-		const { location } = await resolver.downloadLocation(module, version, credentials, signal);
+		const { location } = await resolver.downloadLocation(module, version, request);
 		const target = classifyModuleSource(location, { origin: 'registry' });
 		if (target.kind === 'other' && target.getter === 'archive') {
 			return this.fetchArchive({ resolver, module, version, location, source, sourceLabel, key, entryDir, cacheDir, credentials });
@@ -727,7 +732,8 @@ export class RemoteModuleStore {
 	/**
 	 * Decides whether a host a source names may be contacted: refused by name first, then approved by the user,
 	 * remembered until the options change, then refused by address. Approval comes before DNS, so a refused host
-	 * costs no lookup. A host in `allowedHosts` skips every check.
+	 * costs no lookup. The user is asked once per host however many fetches reach it at the same time, since each
+	 * waits for the same answer. A host in `allowedHosts` skips every check.
 	 *
 	 * @param host the canonical host, with any port.
 	 * @param kind what would be fetched from it, for the approval prompt.
@@ -737,15 +743,26 @@ export class RemoteModuleStore {
 	private async checkHost(host: string, kind: 'git' | 'registry'): Promise<void> {
 		if (this.isAllowedHost(host)) return;
 		this.refuseLocalName(host);
-		const decision = this.approvals.get(host) ?? await (this.options.approveHost ?? (async () => false))(host, kind);
-		this.approvals.set(host, decision);
-		if (!decision) throw new RemoteSourceError('HostNotApproved', `fetching modules from ${host} has not been approved`);
+		let decision = this.approvals.get(host);
+		if (!decision) {
+			decision = (this.options.approveHost ?? (async () => false))(host, kind);
+			this.approvals.set(host, decision);
+		}
+		let approved: boolean;
+		try {
+			approved = await decision;
+		} catch (error) {
+			if (this.approvals.get(host) === decision) this.approvals.delete(host);
+			throw asRemoteSourceError(error, 'HostNotApproved', `asking whether modules may be fetched from ${host} failed`);
+		}
+		if (!approved) throw new RemoteSourceError('HostNotApproved', `fetching modules from ${host} has not been approved`);
 		await this.refuseLocalAddress(host);
 	}
 
 	/**
-	 * Checks a host an approved registry sent the request to, such as the one serving its archives. No approval is
-	 * asked, since approving the registry covers the locations it hands out, but a local address is still refused.
+	 * Checks a host an approved registry sent the request to: the one its discovery document places the module API
+	 * on, one a redirect names, or the one serving its archives. No approval is asked, since approving the registry
+	 * covers the locations it hands out, but a local address is still refused.
 	 *
 	 * @param host the canonical host, with any port.
 	 * @throws {RemoteSourceError} `HostNotAllowed` for a literal or local address, `HostUnreachable` when the name

@@ -23,6 +23,35 @@ function isFileSystemError(error: unknown): error is NodeJS.ErrnoException {
 }
 
 /**
+ * Looks an executable up on `PATH` without running it, which is how Terragrunt chooses between `tofu` and
+ * `terraform` when nothing names the binary.
+ *
+ * @param name the executable's name, without an extension.
+ * @param env the environment whose `PATH` is searched.
+ * @param platform decides the list separator, and on Windows the extensions tried and the variable's spelling.
+ * @returns true when a directory on `PATH` holds a file of that name that may be executed.
+ */
+async function isOnPath(name: string, env: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): Promise<boolean> {
+	const windows = platform === 'win32';
+	const variable = windows ? Object.keys(env).find(key => key.toUpperCase() === 'PATH') ?? 'PATH' : 'PATH';
+	const directories = (env[variable] ?? '').split(windows ? ';' : ':').filter(Boolean);
+	const extensions = windows ? (env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean) : [''];
+	for (const directory of directories) {
+		for (const extension of extensions) {
+			const candidate = path.join(directory, name + extension);
+			try {
+				if (!(await fs.stat(candidate)).isFile()) continue;
+				if (!windows) await fs.access(candidate, fs.constants.X_OK);
+				return true;
+			} catch (error) {
+				if (!isFileSystemError(error)) throw error;
+			}
+		}
+	}
+	return false;
+}
+
+/**
  * The outcome of resolving a `terraform { source }` value. `local` names a directory that exists, `missing` one
  * that does not, `remote` any source that is not a local path, and `unresolvable` a source the path helpers could
  * not evaluate, with the reason.
@@ -58,7 +87,10 @@ interface ConfigRelationships {
 	reads: string[];
 }
 
-/** Whether, and how, the workspace fetches remote module sources. */
+/**
+ * Whether, and how, the workspace fetches remote module sources. A workspace that was never given a policy does
+ * not look at remote sources at all: a unit naming one has no module state and no diagnostics about it.
+ */
 export interface RemoteModulePolicy {
 	/** True when the user has switched remote fetching on. */
 	enabled: boolean;
@@ -66,7 +98,10 @@ export interface RemoteModulePolicy {
 	trusted: boolean;
 	/** How the host of the language service tells the user to switch fetching on, shown while it is off. */
 	disabledMessage?: string;
-	/** The host `tfr:///` means when no configuration says; `TG_TF_DEFAULT_REGISTRY_HOST` in the environment wins. */
+	/**
+	 * The host `tfr:///` means, in place of the registry of the binary Terragrunt would run;
+	 * `TG_TF_DEFAULT_REGISTRY_HOST` in the environment wins.
+	 */
 	defaultRegistryHost?: string;
 }
 
@@ -95,8 +130,11 @@ export class Workspace {
 	private configTreeRoot: TreeNode<TerragruntConfig> | undefined;
 	private moduleVariables = new ModuleVariableCache();
 	private remoteModules = new RemoteModuleStore();
-	private remotePolicy: RemoteModulePolicy = { enabled: false, trusted: false };
+	/** Undefined until {@link configureRemoteModules} is called, and remote sources are then left alone. */
+	private remotePolicy: RemoteModulePolicy | undefined;
 	private remoteEnvironment: NodeJS.ProcessEnv = process.env;
+	/** The binary Terragrunt runs when nothing names one, looked up once per configuration. */
+	private defaultBinary: Promise<string> | undefined;
 	/** Units waiting for a fetch, by request key; only the instance still registered as the document is updated. */
 	private pendingRemote = new Map<string, Map<string, PendingUnit>>();
 	private landingRemote = new Map<string, Promise<void>>();
@@ -682,8 +720,10 @@ export class Workspace {
 	}
 
 	/**
-	 * Sets whether remote module sources are fetched and how. Memoised failures and host decisions are forgotten,
-	 * since new settings may change them; documents already added keep their state until they are added again.
+	 * Sets whether remote module sources are fetched and how. Until this is called a unit naming a remote source has
+	 * no module state, so a host that does not offer remote modules reports nothing about them. Memoised failures
+	 * and host decisions are forgotten, since new settings may change them; documents already added keep their
+	 * state until they are added again.
 	 *
 	 * @param policy whether fetching is on and the workspace trusted.
 	 * @param options how the store fetches; omitted fields keep the store's defaults.
@@ -691,6 +731,7 @@ export class Workspace {
 	public configureRemoteModules(policy: RemoteModulePolicy, options: RemoteModuleOptions = {}): void {
 		this.remotePolicy = { ...policy };
 		this.remoteEnvironment = options.env ?? process.env;
+		this.defaultBinary = undefined;
 		this.remoteModules.configure(options);
 	}
 
@@ -717,10 +758,11 @@ export class Workspace {
 	 * (see {@link mergedConfigurations}). The first of them, in merge priority, that sets `terraform { source }`
 	 * names the module, and the literal `inputs` keys of the others count towards its required variables.
 	 *
-	 * Every outcome is explicit: a remote source is fetched in the background and reported as `loading` until it
-	 * lands, `disabled` while fetching is off, `fetchFailed` when it fails and `unsupported` when its form is not
-	 * fetched; a configuration or source that cannot be determined, or a module that cannot be read, yields
-	 * `unavailable` with the reason. Anything else that goes wrong is a defect and propagates.
+	 * Every outcome is explicit: a remote source yields no state until {@link configureRemoteModules} has been
+	 * called; after that it is fetched in the background and reported as `loading` until it lands, `disabled` while
+	 * fetching is off, `fetchFailed` when it fails and `unsupported` when its form is not fetched; a configuration
+	 * or source that cannot be determined, or a module that cannot be read, yields `unavailable` with the reason.
+	 * Anything else that goes wrong is a defect and propagates.
 	 */
 	private async moduleVariablesFor(
 		doc: ParsedDocument,
@@ -750,7 +792,8 @@ export class Workspace {
 
 		const resolution = await this.resolveModuleSource(this.findTerraformSourceToken(owner)!, owner.getUri(), unitDir);
 		if (resolution.kind === 'remote') {
-			return this.remoteModuleVariablesFor(resolution.sourceText, sourceInThisFile, merged.configurations, { doc, includes, includePaths, unitDir });
+			if (this.remotePolicy === undefined) return undefined;
+			return this.remoteModuleVariablesFor(this.remotePolicy, resolution.sourceText, sourceInThisFile, merged.configurations, { doc, includes, includePaths, unitDir });
 		}
 		if (resolution.kind === 'unresolvable') {
 			return { status: 'unavailable', reason: `the module source could not be resolved: ${resolution.reason}`, sourceInThisFile };
@@ -810,20 +853,21 @@ export class Workspace {
 	 * when it lands, and the state is `loading` meanwhile. Fetching only happens when the policy allows it.
 	 */
 	private async remoteModuleVariablesFor(
+		policy: RemoteModulePolicy,
 		sourceText: string,
 		sourceInThisFile: boolean,
 		configurations: ParsedDocument[],
 		unit: PendingUnit
 	): Promise<ModuleVariablesState> {
 		const shown = redactSource(sourceText);
-		const source = classifyModuleSource(sourceText, { defaultRegistryHost: this.registryHostFor(configurations), origin: 'authored' });
+		const source = classifyModuleSource(sourceText, { defaultRegistryHost: await this.registryHostFor(policy, configurations), origin: 'authored' });
 		if (source.kind === 'other') return { status: 'unsupported', reason: source.reason, sourceText: shown, sourceInThisFile };
 		if (source.kind === 'local') return { status: 'unsupported', reason: `${shown} is not a form the language service recognises`, sourceText: shown, sourceInThisFile };
-		if (!this.remotePolicy.trusted) {
+		if (!policy.trusted) {
 			return { status: 'disabled', reason: 'untrusted', message: 'fetching remote modules needs a trusted workspace', sourceText: shown, sourceInThisFile };
 		}
-		if (!this.remotePolicy.enabled) {
-			return { status: 'disabled', reason: 'setting', message: this.remotePolicy.disabledMessage ?? defaultDisabledMessage, sourceText: shown, sourceInThisFile };
+		if (!policy.enabled) {
+			return { status: 'disabled', reason: 'setting', message: policy.disabledMessage ?? defaultDisabledMessage, sourceText: shown, sourceInThisFile };
 		}
 		this.remoteUnits.set(unit.doc.getUri(), unit);
 		const request = requestKey(source);
@@ -937,21 +981,25 @@ export class Workspace {
 	}
 
 	/**
-	 * The registry `tfr:///` names: the environment's `TG_TF_DEFAULT_REGISTRY_HOST`, else the policy's default,
-	 * else what the literal `terraform_binary` of the merged configurations implies, else the Terraform registry.
+	 * The registry `tfr:///` names, chosen as Terragrunt chooses it: the environment's
+	 * `TG_TF_DEFAULT_REGISTRY_HOST`, else the policy's default, else the registry of the binary Terragrunt would
+	 * run. That binary is `TG_TF_PATH`, else the literal `terraform_binary` of the merged configurations, else
+	 * `tofu` when it is on `PATH` and `terraform` when it is not. Terragrunt uses the Terraform registry only for
+	 * Terraform and OpenTofu's for anything else; it learns which a binary is by running it, where this goes by its
+	 * name, so that opening a file runs nothing.
+	 *
+	 * @param policy the policy in force.
+	 * @param configurations the configurations merged into the unit, highest priority first.
+	 * @returns the registry host.
 	 */
-	private registryHostFor(configurations: ParsedDocument[]): string {
-		const fromEnvironment = this.remoteEnvironment.TG_TF_DEFAULT_REGISTRY_HOST;
-		if (fromEnvironment) return fromEnvironment;
-		if (this.remotePolicy.defaultRegistryHost) return this.remotePolicy.defaultRegistryHost;
-		for (const configuration of configurations) {
-			const binary = configuration.getRootAttributeLiteral('terraform_binary');
-			if (binary === undefined) continue;
-			const name = path.basename(binary).toLowerCase();
-			if (name.includes('tofu')) return 'registry.opentofu.org';
-			if (name.includes('terraform')) return 'registry.terraform.io';
-		}
-		return 'registry.terraform.io';
+	private async registryHostFor(policy: RemoteModulePolicy, configurations: ParsedDocument[]): Promise<string> {
+		const environment = this.remoteEnvironment;
+		if (environment.TG_TF_DEFAULT_REGISTRY_HOST) return environment.TG_TF_DEFAULT_REGISTRY_HOST;
+		if (policy.defaultRegistryHost) return policy.defaultRegistryHost;
+		const configured = configurations.map(configuration => configuration.getRootAttributeLiteral('terraform_binary')).find(Boolean);
+		this.defaultBinary ??= isOnPath('tofu', environment).then(found => found ? 'tofu' : 'terraform');
+		const binary = environment.TG_TF_PATH || environment.TERRAGRUNT_TFPATH || configured || await this.defaultBinary;
+		return path.basename(binary).toLowerCase().includes('terraform') ? 'registry.terraform.io' : 'registry.opentofu.org';
 	}
 
 	/**

@@ -416,7 +416,10 @@ describe('registry module sources', function () {
 			{ name: 'archivemissing', behaviour: { download: (_, response) => { response.writeHead(204, { 'x-terraform-get': '/archives/vpc.tgz' }); response.end(); }, archive: (_, response) => { response.writeHead(404); response.end(); } }, code: 'ArchiveDownloadFailed', reason: `http://${host}/archives/vpc.tgz answered 404 for the module archive` },
 			{ name: 'archiveexpired', behaviour: { download: (_, response) => { response.writeHead(204, { 'x-terraform-get': '/archives/vpc.tgz' }); response.end(); }, archive: (_, response) => { response.writeHead(403); response.end(); } }, code: 'ArchiveDownloadFailed', reason: 'a signed download location may have expired' },
 			{ name: 'archivesubdir', behaviour: { download: (_, response) => { response.writeHead(204, { 'x-terraform-get': '/archives/vpc.tgz//modules/eks' }); response.end(); } }, code: 'SubdirectoryMissing', reason: 'subdirectory modules/eks does not exist' },
-			{ name: 'archiveaddress', behaviour: { download: (_, response) => { response.writeHead(204, { 'x-terraform-get': 'https://169.254.169.254/vpc.tgz' }); response.end(); } }, code: 'HostNotAllowed', reason: '169.254.169.254 is an IP address' }
+			{ name: 'archiveaddress', behaviour: { download: (_, response) => { response.writeHead(204, { 'x-terraform-get': 'https://169.254.169.254/vpc.tgz' }); response.end(); } }, code: 'HostNotAllowed', reason: '169.254.169.254 is an IP address' },
+			{ name: 'discoveryaddress', behaviour: { discovery: response => { response.writeHead(200); response.end(JSON.stringify({ 'modules.v1': 'https://169.254.169.254/v1/modules/' })); } }, code: 'HostNotAllowed', reason: '169.254.169.254 is an IP address' },
+			{ name: 'redirectaddress', behaviour: { versions: response => { response.writeHead(302, { location: 'https://169.254.169.254/versions' }); response.end(); } }, code: 'HostNotAllowed', reason: '169.254.169.254 is an IP address' },
+			{ name: 'downloadredirect', behaviour: { download: (_, response) => { response.writeHead(307, { location: 'https://localhost/download' }); response.end(); } }, code: 'HostNotAllowed', reason: 'localhost names a local address' }
 		];
 		for (const testCase of cases) {
 			behaviour = testCase.behaviour;
@@ -555,11 +558,63 @@ describe('registry module sources', function () {
 		expect(asked).to.deep.equal([['registry.opentofu.org', 'registry']]);
 	});
 
-	it('resolves tfr:/// against the registry the environment or terraform_binary names', async () => {
+	it('asks once about a host that several fetches reach at the same time', async () => {
+		const asked: string[] = [];
+		const workspace = workspaceFor({
+			allowedHosts: [],
+			approveHost: async requested => {
+				asked.push(requested);
+				await new Promise(resolve => setTimeout(resolve, 50));
+				return false;
+			}
+		});
+		const documents = await Promise.all(['1.0.0', '1.1.0', '~> 1.0'].map((version, index) =>
+			openUnit(workspace, `terraform_binary = "tofu"\n${unit(`tfr:///acme/vpc/aws?version=${version}`)}`, `asked-${index}`)));
+		await workspace.remoteModulesSettled();
+		for (const document of documents) expect(document.getModuleVariables()).to.deep.include({ status: 'fetchFailed', code: 'HostNotApproved' });
+		expect(asked).to.deep.equal(['registry.opentofu.org']);
+	});
+
+	it('resolves tfr:/// against the registry the environment names', async () => {
 		const workspace = workspaceFor({ env: { ...process.env, TGHCLP_TEST_GIT_LOG: gitLog, TG_TF_DEFAULT_REGISTRY_HOST: host } });
 		const document = await openUnit(workspace, unit('tfr:///acme/vpc/aws?version=1.1.0'));
 		await workspace.remoteModulesSettled();
 		expect(document.getModuleVariables()).to.deep.nested.include({ status: 'loaded', 'remote.label': 'tfr:///acme/vpc/aws@1.1.0' });
+	});
+
+	it('resolves tfr:/// against the registry of the binary Terragrunt would run', async () => {
+		const binaries = async (name: string, ...executables: string[]) => {
+			const directory = path.join(root, 'bin', name);
+			await fs.mkdir(directory, { recursive: true });
+			for (const executable of executables) await fs.writeFile(path.join(directory, executable), '#!/bin/sh\n', { mode: 0o755 });
+			return directory;
+		};
+		const both = await binaries('both', 'tofu', 'terraform');
+		const terraformOnly = await binaries('terraform-only', 'terraform');
+		const neither = await binaries('neither');
+		const unreadable = await binaries('not-executable');
+		await fs.writeFile(path.join(unreadable, 'tofu'), '#!/bin/sh\n', { mode: 0o644 });
+
+		let opened = 0;
+		const registryFor = async (env: NodeJS.ProcessEnv, configuration = '') => {
+			const asked: string[] = [];
+			const workspace = workspaceFor({ allowedHosts: [], env, approveHost: async requested => { asked.push(requested); return false; } });
+			await openUnit(workspace, `${configuration}${unit('tfr:///acme/vpc/aws?version=1.1.0')}`, `binary-${opened++}`);
+			await workspace.remoteModulesSettled();
+			return asked;
+		};
+
+		// Terragrunt runs tofu when it is on PATH, and OpenTofu's registry is then the default.
+		expect(await registryFor({ PATH: both })).to.deep.equal(['registry.opentofu.org']);
+		expect(await registryFor({ PATH: [neither, both].join(path.delimiter) })).to.deep.equal(['registry.opentofu.org']);
+		expect(await registryFor({ PATH: terraformOnly })).to.deep.equal(['registry.terraform.io']);
+		expect(await registryFor({ PATH: [unreadable, terraformOnly].join(path.delimiter) })).to.deep.equal(['registry.terraform.io']);
+		expect(await registryFor({ PATH: neither })).to.deep.equal(['registry.terraform.io']);
+		// terraform_binary decides before PATH does, and TG_TF_PATH before terraform_binary.
+		expect(await registryFor({ PATH: both }, 'terraform_binary = "/opt/bin/terraform"\n')).to.deep.equal(['registry.terraform.io']);
+		expect(await registryFor({ PATH: terraformOnly }, 'terraform_binary = "tofu"\n')).to.deep.equal(['registry.opentofu.org']);
+		expect(await registryFor({ PATH: both, TG_TF_PATH: '/opt/bin/terraform' }, 'terraform_binary = "tofu"\n')).to.deep.equal(['registry.terraform.io']);
+		expect(await registryFor({ PATH: terraformOnly, TG_TF_PATH: 'tofu' }, 'terraform_binary = "terraform"\n')).to.deep.equal(['registry.opentofu.org']);
 	});
 
 	it('starts git with a hardened environment and never puts the repository on its command line', async () => {

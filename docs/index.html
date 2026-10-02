@@ -414,6 +414,8 @@ publishDiagnostics(fileUri, document.getDiagnostics());</code></pre></div>
             <tr><td>scaffold</td><td>Create a unit configuration for a local module.</td></tr>
             <tr><td>catalog</td><td>Print configured catalog entries as JSON Lines.</td></tr>
             <tr><td>backend</td><td>Bootstrap, delete, or migrate backend state.</td></tr>
+            <tr><td>inspect</td><td>Print what the language service holds for a configuration as JSON. A registry module source (<code>tfr://</code>) is fetched first, with the ambient registry credentials, so its variables are shown.</td></tr>
+            <tr><td>cache clear</td><td>Delete the remote modules fetched into the per-user cache, so the next use fetches them again.</td></tr>
           </tbody>
         </table>
 
@@ -510,6 +512,10 @@ tghclp run --tf-path terraform --working-dir ./app -- apply</code></pre></div>
           <tr><td>getDependents(uri)</td><td>Returns configurations that depend on the URI.</td></tr>
           <tr><td>getReferencingConfigs(uri)</td><td>Returns all configurations referencing the URI.</td></tr>
           <tr><td>getConfigTreeRoot()</td><td>Returns the most recently built graph root.</td></tr>
+          <tr><td>configureRemoteModules(policy, options)</td><td>Sets whether registry module sources (<code>tfr://</code>) are fetched, and how: credentials, the host approval callback, the cache directory. Until it is called, a unit naming a remote source has no module state.</td></tr>
+          <tr><td>onModuleVariablesChanged(listener)</td><td>Calls the listener with a unit's URI when a background fetch has landed and its diagnostics should be published again.</td></tr>
+          <tr><td>remoteModulesSettled()</td><td>Resolves once no fetch is in flight and every waiting unit has been updated.</td></tr>
+          <tr><td>clearRemoteModuleCache()</td><td>Deletes the fetched modules and fetches again for open units.</td></tr>
         </tbody></table>
 
         <div class="signature"><h3>new ConfigEvaluator(options)</h3><p>Evaluates Terragrunt configuration values with explicit environment and trust settings.</p></div>
@@ -628,6 +634,10 @@ tghclp run --tf-path terraform --working-dir ./app -- apply</code></pre></div>
         <h2>Function operations separate data from capabilities</h2>
         <p>Function evaluation uses named operations. Arguments travel through a serializable dry context; live services such as filesystem access or command execution travel through a wet context. This boundary makes capability-bearing context visible instead of smuggling it into ordinary values.</p>
 
+        <h2>Remote modules reach the network</h2>
+        <p>A unit whose <code>terraform { source }</code> names a registry module can have that module fetched, so its variables drive input completion, hover and checks. This is the one place the language service contacts a network, and it does so only when the caller asks: <code>Workspace.configureRemoteModules</code> takes a policy that must be both <code>enabled</code> and <code>trusted</code>, and an <code>approveHost</code> callback that is asked before the first contact with each registry or git host. A workspace that never calls it leaves remote sources alone.</p>
+        <p>A registry token is sent to its registry host alone, over TLS. Every host a request reaches, including one a registry redirects to, must be named rather than addressed and must resolve outside the loopback and link-local ranges. Git runs without a shell, with prompts disabled and the repository URL kept off its command line. Only the top-level <code>.tf</code> files of a module are kept, read from the object store or the archive stream without unpacking anything, into an owner-only per-user cache.</p>
+
         <h2>The CLI does not invoke a shell</h2>
         <p><code>run</code> and <code>exec</code> spawn the selected executable with an argument array and <code>shell: false</code>. Shell operators in an argument are not interpreted as shell syntax. This removes a common command-injection surface, although callers must still choose trusted executables and arguments.</p>
 
@@ -638,6 +648,7 @@ tghclp run --tf-path terraform --working-dir ./app -- apply</code></pre></div>
           <li>Keep the workspace root as narrow as practical.</li>
           <li>Pass environment variables intentionally; they are part of evaluation input.</li>
           <li>Require a separate user action before executing infrastructure commands.</li>
+          <li>Fetch remote modules only in a trusted workspace, and ask the user before the first contact with each host.</li>
         </ul>
         <div class="next-page"><a href="#explanation-architecture">← Architecture</a><a href="#overview">Back to overview ↑</a></div>
       </article>
