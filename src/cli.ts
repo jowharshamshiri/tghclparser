@@ -15,7 +15,9 @@ import type { FunctionDefinition } from './model';
 import { ambientCredentials } from './credentials';
 import { isArchiveSource } from './module-source';
 import { isLocalSource, splitModuleSource } from './module-variables';
+import { formatHcl, HclSyntaxError } from './hcl-format';
 import { ParsedDocument } from './ParsedDocument';
+import { unifiedDiff } from './unified-diff';
 import { createRegistryResolver } from './registry';
 import { RemoteModuleStore } from './remote-modules';
 import { Workspace } from './Workspace';
@@ -743,13 +745,19 @@ interface ExecutionOptions {
 	all: boolean;
 }
 
+/** What `hcl format` was asked to do. */
 interface FormatOptions {
 	workingDir: string;
-	tfPath: string;
+	/** Report what needs formatting and change nothing. */
 	check: boolean;
+	/** Print the difference formatting makes. */
 	diff: boolean;
+	/** Format standard input to standard output. */
 	stdin: boolean;
+	/** The files named, absolute; empty to format every `.hcl` file under the working directory. */
 	files: string[];
+	/** Directory names that are not walked into, beyond the ones never walked into. */
+	excludeDirs: string[];
 }
 
 function parseExecutionArgs(argv: string[]): ExecutionOptions & {command: string} {
@@ -852,116 +860,194 @@ function valuedExecutionFlag(argument: string): 'working-dir' | 'tf-path' | unde
 	return undefined;
 }
 
+/** Directories `terragrunt hcl format` never walks into: its cache, scaffolding templates and generated stacks. */
+const FORMAT_EXCLUDED_DIRS = ['.terragrunt-cache', '.boilerplate', '.terragrunt-stack'];
+
+/**
+ * Reads the arguments of `hcl format`.
+ *
+ * @param argv the arguments after `hcl format`.
+ * @returns the options, or `help` when help was asked for.
+ * @throws when an option is unknown, lacks its value, or contradicts another.
+ */
 function parseFormatArgs(argv: string[]): FormatOptions | 'help' {
 	let workingDir = process.cwd();
-	// As in parseExecutionArgs: a named executable is never probed for.
-	let tfPath: string | undefined;
 	let check = false;
 	let diff = false;
 	let stdin = false;
-	const files: string[] = [];
+	const named: string[] = [];
+	const excludeDirs: string[] = [];
+	/**
+	 * Reads an option's value from `--name=value` or from the argument after `--name`.
+	 *
+	 * @param index the option's position in `argv`.
+	 * @param name the option, with its dashes.
+	 * @returns the value and the position of the last argument consumed.
+	 */
+	const valueOf = (index: number, name: string): [string, number] => {
+		const inline = argv[index].startsWith(`${name}=`);
+		const value = inline ? argv[index].slice(name.length + 1) : argv[index + 1];
+		if (!value) throw new Error(`${name} requires a value`);
+		return [value, inline ? index : index + 1];
+	};
+	/**
+	 * Tells whether an argument is the named option, with or without an inline value.
+	 *
+	 * @param argument the argument.
+	 * @param name the option, with its dashes.
+	 * @returns true when it is.
+	 */
+	const is = (argument: string, name: string) => argument === name || argument.startsWith(`${name}=`);
 	for (let index = 0; index < argv.length; index++) {
 		const argument = argv[index];
+		let value: string;
 		if (argument === '--help' || argument === '-h') return 'help';
-		if (argument === '--check') { check = true; continue; }
-		if (argument === '--diff') { diff = true; continue; }
-		if (argument === '--stdin') { stdin = true; continue; }
-		if (argument === '--working-dir') {
-			const value = argv[++index];
-			if (!value) throw new Error('--working-dir requires a path');
+		if (argument === '--check') check = true;
+		else if (argument === '--diff') diff = true;
+		else if (argument === '--stdin') stdin = true;
+		else if (is(argument, '--working-dir')) {
+			[value, index] = valueOf(index, '--working-dir');
 			workingDir = path.resolve(value);
-			continue;
-		}
-		if (argument.startsWith('--working-dir=')) {
-			const value = argument.slice('--working-dir='.length);
-			if (!value) throw new Error('--working-dir requires a path');
-			workingDir = path.resolve(value);
-			continue;
-		}
-		if (argument === '--tf-path') {
-			const value = argv[++index];
-			if (!value) throw new Error('--tf-path requires a path');
-			tfPath = value;
-			continue;
-		}
-		if (argument.startsWith('--tf-path=')) {
-			tfPath = argument.slice('--tf-path='.length);
-			if (!tfPath) throw new Error('--tf-path requires a path');
-			continue;
-		}
-		if (isPassthroughFlag(argument)) continue;
-		if (argument.startsWith('-')) throw new Error(`Unknown format option ${argument}`);
-		files.push(path.resolve(workingDir, argument));
+		} else if (is(argument, '--file')) {
+			[value, index] = valueOf(index, '--file');
+			named.push(value);
+		} else if (is(argument, '--exclude-dir')) {
+			[value, index] = valueOf(index, '--exclude-dir');
+			excludeDirs.push(value);
+		} else if (valuedExecutionFlag(argument) === 'tf-path') {
+			// Formatting runs no executable; the flag is accepted because it is valid on every command.
+			[, index] = valueOf(index, argument.split('=')[0]);
+		} else if (isPassthroughFlag(argument)) continue;
+		else if (argument.startsWith('-')) throw new Error(`Unknown format option ${argument}`);
+		else named.push(argument);
 	}
-	if (check && diff) throw new Error('--check and --diff cannot be used together');
-	if (stdin && files.length > 0) throw new Error('--stdin cannot be combined with file paths');
-	return {workingDir, tfPath: tfPath ?? tfPathForDependencies(), check, diff, stdin, files};
+	if (stdin && named.length > 0) throw new Error('both stdin and path flags are specified');
+	return {workingDir, check, diff, stdin, files: named.map(file => path.resolve(workingDir, file)), excludeDirs};
 }
 
+/**
+ * Lists the files `hcl format` formats when none is named: every file under the directory whose name ends in
+ * `.hcl`, in path order, leaving out Terragrunt's own directories and the excluded ones. Symbolic links to
+ * directories are not followed.
+ *
+ * @param directory the directory to walk.
+ * @param excludeDirs directory names not to walk into.
+ * @returns the absolute paths.
+ */
+async function collectFormatTargets(directory: string, excludeDirs: string[]): Promise<string[]> {
+	const targets: string[] = [];
+	const entries = await fs.readdir(directory, {withFileTypes: true});
+	for (const entry of entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))) {
+		if (FORMAT_EXCLUDED_DIRS.includes(entry.name) || excludeDirs.includes(entry.name)) continue;
+		const target = path.join(directory, entry.name);
+		if (entry.isDirectory()) targets.push(...await collectFormatTargets(target, excludeDirs));
+		else if (entry.name.endsWith('.hcl')) targets.push(target);
+	}
+	return targets;
+}
+
+/**
+ * Formats one source for `hcl format` and reports the difference when asked.
+ *
+ * @param original the source text.
+ * @param name how messages and the diff name the source.
+ * @param options what was asked for.
+ * @returns the formatted text and whether it differs from the original.
+ * @throws {HclSyntaxError} when the source does not parse.
+ */
+function formatSource(original: string, name: string, options: FormatOptions): {formatted: string; changed: boolean} {
+	const formatted = formatHcl(original, name);
+	const changed = formatted !== original;
+	if (changed && options.diff) {
+		// Diff labels use forward slashes on every platform, as Terragrunt's do.
+		const label = name.split(path.sep).join('/');
+		process.stdout.write(unifiedDiff(path.posix.join('old', label), original, path.posix.join('new', label), formatted));
+	}
+	return {formatted, changed};
+}
+
+/**
+ * Runs `hcl format`, which does what `terragrunt hcl format` does: rewrites every `.hcl` file under the working
+ * directory, or the files named, or standard input, into the canonical layout. A file that does not parse is
+ * reported and left alone, and the rest are still formatted.
+ *
+ * `--diff` prints what changes and, as in Terragrunt, still changes the files unless `--check` is given too.
+ * `--check` changes nothing and fails when anything needs formatting.
+ *
+ * @param argv the arguments after `hcl format`.
+ * @returns 0 when everything was formatted, or was already; 1 when a file failed to parse or to be read, or
+ *   `--check` found one that needs formatting.
+ */
 async function formatHCL(argv: string[]): Promise<number> {
 	const options = parseFormatArgs(argv);
 	if (options === 'help') {
-		console.log('Usage: tghclp hcl format [--check|--diff|--stdin] [--tf-path <path>] [files...]');
+		console.log([
+			'Usage: tghclp hcl format [options] [files...]',
+			'',
+			'Recursively find HCL files and rewrite them into the canonical format, as terragrunt hcl format does.',
+			'',
+			'Options:',
+			'  --working-dir <path>  Directory to search (default: current directory)',
+			'  --file <path>         A single file to format, relative to the working directory',
+			'  --exclude-dir <name>  A directory name to skip; may be repeated',
+			'  --check               Change nothing; exit 1 when a file needs formatting',
+			'  --diff                Print the difference between each file and its formatted version',
+			'  --stdin               Format standard input and print the result',
+			'  --help                Show this help'
+		].join('\n'));
 		return 0;
 	}
-	const targets = options.stdin
-		? []
-		: options.files.length > 0
-			? options.files
-			: (await collectFiles(options.workingDir)).filter(file => !file.endsWith('.json'));
-	if (!options.stdin && targets.length === 0) throw new Error(`No Terragrunt HCL files found under ${options.workingDir}`);
-	const tempRoot = await fs.mkdtemp(path.join(options.workingDir, '.tghclp-format-'));
-	const changed: string[] = [];
-	try {
-		if (options.stdin) {
-			const original = fsSync.readFileSync(0, 'utf8');
-			const tempFile = path.join(tempRoot, 'stdin.tf');
-			await fs.writeFile(tempFile, original);
-			const result = spawnSync(options.tfPath, ['fmt', tempFile], {encoding: 'utf8', shell: false});
-			if (result.error || result.status !== 0) throw new Error(result.error?.message ?? (result.stderr || `Formatter exited with ${result.status}`));
-			const formatted = await fs.readFile(tempFile, 'utf8');
-			if (options.check && formatted !== original) return 1;
-			if (options.diff) {
-				if (formatted !== original) process.stdout.write(`--- stdin\n+++ stdin\n${formatted}`);
-				return 0;
-			}
-			process.stdout.write(formatted);
-			return 0;
+	const decoder = new TextDecoder('utf-8', {fatal: true, ignoreBOM: true});
+	/**
+	 * Decodes source bytes, refusing ones that are not UTF-8 rather than rewriting them.
+	 *
+	 * @param bytes the bytes read.
+	 * @param name how the message names the source.
+	 * @returns the text.
+	 */
+	const decode = (bytes: Uint8Array, name: string) => {
+		try {
+			return decoder.decode(bytes);
+		} catch {
+			throw new Error(`${name} is not valid UTF-8`);
 		}
-		for (const target of targets) {
-			const root = await fs.realpath(options.workingDir);
-			const realTarget = await fs.realpath(target);
-			const relativeTarget = path.relative(root, realTarget);
-			if (relativeTarget === '..' || relativeTarget.startsWith(`..${path.sep}`) || path.isAbsolute(relativeTarget)) {
-				throw new Error(`Format target is outside the working directory: ${target}`);
+	};
+	if (options.stdin) {
+		try {
+			const {formatted, changed} = formatSource(decode(fsSync.readFileSync(0), 'stdin'), 'stdin', options);
+			if (options.check && changed) {
+				console.error("File 'stdin' needs formatting");
+				return 1;
 			}
-			const info = await fs.stat(target);
-			if (!info.isFile()) throw new Error(`Format target is not a file: ${target}`);
-			await fs.access(target);
-			const original = await fs.readFile(target, 'utf8');
-			const tempFile = path.join(tempRoot, `${changed.length}.tf`);
-			await fs.writeFile(tempFile, original);
-			const result = spawnSync(options.tfPath, ['fmt', tempFile], {encoding: 'utf8', shell: false});
-			if (result.error || result.status !== 0) throw new Error(result.error?.message ?? (result.stderr || `Formatter exited with ${result.status}`));
-			const formatted = await fs.readFile(tempFile, 'utf8');
-			if (formatted === original) continue;
-			changed.push(target);
-			if (options.check) continue;
-			if (options.diff) {
-				process.stdout.write(`--- ${target}\n+++ ${target}\n${formatted}`);
+			if (!options.check && !options.diff) process.stdout.write(formatted);
+			return 0;
+		} catch (error) {
+			if (!(error instanceof Error)) throw error;
+			console.error(`error parsing hcl from stdin: ${error.message}`);
+			return 1;
+		}
+	}
+	const targets = options.files.length > 0 ? options.files : await collectFormatTargets(options.workingDir, options.excludeDirs);
+	let failed = false;
+	for (const target of targets) {
+		try {
+			const original = decode(await fs.readFile(target), target);
+			const {formatted, changed} = formatSource(original, target, options);
+			if (!changed) continue;
+			if (options.check) {
+				failed = true;
+				console.error(`File '${target}' needs formatting`);
 				continue;
 			}
+			// Writing into the existing file keeps its permissions.
 			await fs.writeFile(target, formatted);
-			process.stdout.write(`${target} was updated\n`);
+		} catch (error) {
+			if (!(error instanceof Error)) throw error;
+			failed = true;
+			console.error(error instanceof HclSyntaxError ? `Error parsing ${target}: ${error.message}` : `Error formatting ${target}: ${error.message}`);
 		}
-		if (options.check) {
-			for (const target of changed) process.stdout.write(`${target} needs formatting\n`);
-			return changed.length > 0 ? 1 : 0;
-		}
-		return 0;
-	} finally {
-		await fs.rm(tempRoot, {recursive: true, force: true});
 	}
+	return failed ? 1 : 0;
 }
 
 function offsetPosition(content: string, offset: number): {line: number; character: number} {

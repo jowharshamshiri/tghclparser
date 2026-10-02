@@ -214,7 +214,7 @@ export async function readModuleVariables(moduleDir: string): Promise<ModuleVari
  * @returns for a syntax error, where it stopped and what it found there -- its own message lists every token it
  *   would have accepted, which buries both; for any other rejection, its message.
  */
-function parseFailureMessage(error: Error): string {
+export function parseFailureMessage(error: Error): string {
 	if (!(error instanceof SyntaxError) || !error.location) return error.message;
 	const found = error.found === null || error.found === undefined ? 'end of input' : JSON.stringify(error.found);
 	return `line ${error.location.start.line}, column ${error.location.start.column}: unexpected ${found}`;

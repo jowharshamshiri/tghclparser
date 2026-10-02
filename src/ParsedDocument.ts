@@ -7,7 +7,8 @@ import { readInlineFunction, synthesizeDefinition, tokenToNode } from './inline-
 import type { FunctionContext, FunctionDefinition, ResolvedReference, RuntimeValue, TerragruntConfig, TokenType, ValueType } from './model';
 import { Token } from './model';
 import type { ModuleFileError, ModuleVariable } from './module-variables';
-import { parse as tg_parse, SyntaxError } from './parser';
+import { SyntaxError } from './parser';
+import { parseHclSyntax } from './syntax';
 import type { RemoteSourceErrorCode } from './remote-errors';
 import type { ParserTracerEvent } from './parser';
 import { CompletionsProvider } from './providers/CompletionsProvider';
@@ -1012,8 +1013,7 @@ export class ParsedDocument {
 				this.tokens = [this.parseNode(this.ast)];
 				return;
 			}
-			this.ast = tg_parse(this.content, { grammarSource: this.uri, tracer: this.parserTracer() });
-			this.validateUniqueArguments(this.ast);
+			this.ast = parseHclSyntax(this.content, this.uri, this.parserTracer());
 			this.tokens = [this.parseNode(this.ast)];
 			this.diagnostics = this.diagnosticsProvider.getDiagnostics(this);
 		} catch (error) {
@@ -1049,19 +1049,6 @@ export class ParsedDocument {
 			}
 
 		}
-	}
-
-	private validateUniqueArguments(node: any): void {
-		if (node?.type !== 'root' && node?.type !== 'block' && node?.type !== 'locals_block') return;
-		const names = new Set<string>();
-		for (const child of node?.children ?? []) {
-			if (child.type !== 'attribute' && child.type !== 'assignment') continue;
-			if (child.value == null) continue;
-			const name = String(child.value);
-			if (names.has(name)) throw new Error(`Attribute redefined: ${name}`);
-			names.add(name);
-		}
-		for (const child of node?.children ?? []) this.validateUniqueArguments(child);
 	}
 
 	public getUri(): string {

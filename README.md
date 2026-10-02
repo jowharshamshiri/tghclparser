@@ -71,6 +71,7 @@ Declarations are inherited through `include`, so shared helpers live in `root.hc
 - Dependency output discovery from state
 - Hover and document-link providers
 - Inline function signatures in completion, hover, and call diagnostics
+- Formatting into Terragrunt's canonical layout, with no external formatter
 - Completion, hover and checking of `inputs` against the variables of the module `terraform { source }` names
 
 ### Remote module sources
@@ -107,6 +108,23 @@ tghclp run --working-dir ./infrastructure -- plan
 
 Discovery skips generated and dependency-cache directories and reports paths relative to the selected working directory.
 `run` validates the discovered configuration before invoking the selected OpenTofu/Terraform binary without a shell; use `--tf-path` to select the executable explicitly.
+
+To put configuration into the canonical layout, format it:
+
+```sh
+tghclp hcl format --working-dir ./infrastructure
+tghclp hcl format --check --diff --working-dir ./infrastructure
+tghclp hcl format --stdin < terragrunt.hcl
+```
+
+This does what `terragrunt hcl format` does, without Terragrunt, OpenTofu or Terraform installed: every file under the working directory whose name ends in `.hcl` is rewritten with two-space indentation, single spaces between tokens, and the equals signs and trailing comments of consecutive lines aligned. Only whitespace changes. The output is the same, byte for byte, as Terragrunt's, which is checked against the reference formatter on every file of the parity corpus.
+
+- `--check` changes nothing and exits 1 when a file needs formatting. `--diff` prints the change as a unified diff and, as in Terragrunt, still makes it unless `--check` is given too.
+- `--file <path>` formats one file, `--exclude-dir <name>` skips a directory, and `--stdin` formats standard input to standard output. `.terragrunt-cache`, `.boilerplate` and `.terragrunt-stack` are never entered.
+- A file that does not parse is reported with the place parsing stopped and left as it is; the rest are still formatted, and the command exits 1.
+- Inline functions are kept exactly as written, since their bodies are JavaScript, not HCL.
+
+The same formatter is exported as `formatHcl(source)`, which throws `HclSyntaxError` for source that does not parse, and `formatHclTokens(source)`, which works on tokens alone and never refuses.
 
 To see what a configuration actually evaluates to — after `include` merging, `locals`, function calls, and `dependency` resolution — render it:
 
@@ -185,6 +203,11 @@ Function evaluation is implemented as named operations using `@jowharshamshiri/o
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+Two source files are ports of code under other licences, and stay under them:
+
+- `src/hcl-format.ts` is a port of the formatter and scanner of [hashicorp/hcl](https://github.com/hashicorp/hcl) (Copyright IBM Corp.), and is subject to the [Mozilla Public License 2.0](https://mozilla.org/MPL/2.0/). Its source is in this repository.
+- `src/unified-diff.ts` is a port of the Go project's `internal/diff` (Copyright The Go Authors), under its [BSD-style licence](https://go.dev/LICENSE).
 
 This is a community-supported project and is not affiliated with Gruntworks, Inc. or the Terragrunt project. Contributions are welcome — bug reports, feature ideas, and pull requests all help.
 

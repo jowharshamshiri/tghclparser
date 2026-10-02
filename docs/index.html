@@ -392,6 +392,7 @@ publishDiagnostics(fileUri, document.getDiagnostics());</code></pre></div>
             <tr><td>tghclp apply --all</td><td>terragrunt run-all apply</td></tr>
             <tr><td>tghclp run -- &lt;command&gt;</td><td>terragrunt run -- &lt;command&gt;</td></tr>
             <tr><td>tghclp hcl validate</td><td>terragrunt hcl validate</td></tr>
+            <tr><td>tghclp hcl format</td><td>terragrunt hcl format</td></tr>
             <tr><td>tghclp stack generate</td><td>terragrunt stack generate</td></tr>
           </tbody>
         </table>
@@ -399,7 +400,7 @@ publishDiagnostics(fileUri, document.getDiagnostics());</code></pre></div>
           <thead><tr><th>Command</th><th>Purpose</th></tr></thead>
           <tbody>
             <tr><td>hcl validate</td><td>Recursively validate supported HCL and JSON configurations.</td></tr>
-            <tr><td>hcl format</td><td>Format HCL with the selected OpenTofu or Terraform binary.</td></tr>
+            <tr><td>hcl format</td><td>Rewrite every <code>.hcl</code> file into the canonical layout, exactly as <code>terragrunt hcl format</code> does and with no other tool installed. <code>--check</code> reports without changing, <code>--diff</code> prints the change, <code>--file</code> names one file, <code>--exclude-dir</code> skips a directory, <code>--stdin</code> formats standard input. A file that does not parse is reported and left alone.</td></tr>
             <tr><td>find, fd</td><td>Discover unit and stack configurations.</td></tr>
             <tr><td>list, ls</td><td>List configurations as text, a tree, or DOT.</td></tr>
             <tr><td>dag graph</td><td>Print the resolved configuration graph in DOT form.</td></tr>
@@ -550,6 +551,8 @@ tghclp run --tf-path terraform --working-dir ./app -- apply</code></pre></div>
           <tr><td>DiagnosticsProvider</td><td>Computes schema and reference diagnostics.</td></tr>
           <tr><td>HoverProvider</td><td>Computes markup content at a token.</td></tr>
           <tr><td>LinkProvider</td><td>Resolves navigable links in a document.</td></tr>
+          <tr><td>formatHcl</td><td>Formats source into the canonical layout, as <code>terragrunt hcl format</code> does. Throws <code>HclSyntaxError</code> for source that does not parse. Only whitespace changes; inline functions are kept as written.</td></tr>
+          <tr><td>formatHclTokens</td><td>The same layout computed from tokens alone, which never refuses source, as <code>hclwrite.Format</code> does not.</td></tr>
         </tbody></table>
 
         <h2>Primary types</h2>
