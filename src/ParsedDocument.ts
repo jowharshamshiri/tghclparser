@@ -8,6 +8,7 @@ import type { FunctionContext, FunctionDefinition, ResolvedReference, RuntimeVal
 import { Token } from './model';
 import type { ModuleFileError, ModuleVariable } from './module-variables';
 import { parse as tg_parse, SyntaxError } from './parser';
+import type { RemoteSourceErrorCode } from './remote-errors';
 import type { ParserTracerEvent } from './parser';
 import { CompletionsProvider } from './providers/CompletionsProvider';
 import { DiagnosticsProvider } from './providers/DiagnosticsProvider';
@@ -48,12 +49,59 @@ export type ModuleVariablesState =
 		 * not parse, rather than a value this does not enumerate, such as `merge(...)`.
 		 */
 		inheritedInputsProblem?: string;
+		/** Set when the module was fetched from a remote source into the cache rather than read in place. */
+		remote?: {
+			/** How messages and hovers name the module: the source without credentials plus its version or commit. */
+			label: string;
+			/** The cache entry holding the module's files. */
+			entryDir: string;
+			/** What the source resolved to. */
+			resolved: { commit?: string; version?: string };
+		};
 	}
 	| {
 		status: 'unavailable';
 		/** Why the module or its inputs could not be determined, as the diagnostic states it. */
 		reason: string;
 		/** True when the `terraform { source }` involved is in this document, so the diagnostic can sit on it. */
+		sourceInThisFile: boolean;
+	}
+	| {
+		status: 'loading';
+		/** The remote source being fetched, credentials removed. */
+		sourceText: string;
+		/** True when the `terraform { source }` is in this document rather than in an included configuration. */
+		sourceInThisFile: boolean;
+	}
+	| {
+		status: 'disabled';
+		/** `setting` when remote fetching is switched off, `untrusted` when the workspace is not trusted. */
+		reason: 'setting' | 'untrusted';
+		/** How to enable fetching, worded by the host of the language service. */
+		message: string;
+		/** The remote source that was not fetched, credentials removed. */
+		sourceText: string;
+		/** True when the `terraform { source }` is in this document rather than in an included configuration. */
+		sourceInThisFile: boolean;
+	}
+	| {
+		status: 'fetchFailed';
+		/** Why the fetch failed, credentials removed, as the diagnostic states it. */
+		reason: string;
+		/** The failure's code, for callers that act on it. */
+		code: RemoteSourceErrorCode;
+		/** The remote source that could not be fetched, credentials removed. */
+		sourceText: string;
+		/** True when the `terraform { source }` is in this document rather than in an included configuration. */
+		sourceInThisFile: boolean;
+	}
+	| {
+		status: 'unsupported';
+		/** Why the source's form is not fetched, as the diagnostic states it. */
+		reason: string;
+		/** The source, credentials removed. */
+		sourceText: string;
+		/** True when the `terraform { source }` is in this document rather than in an included configuration. */
 		sourceInThisFile: boolean;
 	}
 	| {
@@ -890,6 +938,17 @@ export class ParsedDocument {
 	public getIncludeBlockTokens(): Token[] {
 		const root = this.tokens[0];
 		return root?.children.filter(child => child.type === 'block' && child.value === 'include') ?? [];
+	}
+
+	/**
+	 * @param name a root attribute such as `terraform_binary`.
+	 * @returns its value when this document assigns it a string literal, else undefined.
+	 */
+	public getRootAttributeLiteral(name: string): string | undefined {
+		const root = this.tokens[0];
+		const assignment = root?.children.find(token => token.type === 'assignment' && token.getDisplayText() === name);
+		const value = assignment?.children.find(child => child.type !== 'root_assignment_identifier');
+		return value?.type === 'string_lit' ? String(value.value) : undefined;
 	}
 
 	/** @returns the root `inputs = …` assignment token of this document, or undefined when there is none. */

@@ -108,13 +108,14 @@ const maximumDefaultLength = 120;
 
 /**
  * Splits a module source the way go-getter does: an optional forced getter prefix such as `git::`, the repository,
- * a `//subdirectory` inside it, and a `?ref=` query. Leading slashes in the subdirectory are dropped, so the common
- * `modules/x///` form names the module itself rather than the filesystem root.
+ * a `//subdirectory` inside it, and the `ref`, `version` and `depth` query parameters. Leading slashes in the
+ * subdirectory are dropped, so the common `modules/x///` form names the module itself rather than the filesystem
+ * root.
  *
  * @param source the source as written or evaluated.
- * @returns the parts; `subdirectory` is empty when there is none.
+ * @returns the parts; `subdirectory` is empty when there is none, and `parameters` lists every query key given.
  */
-export function splitModuleSource(source: string): {repository: string; subdirectory: string; ref?: string; forced?: string} {
+export function splitModuleSource(source: string): {repository: string; subdirectory: string; ref?: string; version?: string; depth?: string; parameters: string[]; forced?: string} {
 	let value = source.trim();
 	let forced: string | undefined;
 	const forcedMatch = value.match(/^([a-z][a-z0-9+.-]*):\:/i);
@@ -134,7 +135,15 @@ export function splitModuleSource(source: string): {repository: string; subdirec
 		repository = value.slice(0, separator);
 		subdirectory = value.slice(separator + 2).replace(/^\/+/, '');
 	}
-	return {repository, subdirectory, ref: query.get('ref') || undefined, forced};
+	return {
+		repository,
+		subdirectory,
+		ref: query.get('ref') || undefined,
+		version: query.get('version') || undefined,
+		depth: query.get('depth') || undefined,
+		parameters: [...new Set(query.keys())],
+		forced
+	};
 }
 
 /**
@@ -192,7 +201,7 @@ export async function readModuleVariables(moduleDir: string): Promise<ModuleVari
 			const label = block.children?.find((child: any) => child.type === 'parameter');
 			if (!label) continue;
 			const name = String(label.value);
-			if (seen.has(name)) continue;
+			if (seen.has(name) || !/^[A-Za-z_][A-Za-z0-9_-]*$/.test(name)) continue;
 			seen.add(name);
 			variables.push(readVariable(block, name, file, content));
 		}

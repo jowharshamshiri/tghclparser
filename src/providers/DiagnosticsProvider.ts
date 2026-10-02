@@ -64,15 +64,29 @@ export class DiagnosticsProvider {
 			diagnostics.push(this.diagnostic(anchor, `Local module source not found: ${state.moduleDir}`, DiagnosticSeverity.Warning));
 			return;
 		}
+		if (state.status === 'loading') return;
+		if (state.status === 'disabled') {
+			diagnostics.push(this.diagnostic(anchor, `Remote module source is not fetched: ${state.message}`, DiagnosticSeverity.Hint));
+			return;
+		}
+		if (state.status === 'unsupported') {
+			diagnostics.push(this.diagnostic(anchor, `Module source is not fetched: ${state.reason}`, DiagnosticSeverity.Hint));
+			return;
+		}
+		if (state.status === 'fetchFailed') {
+			diagnostics.push(this.diagnostic(anchor, `Module source could not be fetched: ${state.reason}`, DiagnosticSeverity.Warning));
+			return;
+		}
 
 		const unitDir = path.dirname(URI.parse(document.getUri()).fsPath);
-		const moduleName = path.relative(unitDir, state.moduleDir) || '.';
+		const moduleName = state.remote?.label ?? (path.relative(unitDir, state.moduleDir) || '.');
+		const fileName = (file: string) => state.remote ? `${state.remote.label} › ${path.basename(file)}` : path.relative(unitDir, file);
 		// A module file that does not parse may declare any variable, so no key can be called undeclared. Required
 		// variables and value shapes are still checked: what was read is still true.
 		for (const unparsed of state.unparsed) {
 			diagnostics.push(this.diagnostic(
 				anchor,
-				`Module file ${path.relative(unitDir, unparsed.file)} does not parse (${unparsed.message}); the variables it declares are unknown, so undeclared inputs are not reported`,
+				`Module file ${fileName(unparsed.file)} does not parse (${unparsed.message}); the variables it declares are unknown, so undeclared inputs are not reported`,
 				DiagnosticSeverity.Warning
 			));
 		}

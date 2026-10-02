@@ -138,8 +138,8 @@ variable "region" {
 	});
 
 	it('treats a trailing triple slash as no subdirectory', () => {
-		expect(splitModuleSource('../../modules/vpc-ipam///')).to.deep.equal({ repository: '../../modules/vpc-ipam', subdirectory: '', ref: undefined, forced: undefined });
-		expect(splitModuleSource('git::https://example.com/repo.git//modules/app?ref=v1')).to.deep.equal({ repository: 'https://example.com/repo.git', subdirectory: 'modules/app', ref: 'v1', forced: 'git' });
+		expect(splitModuleSource('../../modules/vpc-ipam///')).to.deep.include({ repository: '../../modules/vpc-ipam', subdirectory: '', ref: undefined, forced: undefined });
+		expect(splitModuleSource('git::https://example.com/repo.git//modules/app?ref=v1')).to.deep.include({ repository: 'https://example.com/repo.git', subdirectory: 'modules/app', ref: 'v1', forced: 'git' });
 	});
 
 	it('keeps the first declaration of a name repeated across files', async () => {

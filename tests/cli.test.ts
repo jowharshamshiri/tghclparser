@@ -154,6 +154,90 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(root, {recursive: true, force: true});
 	});
 
+	it('fetches a registry module source for inspect', async function () {
+		this.timeout(20000);
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-inspect-remote-')));
+		const repository = path.join(root, 'repo');
+		await fs.mkdir(path.join(repository, 'modules', 'vpc'), {recursive: true});
+		await fs.writeFile(path.join(repository, 'modules', 'vpc', 'variables.tf'), 'variable "name" {\n  type = string\n}\nvariable "cidr" {\n  type = string\n  default = "10.0.0.0/16"\n}\n');
+		for (const args of [['init', '-q'], ['config', 'user.email', 'test@example.invalid'], ['config', 'user.name', 'tghclp-test'], ['add', '.'], ['commit', '-qm', 'fixture'], ['tag', 'v1.2.0']]) {
+			const result = spawnSync('git', args, {cwd: repository, encoding: 'utf8', shell: false});
+			expect(result.status).to.equal(0, result.stderr);
+		}
+		const server = createServer((request, response) => {
+			if (request.url === '/.well-known/terraform.json') {
+				response.writeHead(200, {'content-type': 'application/json'});
+				return response.end(JSON.stringify({'modules.v1': '/v1/modules/'}));
+			}
+			if (request.url === '/v1/modules/acme/vpc/aws/versions') {
+				response.writeHead(200, {'content-type': 'application/json'});
+				return response.end(JSON.stringify({modules: [{versions: [{version: '1.2.0'}]}]}));
+			}
+			if (request.url === '/v1/modules/acme/vpc/aws/1.2.0/download') {
+				response.writeHead(204, {'x-terraform-get': `git::file://${repository}//modules/vpc?ref=v1.2.0`});
+				return response.end();
+			}
+			response.writeHead(404);
+			response.end();
+		});
+		await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+		try {
+			const address = server.address();
+			if (address === null || typeof address === 'string') throw new Error('registry test server did not expose a TCP port');
+			const unitDir = path.join(root, 'live', 'app');
+			await fs.mkdir(unitDir, {recursive: true});
+			await fs.writeFile(path.join(unitDir, 'terragrunt.hcl'), `terraform { source = "tfr://127.0.0.1:${address.port}/acme/vpc/aws?version=~> 1.0" }\ninputs = { nam = "typo" }\n`);
+			const cli = path.resolve('dist/cli.cjs');
+			const env = {...process.env, TGHCLPARSER_CACHE_DIR: path.join(root, 'cache'), TGHCLP_INSECURE_REGISTRY_HOSTS: '127.0.0.1'};
+			const fetched = await new Promise<{status: number | null; stdout: string; stderr: string}>((resolve, reject) => {
+				const child = spawn(process.execPath, [cli, 'inspect', '--json', '--working-dir', unitDir], {env});
+				let stdout = '';
+				let stderr = '';
+				child.stdout.on('data', chunk => { stdout += String(chunk); });
+				child.stderr.on('data', chunk => { stderr += String(chunk); });
+				child.on('error', reject);
+				child.on('close', status => resolve({status, stdout, stderr}));
+			});
+			expect(fetched.status).to.equal(0, fetched.stderr);
+			const view = JSON.parse(fetched.stdout);
+			expect(view.moduleVariables.status).to.equal('loaded');
+			expect(view.moduleVariables.remote.label).to.equal(`tfr://127.0.0.1:${address.port}/acme/vpc/aws@1.2.0`);
+			expect(view.moduleVariables.variables.map((variable: {name: string}) => variable.name)).to.deep.equal(['name', 'cidr']);
+			expect(view.moduleVariables.moduleDir.startsWith(path.join(root, 'cache'))).to.equal(true);
+			expect(view.diagnostics.map((diagnostic: {message: string}) => diagnostic.message)).to.deep.equal([
+				`Input "nam" is not declared by module tfr://127.0.0.1:${address.port}/acme/vpc/aws@1.2.0`,
+				'Missing required module inputs: name'
+			]);
+		} finally {
+			await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+			await fs.rm(root, {recursive: true, force: true});
+		}
+	});
+
+	it('clears the module cache and nothing else under its root', async () => {
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-cache-clear-')));
+		const cacheDir = path.join(root, 'cache');
+		await fs.mkdir(path.join(cacheDir, 'modules', 'entry', 'files'), {recursive: true, mode: 0o700});
+		await fs.chmod(cacheDir, 0o700);
+		await fs.writeFile(path.join(cacheDir, 'modules', 'entry', 'meta.json'), '{}');
+		await fs.writeFile(path.join(cacheDir, 'keep.txt'), 'not ours');
+		try {
+			const cli = path.resolve('dist/cli.cjs');
+			const env = {...process.env, TGHCLPARSER_CACHE_DIR: cacheDir};
+			const cleared = spawnSync(process.execPath, [cli, 'cache', 'clear'], {env, encoding: 'utf8'});
+			expect(cleared.status).to.equal(0, cleared.stderr);
+			expect(cleared.stdout.trim()).to.equal(`Cleared the module cache at ${cacheDir}`);
+			expect(fsSync.existsSync(path.join(cacheDir, 'modules'))).to.equal(false);
+			expect(await fs.readFile(path.join(cacheDir, 'keep.txt'), 'utf8')).to.equal('not ours');
+
+			const missing = spawnSync(process.execPath, [cli, 'cache'], {env, encoding: 'utf8'});
+			expect(missing.status).to.equal(1);
+			expect(missing.stderr.trim()).to.equal('Usage: tghclp cache clear');
+		} finally {
+			await fs.rm(root, {recursive: true, force: true});
+		}
+	});
+
 	it('inspects what it can when an include is missing and exits 2', async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-inspect-missing-'));
 		await fs.writeFile(path.join(root, 'terragrunt.hcl'), 'include "root" { path = "missing.hcl" }\nlocals { x = unknown_function() }\n');

@@ -198,10 +198,49 @@ variable "ipam" {
 		}
 	});
 
-	it('is silent for a remote source', async () => {
+	it('leaves remote sources alone in a workspace that was never told about remote modules', async () => {
+		for (const source of ['tfr:///terraform-aws-modules/vpc/aws?version=5.0.0', 'git::https://host.example/repo.git?ref=v1', 'hg::https://host.example/repo', 'tfr://not a source']) {
+			const document = await openUnit(unit(`"${source}"`, '  anything = true'));
+			expect(document.getModuleVariables(), source).to.equal(undefined);
+			expect(document.getDiagnostics(), source).to.deep.equal([]);
+		}
+	});
+
+	it('reports a remote source as not fetched in an untrusted workspace, whatever the setting', async () => {
+		workspace.configureRemoteModules({ enabled: true, trusted: false });
 		const document = await openUnit(unit('"tfr:///terraform-aws-modules/vpc/aws?version=5.0.0"', '  anything = true'));
-		expect(document.getModuleVariables()).to.equal(undefined);
-		expect(moduleMessages(document)).to.deep.equal([]);
+		expect(document.getModuleVariables()).to.deep.include({ status: 'disabled', reason: 'untrusted', sourceText: 'tfr:///terraform-aws-modules/vpc/aws?version=5.0.0', sourceInThisFile: true });
+		const diagnostics = document.getDiagnostics();
+		expect(diagnostics.map(diagnostic => [diagnostic.message, diagnostic.severity])).to.deep.equal([
+			['Remote module source is not fetched: fetching remote modules needs a trusted workspace', DiagnosticSeverity.Hint]
+		]);
+		expect(diagnostics[0].range.start).to.deep.equal({ line: 1, character: 11 });
+		const hover = await document.getHoverInfo({ line: 4, character: 2 });
+		expect(hover?.value).to.include('is not fetched: fetching remote modules needs a trusted workspace');
+	});
+
+	it('names the setting when the workspace is trusted but remote modules are off', async () => {
+		workspace.configureRemoteModules({ enabled: false, trusted: true, disabledMessage: 'turn remote modules on in settings' });
+		const document = await openUnit(unit('"tfr:///terraform-aws-modules/vpc/aws"', '  anything = true'));
+		expect(document.getModuleVariables()).to.deep.include({ status: 'disabled', reason: 'setting', message: 'turn remote modules on in settings' });
+		expect(moduleMessages(document)).to.deep.equal(['Remote module source is not fetched: turn remote modules on in settings']);
+	});
+
+	it('names the form of a source it does not fetch', async () => {
+		workspace.configureRemoteModules({ enabled: true, trusted: true });
+		const document = await openUnit(unit('"hg::https://host.example/repo"', '  anything = true'));
+		expect(document.getModuleVariables()).to.deep.include({ status: 'unsupported' });
+		expect(document.getDiagnostics().map(diagnostic => [diagnostic.message, diagnostic.severity])).to.deep.equal([
+			['Module source is not fetched: hg:: sources are not fetched by the language service', DiagnosticSeverity.Hint]
+		]);
+	});
+
+	it('does not show a credential written into a source', async () => {
+		workspace.configureRemoteModules({ enabled: false, trusted: false });
+		const document = await openUnit(unit('"git::https://user:s3cr3t@host.example/repo.git"', '  anything = true'));
+		const serialised = JSON.stringify([document.getModuleVariables(), document.getDiagnostics(), (await document.getHoverInfo({ line: 4, character: 2 }))?.value]);
+		expect(serialised).not.to.include('s3cr3t');
+		expect(serialised).to.include('https://***@host.example/repo.git');
 	});
 
 	it('warns on a local source directory that does not exist', async () => {

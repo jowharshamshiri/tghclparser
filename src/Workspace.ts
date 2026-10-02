@@ -6,9 +6,12 @@ import { URI } from 'vscode-uri';
 
 import type { FunctionContext, FunctionDefinition, TerragruntConfig, Token } from './model';
 import { createDependencyConfig, createIncludeConfig, TreeNode } from './model';
+import { classifyModuleSource, redactSource, requestKey } from './module-source';
 import { isLocalSource, ModuleVariableCache, splitModuleSource } from './module-variables';
 import type { ModuleVariables } from './module-variables';
 import type { ModuleVariablesState } from './ParsedDocument';
+import type { RemoteModuleCheckout, RemoteModuleOptions } from './remote-modules';
+import { RemoteModuleStore } from './remote-modules';
 import { ParsedDocument } from './ParsedDocument';
 import { Schema } from './Schema';
 import { expandTerragruntGlob } from './functions/terragrunt_glob';
@@ -17,6 +20,35 @@ import { expandTerragruntGlob } from './functions/terragrunt_glob';
 function isFileSystemError(error: unknown): error is NodeJS.ErrnoException {
 	return error instanceof Error && typeof (error as NodeJS.ErrnoException).code === 'string'
 		&& typeof (error as NodeJS.ErrnoException).syscall === 'string';
+}
+
+/**
+ * Looks an executable up on `PATH` without running it, which is how Terragrunt chooses between `tofu` and
+ * `terraform` when nothing names the binary.
+ *
+ * @param name the executable's name, without an extension.
+ * @param env the environment whose `PATH` is searched.
+ * @param platform decides the list separator, and on Windows the extensions tried and the variable's spelling.
+ * @returns true when a directory on `PATH` holds a file of that name that may be executed.
+ */
+async function isOnPath(name: string, env: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): Promise<boolean> {
+	const windows = platform === 'win32';
+	const variable = windows ? Object.keys(env).find(key => key.toUpperCase() === 'PATH') ?? 'PATH' : 'PATH';
+	const directories = (env[variable] ?? '').split(windows ? ';' : ':').filter(Boolean);
+	const extensions = windows ? (env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean) : [''];
+	for (const directory of directories) {
+		for (const extension of extensions) {
+			const candidate = path.join(directory, name + extension);
+			try {
+				if (!(await fs.stat(candidate)).isFile()) continue;
+				if (!windows) await fs.access(candidate, fs.constants.X_OK);
+				return true;
+			} catch (error) {
+				if (!isFileSystemError(error)) throw error;
+			}
+		}
+	}
+	return false;
 }
 
 /**
@@ -55,6 +87,38 @@ interface ConfigRelationships {
 	reads: string[];
 }
 
+/**
+ * Whether, and how, the workspace fetches remote module sources. A workspace that was never given a policy does
+ * not look at remote sources at all: a unit naming one has no module state and no diagnostics about it.
+ */
+export interface RemoteModulePolicy {
+	/** True when the user has switched remote fetching on. */
+	enabled: boolean;
+	/** True when the workspace is trusted; nothing is fetched otherwise, whatever `enabled` says. */
+	trusted: boolean;
+	/** How the host of the language service tells the user to switch fetching on, shown while it is off. */
+	disabledMessage?: string;
+	/**
+	 * The host `tfr:///` means, in place of the registry of the binary Terragrunt would run;
+	 * `TG_TF_DEFAULT_REGISTRY_HOST` in the environment wins.
+	 */
+	defaultRegistryHost?: string;
+}
+
+/** What recomputing a unit's module state needs, kept so it can be recomputed when a fetch lands. */
+interface PendingUnit {
+	/** The document instance that asked; a replacement registers itself. */
+	doc: ParsedDocument;
+	/** The unit's include blocks. */
+	includes: { path: Token; block: Token }[];
+	/** The resolved URIs of those includes, in the same order. */
+	includePaths: string[];
+	/** The directory the unit's paths resolve against. */
+	unitDir: string;
+}
+
+const defaultDisabledMessage = 'remote module sources are not fetched unless remote module support is enabled';
+
 export class Workspace {
 	private documents: Map<string, ParsedDocument>;
 	/** URI-level aggregate used by APIs that do not carry an originating unit. */
@@ -65,6 +129,18 @@ export class Workspace {
 	private schema: Schema = Schema.getInstance();
 	private configTreeRoot: TreeNode<TerragruntConfig> | undefined;
 	private moduleVariables = new ModuleVariableCache();
+	private remoteModules = new RemoteModuleStore();
+	/** Undefined until {@link configureRemoteModules} is called, and remote sources are then left alone. */
+	private remotePolicy: RemoteModulePolicy | undefined;
+	private remoteEnvironment: NodeJS.ProcessEnv = process.env;
+	/** The binary Terragrunt runs when nothing names one, looked up once per configuration. */
+	private defaultBinary: Promise<string> | undefined;
+	/** Units waiting for a fetch, by request key; only the instance still registered as the document is updated. */
+	private pendingRemote = new Map<string, Map<string, PendingUnit>>();
+	private landingRemote = new Map<string, Promise<void>>();
+	/** Units whose state last came from the remote store, by URI, so clearing the cache can fetch them again. */
+	private remoteUnits = new Map<string, PendingUnit>();
+	private moduleListeners = new Set<(uri: string) => void>();
 
 	public constructor() {
 		this.documents = new Map();
@@ -639,7 +715,42 @@ export class Workspace {
 			doc.setModuleVariables(undefined);
 			return;
 		}
+		this.remoteUnits.delete(uri);
 		doc.setModuleVariables(await this.moduleVariablesFor(doc, includes, includePaths, unitDir));
+	}
+
+	/**
+	 * Sets whether remote module sources are fetched and how. Until this is called a unit naming a remote source has
+	 * no module state, so a host that does not offer remote modules reports nothing about them. Memoised failures
+	 * and host decisions are forgotten, since new settings may change them; documents already added keep their
+	 * state until they are added again.
+	 *
+	 * @param policy whether fetching is on and the workspace trusted.
+	 * @param options how the store fetches; omitted fields keep the store's defaults.
+	 */
+	public configureRemoteModules(policy: RemoteModulePolicy, options: RemoteModuleOptions = {}): void {
+		this.remotePolicy = { ...policy };
+		this.remoteEnvironment = options.env ?? process.env;
+		this.defaultBinary = undefined;
+		this.remoteModules.configure(options);
+	}
+
+	/**
+	 * Registers a listener for module state that arrives after a fetch, when the unit's diagnostics have already
+	 * been recomputed and the host should publish them again.
+	 *
+	 * @param listener called with the unit's URI.
+	 * @returns a handle that removes the listener.
+	 */
+	public onModuleVariablesChanged(listener: (uri: string) => void): { dispose(): void } {
+		this.moduleListeners.add(listener);
+		return { dispose: () => { this.moduleListeners.delete(listener); } };
+	}
+
+	/** Resolves once every fetch in flight has landed and its units have been updated. */
+	public async remoteModulesSettled(): Promise<void> {
+		while (this.landingRemote.size > 0) await Promise.allSettled([...this.landingRemote.values()]);
+		await this.remoteModules.settled();
 	}
 
 	/**
@@ -647,9 +758,11 @@ export class Workspace {
 	 * (see {@link mergedConfigurations}). The first of them, in merge priority, that sets `terraform { source }`
 	 * names the module, and the literal `inputs` keys of the others count towards its required variables.
 	 *
-	 * Every outcome is explicit: a remote source is not checked and yields no state; a configuration or source that
-	 * cannot be determined, or a module that cannot be read, yields `unavailable` with the reason. Anything else that
-	 * goes wrong is a defect and propagates.
+	 * Every outcome is explicit: a remote source yields no state until {@link configureRemoteModules} has been
+	 * called; after that it is fetched in the background and reported as `loading` until it lands, `disabled` while
+	 * fetching is off, `fetchFailed` when it fails and `unsupported` when its form is not fetched; a configuration
+	 * or source that cannot be determined, or a module that cannot be read, yields `unavailable` with the reason.
+	 * Anything else that goes wrong is a defect and propagates.
 	 */
 	private async moduleVariablesFor(
 		doc: ParsedDocument,
@@ -678,7 +791,10 @@ export class Workspace {
 		const sourceInThisFile = owner === doc;
 
 		const resolution = await this.resolveModuleSource(this.findTerraformSourceToken(owner)!, owner.getUri(), unitDir);
-		if (resolution.kind === 'remote') return undefined;
+		if (resolution.kind === 'remote') {
+			if (this.remotePolicy === undefined) return undefined;
+			return this.remoteModuleVariablesFor(this.remotePolicy, resolution.sourceText, sourceInThisFile, merged.configurations, { doc, includes, includePaths, unitDir });
+		}
 		if (resolution.kind === 'unresolvable') {
 			return { status: 'unavailable', reason: `the module source could not be resolved: ${resolution.reason}`, sourceInThisFile };
 		}
@@ -693,11 +809,31 @@ export class Workspace {
 			if (!isFileSystemError(error)) throw error;
 			return { status: 'unavailable', reason: `module ${resolution.moduleDir} could not be read: ${error.message}`, sourceInThisFile };
 		}
+		return {
+			status: 'loaded',
+			moduleDir: resolution.moduleDir,
+			sourceText: resolution.sourceText,
+			sourceInThisFile,
+			variables: module.variables,
+			files: module.files,
+			unparsed: module.unparsed,
+			...this.inheritedInputs(doc, merged.configurations, unitDir)
+		};
+	}
 
+	/**
+	 * The `inputs` keys the configurations merged into a unit already set, which count towards the module's
+	 * required variables.
+	 */
+	private inheritedInputs(doc: ParsedDocument, configurations: ParsedDocument[], unitDir: string): {
+		inheritedInputKeys: Set<string>;
+		inheritedInputsKnown: boolean;
+		inheritedInputsProblem?: string;
+	} {
 		const inheritedInputKeys = new Set<string>();
 		let inheritedInputsKnown = true;
 		let inheritedInputsProblem: string | undefined;
-		for (const configuration of merged.configurations) {
+		for (const configuration of configurations) {
 			if (configuration === doc) continue;
 			if (configuration.getAST() === null) {
 				inheritedInputsKnown = false;
@@ -708,18 +844,162 @@ export class Workspace {
 			if (keys === undefined) inheritedInputsKnown = false;
 			else for (const key of keys) inheritedInputKeys.add(key);
 		}
+		return { inheritedInputKeys, inheritedInputsKnown, inheritedInputsProblem };
+	}
+
+	/**
+	 * The state of a unit whose module comes from a remote source. A source already fetched this session is read
+	 * from the cache at once; otherwise the fetch starts in the background, the unit is registered to be updated
+	 * when it lands, and the state is `loading` meanwhile. Fetching only happens when the policy allows it.
+	 */
+	private async remoteModuleVariablesFor(
+		policy: RemoteModulePolicy,
+		sourceText: string,
+		sourceInThisFile: boolean,
+		configurations: ParsedDocument[],
+		unit: PendingUnit
+	): Promise<ModuleVariablesState> {
+		const shown = redactSource(sourceText);
+		const source = classifyModuleSource(sourceText, { defaultRegistryHost: await this.registryHostFor(policy, configurations), origin: 'authored' });
+		if (source.kind === 'other') return { status: 'unsupported', reason: source.reason, sourceText: shown, sourceInThisFile };
+		if (source.kind === 'local') return { status: 'unsupported', reason: `${shown} is not a form the language service recognises`, sourceText: shown, sourceInThisFile };
+		if (!policy.trusted) {
+			return { status: 'disabled', reason: 'untrusted', message: 'fetching remote modules needs a trusted workspace', sourceText: shown, sourceInThisFile };
+		}
+		if (!policy.enabled) {
+			return { status: 'disabled', reason: 'setting', message: policy.disabledMessage ?? defaultDisabledMessage, sourceText: shown, sourceInThisFile };
+		}
+		this.remoteUnits.set(unit.doc.getUri(), unit);
+		const request = requestKey(source);
+		const known = this.remoteModules.peek(request);
+		if (known && 'checkout' in known) return this.loadedFromCheckout(known.checkout, shown, sourceInThisFile, configurations, unit);
+		if (known) return { status: 'fetchFailed', reason: known.failed.message, code: known.failed.code, sourceText: shown, sourceInThisFile };
+
+		let pending = this.pendingRemote.get(request);
+		if (!pending) {
+			pending = new Map();
+			this.pendingRemote.set(request, pending);
+		}
+		pending.set(unit.doc.getUri(), unit);
+		if (!this.landingRemote.has(request)) {
+			const landing = this.remoteModules.resolve(source)
+				.then(() => undefined, () => undefined)
+				.then(() => this.landRemote(request))
+				.finally(() => { this.landingRemote.delete(request); });
+			this.landingRemote.set(request, landing);
+		}
+		return { status: 'loading', sourceText: shown, sourceInThisFile };
+	}
+
+	private async loadedFromCheckout(
+		checkout: RemoteModuleCheckout,
+		sourceText: string,
+		sourceInThisFile: boolean,
+		configurations: ParsedDocument[],
+		unit: PendingUnit
+	): Promise<ModuleVariablesState> {
+		let module: ModuleVariables;
+		try {
+			module = await this.moduleVariables.get(checkout.moduleDir);
+		} catch (error) {
+			if (!isFileSystemError(error)) throw error;
+			return { status: 'unavailable', reason: `fetched module ${checkout.label} could not be read: ${error.message}`, sourceInThisFile };
+		}
 		return {
 			status: 'loaded',
-			moduleDir: resolution.moduleDir,
-			sourceText: resolution.sourceText,
+			moduleDir: checkout.moduleDir,
+			sourceText,
 			sourceInThisFile,
 			variables: module.variables,
 			files: module.files,
 			unparsed: module.unparsed,
-			inheritedInputKeys,
-			inheritedInputsKnown,
-			inheritedInputsProblem
+			remote: { label: checkout.label, entryDir: checkout.entryDir, resolved: checkout.resolved },
+			...this.inheritedInputs(unit.doc, configurations, unit.unitDir)
 		};
+	}
+
+	/**
+	 * Updates every unit waiting on a request once its fetch has settled, then tells the listeners. A unit whose
+	 * document has since been replaced or removed is skipped: the replacement registered itself, or nothing is
+	 * open to show the result.
+	 *
+	 * @param request the request key whose fetch settled.
+	 */
+	private async landRemote(request: string): Promise<void> {
+		const pending = this.pendingRemote.get(request);
+		this.pendingRemote.delete(request);
+		if (!pending) return;
+		for (const [uri, unit] of pending) {
+			if (this.documents.get(uri) !== unit.doc) continue;
+			await this.refreshRemoteUnit(uri, unit);
+		}
+	}
+
+	/**
+	 * Recomputes a unit's module state from what the store now holds, sets it, and tells the listeners. A failure is
+	 * shown as `unavailable` on the unit rather than thrown, since no caller is waiting on it.
+	 *
+	 * @param uri the unit's URI.
+	 * @param unit what recomputing the state needs.
+	 */
+	private async refreshRemoteUnit(uri: string, unit: PendingUnit): Promise<void> {
+		let state: ModuleVariablesState | undefined;
+		try {
+			state = await this.moduleVariablesFor(unit.doc, unit.includes, unit.includePaths, unit.unitDir);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			state = { status: 'unavailable', reason: `the fetched module could not be applied: ${redactSource(message)}`, sourceInThisFile: false };
+		}
+		unit.doc.setModuleVariables(state);
+		for (const listener of this.moduleListeners) {
+			try {
+				listener(uri);
+			} catch {}
+		}
+	}
+
+	/**
+	 * Deletes every fetched module from the per-user cache, then fetches again for each open unit whose module is
+	 * remote. Each such unit is told twice through {@link onModuleVariablesChanged}: once as it goes back to
+	 * `loading`, so stale diagnostics are withdrawn, and again when its fetch lands. Host decisions are kept.
+	 *
+	 * @returns the cache root that was cleared.
+	 * @throws {RemoteSourceError} `CacheWrite` when the cache cannot be cleared.
+	 */
+	public async clearRemoteModuleCache(): Promise<string> {
+		await this.remoteModulesSettled();
+		const root = await this.remoteModules.clearCache();
+		this.moduleVariables.invalidate();
+		for (const [uri, unit] of [...this.remoteUnits]) {
+			if (this.documents.get(uri) !== unit.doc) {
+				this.remoteUnits.delete(uri);
+				continue;
+			}
+			await this.refreshRemoteUnit(uri, unit);
+		}
+		return root;
+	}
+
+	/**
+	 * The registry `tfr:///` names, chosen as Terragrunt chooses it: the environment's
+	 * `TG_TF_DEFAULT_REGISTRY_HOST`, else the policy's default, else the registry of the binary Terragrunt would
+	 * run. That binary is `TG_TF_PATH`, else the literal `terraform_binary` of the merged configurations, else
+	 * `tofu` when it is on `PATH` and `terraform` when it is not. Terragrunt uses the Terraform registry only for
+	 * Terraform and OpenTofu's for anything else; it learns which a binary is by running it, where this goes by its
+	 * name, so that opening a file runs nothing.
+	 *
+	 * @param policy the policy in force.
+	 * @param configurations the configurations merged into the unit, highest priority first.
+	 * @returns the registry host.
+	 */
+	private async registryHostFor(policy: RemoteModulePolicy, configurations: ParsedDocument[]): Promise<string> {
+		const environment = this.remoteEnvironment;
+		if (environment.TG_TF_DEFAULT_REGISTRY_HOST) return environment.TG_TF_DEFAULT_REGISTRY_HOST;
+		if (policy.defaultRegistryHost) return policy.defaultRegistryHost;
+		const configured = configurations.map(configuration => configuration.getRootAttributeLiteral('terraform_binary')).find(Boolean);
+		this.defaultBinary ??= isOnPath('tofu', environment).then(found => found ? 'tofu' : 'terraform');
+		const binary = environment.TG_TF_PATH || environment.TERRAGRUNT_TFPATH || configured || await this.defaultBinary;
+		return path.basename(binary).toLowerCase().includes('terraform') ? 'registry.terraform.io' : 'registry.opentofu.org';
 	}
 
 	/**

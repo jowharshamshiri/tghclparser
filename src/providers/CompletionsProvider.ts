@@ -1,6 +1,7 @@
 import type { CompletionItem, Position } from 'vscode-languageserver';
 import { CompletionItemKind, InsertTextFormat, MarkupKind } from 'vscode-languageserver';
 
+import { escapeMarkdownText, markdownCode } from '../markdown';
 import type { AttributeDefinition, BlockDefinition, Token } from '../model';
 import type { ModuleType, ModuleVariableTypeKind } from '../module-variables';
 import { anyType, moduleTypeKind } from '../module-variables';
@@ -401,8 +402,8 @@ export class CompletionsProvider {
 	 */
 	private inputItem(name: string, typeText: string, kind: ModuleVariableTypeKind | undefined, optional: boolean, description?: string, defaultText?: string): CompletionItem {
 		const lines: string[] = [];
-		if (description) lines.push(description, '');
-		if (defaultText !== undefined) lines.push(`Default: \`${defaultText}\``);
+		if (description) lines.push(escapeMarkdownText(description), '');
+		if (defaultText !== undefined) lines.push(`Default: ${markdownCode(defaultText)}`);
 		return {
 			label: name,
 			kind: CompletionItemKind.Property,

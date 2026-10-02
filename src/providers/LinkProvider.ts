@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import type { DocumentLink } from 'vscode-languageserver';
 import { URI } from 'vscode-uri';
 
@@ -23,12 +25,8 @@ export class LinkProvider {
 				links.push(this.link(token, await this.document.getWorkspace().resolveIncludePath(token, this.document.getUri())));
 			}
 			if (token.parent.value === 'source' && block?.type === 'block' && block.value === 'terraform') {
-				const workspace = this.document.getWorkspace();
-				const resolution = await workspace.resolveModuleSource(token, this.document.getUri());
-				if (resolution.kind === 'local') {
-					const target = await workspace.moduleEntryFile(resolution.moduleDir);
-					if (target) links.push(this.link(token, URI.file(target).toString()));
-				}
+				const target = await this.moduleEntryFile(token);
+				if (target) links.push(this.link(token, URI.file(target).toString()));
 			}
 		}
 
@@ -38,7 +36,25 @@ export class LinkProvider {
 			}
 		}
 
-		await Promise.all(token.children.map(child => this.collect(child, links)));
+		for (const child of token.children) await this.collect(child, links);
+	}
+
+	/**
+	 * The file a `source` links to: from the module state when this document's source has been loaded, which also
+	 * covers a fetched module, else by resolving the source as a local path.
+	 */
+	private async moduleEntryFile(token: Token): Promise<string | undefined> {
+		const state = this.document.getModuleVariables();
+		if (state?.status === 'loaded' && state.sourceInThisFile) {
+			for (const name of ['variables.tf', 'main.tf']) {
+				const match = state.files.find(file => path.basename(file) === name);
+				if (match) return match;
+			}
+			return state.files[0];
+		}
+		const workspace = this.document.getWorkspace();
+		const resolution = await workspace.resolveModuleSource(token, this.document.getUri());
+		return resolution.kind === 'local' ? workspace.moduleEntryFile(resolution.moduleDir) : undefined;
 	}
 
 	private link(token: Token, target: string): DocumentLink {

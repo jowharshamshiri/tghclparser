@@ -3,6 +3,7 @@
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import {spawnSync} from 'node:child_process';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -11,8 +12,12 @@ import type { DependencyRequest } from './Evaluator';
 import { convertToRuntimeValue, makeObjectValue } from './functions/utils';
 import type { RuntimeValue, ValueType } from './model';
 import type { FunctionDefinition } from './model';
+import { ambientCredentials } from './credentials';
+import { isArchiveSource } from './module-source';
 import { isLocalSource, splitModuleSource } from './module-variables';
 import { ParsedDocument } from './ParsedDocument';
+import { createRegistryResolver } from './registry';
+import { RemoteModuleStore } from './remote-modules';
 import { Workspace } from './Workspace';
 import { parse } from './parser';
 
@@ -145,6 +150,7 @@ function rootUsage(): string {
 		'  render           Print an evaluated configuration as JSON',
 		'  inspect          Print what the language service holds for a configuration as JSON',
 		'  info print       Print evaluation context',
+		'  cache clear      Delete the fetched remote modules from the per-user cache',
 		'',
 		'OpenTofu shortcuts:',
 		'  apply destroy force-unlock import init output plan refresh show state test validate',
@@ -186,6 +192,41 @@ function renderUsage(): string {
 	].join('\n');
 }
 
+/**
+ * The help text for `tghclp cache`.
+ *
+ * @returns the text.
+ */
+function cacheUsage(): string {
+	return [
+		'Usage: tghclp cache clear',
+		'',
+		'Deletes the remote modules fetched for inspect and the language service from the per-user cache, so the',
+		'next use fetches them again. The cache is TGHCLPARSER_CACHE_DIR when set, else the platform cache directory.',
+		'',
+		'Options:',
+		'  --help  Show this help'
+	].join('\n');
+}
+
+/**
+ * Runs `tghclp cache`, whose one subcommand clears the remote module cache.
+ *
+ * @param argv the arguments after `cache`.
+ * @returns 0 once the cache is cleared or help is shown.
+ * @throws when the subcommand is missing or unknown, or the cache cannot be cleared.
+ */
+async function cacheCommand(argv: string[]): Promise<number> {
+	if (argv.includes('--help') || argv.includes('-h')) {
+		console.log(cacheUsage());
+		return 0;
+	}
+	if (argv.length !== 1 || argv[0] !== 'clear') throw new Error(`Usage: tghclp cache clear${argv.length > 0 ? ` (got: ${argv.join(' ')})` : ''}`);
+	const root = await new RemoteModuleStore({ env: process.env }).clearCache();
+	console.log(`Cleared the module cache at ${root}`);
+	return 0;
+}
+
 /** @returns the help text for `tghclp inspect`. */
 function inspectUsage(): string {
 	return [
@@ -204,7 +245,11 @@ function inspectUsage(): string {
 		'  --config <file>         Configuration filename (default: terragrunt.hcl)',
 		'  --workspace-root <path> Workspace root, as the editor would open it (default: the enclosing',
 		'                          Git repository, else the working directory)',
-		'  --help                  Show this help'
+		'  --help                  Show this help',
+		'',
+		'A registry module source (tfr://) is fetched with the ambient registry credentials into the per-user',
+		'module cache, so its variables are shown. TGHCLP_INSECURE_REGISTRY_HOSTS names registry hosts,',
+		'comma-separated, reached over plain HTTP and by address, for a local registry.'
 	].join('\n');
 }
 
@@ -212,7 +257,8 @@ function inspectUsage(): string {
  * Reproduces what the language service sees for one configuration: a ParsedDocument added to a Workspace, then its
  * diagnostics, module variables, inline functions, links and relationships. A failure while adding the document,
  * such as an include that does not exist, is reported alongside the state the document still has, and the command
- * exits 2 so the output cannot be mistaken for a complete view.
+ * exits 2 so the output cannot be mistaken for a complete view. A registry module source is fetched before
+ * printing, so its state is `loaded` or `fetchFailed`, never `loading`.
  *
  * @param argv the arguments after `inspect`.
  * @returns 0 on success, 2 when the document could not be fully added.
@@ -276,10 +322,22 @@ async function inspectDocument(argv: string[]): Promise<number> {
 	const uri = pathToFileURL(realConfig).toString();
 	const workspace = new Workspace();
 	workspace.setWorkspaceRoot(pathToFileURL(workspaceRoot).toString());
+	const insecureHosts = (process.env.TGHCLP_INSECURE_REGISTRY_HOSTS ?? '').split(',').map(host => host.trim()).filter(Boolean);
+	workspace.configureRemoteModules(
+		{ enabled: true, trusted: true },
+		{
+			env: process.env,
+			credentials: ambientCredentials({ env: process.env, homeDir: os.homedir() }),
+			approveHost: async () => true,
+			allowedHosts: insecureHosts,
+			registry: createRegistryResolver({ allowInsecureHosts: insecureHosts })
+		}
+	);
 	const document = new ParsedDocument(workspace, uri, await fs.readFile(realConfig, 'utf8'));
 	let workspaceError: string | undefined;
 	try {
 		await workspace.addDocument(document);
+		await workspace.remoteModulesSettled();
 	} catch (error) {
 		workspaceError = error instanceof Error ? error.message : String(error);
 	}
@@ -1516,10 +1574,6 @@ function backendDelete(backend: string, config: Record<string, unknown>, working
 	throw new Error(`Unsupported remote state backend: ${backend}`);
 }
 
-function isArchiveSource(source: string): boolean {
-	return /\.(zip|tar|tgz|tar\.gz)(?:\?.*)?$/i.test(source);
-}
-
 async function verifyExtractedTree(root: string): Promise<void> {
 	const canonicalRoot = await fs.realpath(root);
 	const walk = async (directory: string): Promise<void> => {
@@ -2174,6 +2228,7 @@ async function main(argv: string[]): Promise<number> {
 	if (argv[0] === 'backend') return backendCommand(argv.slice(1));
 	if (argv[0] === 'render') return renderConfig(argv.slice(1));
 	if (argv[0] === 'inspect') return inspectDocument(argv.slice(1));
+	if (argv[0] === 'cache') return cacheCommand(argv.slice(1));
 	if (argv[0] === 'run') {
 		if (argv.includes('--help')) {
 			console.log(executionUsage());

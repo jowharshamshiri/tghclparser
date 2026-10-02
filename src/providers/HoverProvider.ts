@@ -6,6 +6,7 @@ import { URI } from 'vscode-uri';
 
 import type { AttributeDefinition, BlockDefinition, FunctionDefinition, TokenType, ValueType } from '../model';
 import { Token } from '../model';
+import { escapeMarkdownText, markdownCode, markdownFence } from '../markdown';
 import type { ModuleType } from '../module-variables';
 import { anyType, formatModuleType, summarizeModuleType } from '../module-variables';
 import type { ModuleVariablesState, ParsedDocument } from '../ParsedDocument';
@@ -747,16 +748,16 @@ export class HoverProvider {
 
 		const nested = keyPath.length > 1;
 		const contents: string[] = [`## Input: ${keyPath.filter(segment => segment !== '[]').join('.')}`, ''];
-		if (description) contents.push(description, '', '---', '');
+		if (description) contents.push(escapeMarkdownText(description), '', '---', '');
 		contents.push('### Details', '');
 		const formatted = variable.type ? formatModuleType(type) : variable.typeText ?? 'any';
-		if (!formatted.includes('\n')) contents.push(`- *Type:* \`${formatted}\``);
+		if (!formatted.includes('\n')) contents.push(`- *Type:* ${markdownCode(formatted)}`);
 		contents.push(`- *Required:* ${optional ? 'No' : 'Yes'}`);
-		if (defaultText !== undefined) contents.push(`- *Default:* \`${defaultText}\``);
+		if (defaultText !== undefined) contents.push(`- *Default:* ${markdownCode(defaultText)}`);
 		if (!nested && variable.sensitive !== undefined) contents.push(`- *Sensitive:* ${variable.sensitive ? 'Yes' : 'No'}`);
 		if (!nested && variable.nullable !== undefined) contents.push(`- *Nullable:* ${variable.nullable ? 'Yes' : 'No'}`);
 		contents.push(`- *Declared in:* ${this.fileLink(doc, variable.file, variable.range.start.line)}`);
-		if (formatted.includes('\n')) contents.push('', '*Type:*', '', '```hcl', formatted, '```');
+		if (formatted.includes('\n')) contents.push('', '*Type:*', '', markdownFence(formatted, 'hcl'));
 		return contents;
 	}
 
@@ -776,15 +777,32 @@ export class HoverProvider {
 			return contents;
 		}
 		if (state.status === 'missing') {
-			contents.push(`Module directory not found: \`${state.moduleDir}\``);
+			contents.push(`Module directory not found: ${markdownCode(state.moduleDir)}`);
 			return contents;
 		}
+		if (state.status === 'loading') {
+			contents.push(`Fetching ${markdownCode(state.sourceText)}…`);
+			return contents;
+		}
+		if (state.status === 'disabled') {
+			contents.push(`Remote module source ${markdownCode(state.sourceText)} is not fetched: ${escapeMarkdownText(state.message)}`);
+			return contents;
+		}
+		if (state.status === 'unsupported') {
+			contents.push(`Module source ${markdownCode(state.sourceText)} is not fetched: ${escapeMarkdownText(state.reason)}`);
+			return contents;
+		}
+		if (state.status === 'fetchFailed') {
+			contents.push(`Module source ${markdownCode(state.sourceText)} could not be fetched: ${escapeMarkdownText(state.reason)}`);
+			return contents;
+		}
+		if (state.remote) contents.push(`Fetched from ${markdownCode(state.remote.label)} (cached)`, '');
 		for (const unparsed of state.unparsed) {
-			contents.push(`*\`${this.displayPath(doc, unparsed.file)}\` does not parse, so this list may be incomplete: ${unparsed.message}*`, '');
+			contents.push(`*${markdownCode(this.displayPath(doc, unparsed.file))} does not parse, so this list may be incomplete: ${escapeMarkdownText(unparsed.message)}*`, '');
 		}
 		const entry = ['variables.tf', 'main.tf'].map(name => state.files.find(file => path.basename(file) === name)).find(Boolean) ?? state.files[0];
 		const label = this.displayPath(doc, state.moduleDir);
-		contents.push(entry ? `[${label}](${URI.file(entry).toString()})` : `\`${label}\``, '');
+		contents.push(entry ? `[${label}](${URI.file(entry).toString()})` : markdownCode(label), '');
 		if (state.variables.length === 0) {
 			contents.push('*The module declares no variables.*');
 			return contents;
@@ -792,8 +810,8 @@ export class HoverProvider {
 		contents.push('| Input | Type | Required | Default |', '| --- | --- | --- | --- |');
 		for (const variable of state.variables) {
 			const type = variable.type ? summarizeModuleType(variable.type) : variable.typeText ?? 'any';
-			const fallback = variable.defaultText !== undefined ? `\`${this.tableCell(variable.defaultText)}\`` : '';
-			contents.push(`| \`${variable.name}\` | \`${this.tableCell(type)}\` | ${variable.hasDefault ? 'No' : 'Yes'} | ${fallback} |`);
+			const fallback = variable.defaultText !== undefined ? this.tableCell(markdownCode(variable.defaultText)) : '';
+			contents.push(`| ${markdownCode(variable.name)} | ${this.tableCell(markdownCode(type))} | ${variable.hasDefault ? 'No' : 'Yes'} | ${fallback} |`);
 		}
 		return contents;
 	}
@@ -819,13 +837,19 @@ export class HoverProvider {
 	}
 
 	/**
-	 * Relative to the workspace root when the target lies inside it, else relative to the unit's directory.
+	 * For a file of a fetched module, the module's label and the file's name; otherwise relative to the workspace
+	 * root when the target lies inside it, else relative to the unit's directory.
 	 *
 	 * @param doc the document being hovered.
 	 * @param target absolute path of the file or directory to name.
-	 * @returns the relative path, or `.` for the unit's own directory.
+	 * @returns the label, or the relative path, or `.` for the unit's own directory.
 	 */
 	private displayPath(doc: ParsedDocument, target: string): string {
+		const state = doc.getModuleVariables();
+		if (state?.status === 'loaded' && state.remote && (target === state.moduleDir || target.startsWith(state.moduleDir + path.sep))) {
+			const inside = path.relative(state.moduleDir, target);
+			return inside ? `${state.remote.label} › ${inside}` : state.remote.label;
+		}
 		const root = doc.getWorkspace().getWorkspaceRoot();
 		if (root) {
 			const fromRoot = path.relative(URI.parse(root).fsPath, target);
