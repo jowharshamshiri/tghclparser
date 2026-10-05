@@ -87,3 +87,16 @@ jobs:
 
       - name: Test the packed package
         run: npm run test:package -- --reporter github-actions
+
+  package-result:
+    name: package
+    needs: package
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check every Node version passed
+        run: |
+          echo "package matrix: $RESULT"
+          test "$RESULT" = success
+        env:
+          RESULT: ${{ needs.package.result }}
