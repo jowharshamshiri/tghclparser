@@ -2310,12 +2310,12 @@ const invokedAsCLI = ((): boolean => {
 	const entry = process.argv[1];
 	if (!entry) return false;
 	// The built file, whatever it is called on disk.
-	if (/[/\\]cli\.(?:js|cjs|ts)$/u.test(entry)) return true;
+	if (/[/\\]cli\.(?:js|cjs|mjs|ts)$/u.test(entry)) return true;
 	// A bin link npm made. Resolving it lands back on this file; comparing the
 	// resolved paths is what makes the check independent of the name.
 	try {
 		const resolved = fsSync.realpathSync(entry);
-		return /[/\\]cli\.(?:js|cjs|ts)$/u.test(resolved);
+		return /[/\\]cli\.(?:js|cjs|mjs|ts)$/u.test(resolved);
 	} catch {
 		return false;
 	}

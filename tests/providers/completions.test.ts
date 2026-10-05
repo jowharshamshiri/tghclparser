@@ -32,6 +32,7 @@ const moduleDocument = (ownKeys: string[] = []): ParsedDocument => documentFor('
 		sourceText: '../../modules/app',
 		sourceInThisFile: true,
 		files: ['/repo/modules/app/variables.tf'],
+		unparsed: [],
 		inheritedInputKeys: new Set(),
 		inheritedInputsKnown: true,
 		variables: [
