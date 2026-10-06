@@ -122,7 +122,7 @@ locals { reference = REFERENCE }`;
 	});
 
 	it('completes generated component metadata used by stack autoinclude blocks', async () => {
-		const { text, position } = sourceAtCursor('unit "network" { source = "../network" path = "network" }\nlocals { target = unit.network.<|>path }');
+		const { text, position } = sourceAtCursor('unit "network" {\n  source = "../network"\n  path = "network"\n}\nlocals { target = unit.network.<|>path }');
 		const items = await provider.getCompletions(text, position, null, documentFor('file:///repo/terragrunt.stack.hcl'));
 		expect(items.map(item => item.label)).to.deep.equal(['path', 'name']);
 	});

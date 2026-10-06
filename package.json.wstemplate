@@ -58,7 +58,7 @@
 		"format": "prettier --write \"src/**/*.ts\"",
 		"lint": "eslint --fix",
 		"lint:ci": "eslint",
-		"parser": "peggy --cache --trace --format 'es' --dts --dependency \"{Schema}:./Schema.ts\" --output src/parser.js grammar.peggy",
+		"parser": "peggy --cache --trace --format 'es' --dts --dependency \"{Schema}:./Schema.ts\" --dependency \"{scanJsBody}:./js-body.ts\" --output src/parser.js grammar.peggy",
 		"prepare": "npm run build",
 		"prepublishOnly": "npm test && npm run lint",
 		"pretest": "npm run build",

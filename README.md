@@ -71,6 +71,7 @@ Declarations are inherited through `include`, so shared helpers live in `root.hc
 - Dependency output discovery from state
 - Hover and document-link providers
 - Inline function signatures in completion, hover, and call diagnostics
+- Formatting into Terragrunt's canonical layout, with no external formatter
 - Completion, hover and checking of `inputs` against the variables of the module `terraform { source }` names
 
 ### Remote module sources
@@ -107,6 +108,29 @@ tghclp run --working-dir ./infrastructure -- plan
 
 Discovery skips generated and dependency-cache directories and reports paths relative to the selected working directory.
 `run` validates the discovered configuration before invoking the selected OpenTofu/Terraform binary without a shell; use `--tf-path` to select the executable explicitly.
+
+To put configuration into the canonical layout, format it:
+
+```sh
+tghclp hcl format --working-dir ./infrastructure
+tghclp hcl format --check --diff --working-dir ./infrastructure
+tghclp hcl format --stdin < terragrunt.hcl
+```
+
+This does what `terragrunt hcl format` does, without Terragrunt, OpenTofu or Terraform installed: every file under the working directory whose name ends in `.hcl` is rewritten with two-space indentation, single spaces between tokens, and the equals signs and trailing comments of consecutive lines aligned. Only whitespace changes.
+
+It is a replacement for that command, not a likeness of it. It takes the same flags and environment variables, formats and skips the same files, prints the same diffs, exits with the same status, and refuses exactly the files Terragrunt refuses. That is checked against Terragrunt itself: the layout on every file of the parity corpus, and the scanner, the syntax check, the path filters and the command as a whole on recorded adversarial input, a part of which this package's own tests replay.
+
+- `--check` changes nothing and exits 1 when a file needs formatting. `--diff` prints the change as a unified diff and, as in Terragrunt, still makes it unless `--check` is given too.
+- `--file <path>` formats one file and `--stdin` formats standard input to standard output. `--exclude-dir <name>` skips a directory of that name wherever it is; `.terragrunt-cache`, `.boilerplate` and `.terragrunt-stack` are never entered.
+- `--filter <query>` selects among the files found with Terragrunt's path filters, such as `--filter './apps/**' --filter '!./apps/legacy/**'`. The filters in `.terragrunt-filters` (or `--filters-file`) and the exclusions in `.terragrunt-excludes` apply as they do in Terragrunt. A filter by name, type, dependency or Git history needs Terragrunt's unit discovery and is refused, as Terragrunt refuses it for this command.
+- The flags may be given with one dash or two, a switch may be given a value (`--check=false`), and `TG_CHECK`, `TG_DIFF`, `TG_STDIN`, `TG_FILE`, `TG_EXCLUDE_DIR`, `TG_FILTER` and `TG_WORKING_DIR` set them from the environment. Terragrunt's deprecated names for those variables still work, with a warning, unless `--strict-mode` is given.
+- A file that is not valid HCL is reported and left as it is; the rest are still formatted, and the command exits 1. The report is the HCL parser's own first error: its summary, its detail, and its line and column.
+- Inline functions are kept exactly as written, since their bodies are JavaScript, not HCL.
+
+Two things differ, and only in what is printed: `--help` describes this command in its own words, and where Terragrunt lists every error its parser found in a file, this reports the first.
+
+The same formatter is exported as `formatHcl(source)`, which throws `HclSyntaxError` for source that is not valid HCL, and `formatHclTokens(source)`, which works on tokens alone and never refuses. `findHclSyntaxProblem(source)` is the syntax check on its own: it returns what the HCL parser would report first, or `undefined` for valid source. The language service runs the same check first, so a file Terragrunt would refuse is flagged in the editor with the error Terragrunt's parser gives.
 
 To see what a configuration actually evaluates to — after `include` merging, `locals`, function calls, and `dependency` resolution — render it:
 
@@ -185,6 +209,14 @@ Function evaluation is implemented as named operations using `@jowharshamshiri/o
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+Some source files are ports of other projects' code, and stay under those projects' licences:
+
+- `src/hcl-format.ts`, `src/hcl-scanner.ts` and `src/hcl-syntax.ts` are ports of the formatter, scanner and parser of [hashicorp/hcl](https://github.com/hashicorp/hcl) (Copyright IBM Corp.), and are subject to the [Mozilla Public License 2.0](https://mozilla.org/MPL/2.0/). Their source is in this repository.
+- `src/unified-diff.ts` is a port of the Go project's `internal/diff` (Copyright The Go Authors), under its [BSD-style licence](https://go.dev/LICENSE).
+- `src/grapheme-clusters.ts` and `src/grapheme-table.ts` are a port of [go-textseg](https://github.com/apparentlymart/go-textseg) (Copyright Martin Atkins, MIT), whose table is built from the Unicode Character Database (Copyright Unicode, Inc., [Unicode License v3](https://www.unicode.org/license.txt)).
+- `src/glob.ts` is a port of [gobwas/glob](https://github.com/gobwas/glob) (Copyright Sergey Kamardin, MIT).
+- `src/terragrunt-filter.ts` is a port of the filter query language of [Terragrunt](https://github.com/gruntwork-io/terragrunt) (Copyright Gruntwork, Inc., MIT).
 
 This is a community-supported project and is not affiliated with Gruntworks, Inc. or the Terragrunt project. Contributions are welcome — bug reports, feature ideas, and pull requests all help.
 
