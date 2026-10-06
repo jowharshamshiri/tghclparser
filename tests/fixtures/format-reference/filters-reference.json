@@ -1,0 +1,4557 @@
+{
+ "files": [
+  ".boilerplate/terragrunt.hcl",
+  ".git/x.hcl",
+  ".hidden/terragrunt.hcl",
+  ".terragrunt-cache/x/terragrunt.hcl",
+  ".terragrunt-stack/u/terragrunt.hcl",
+  "app/terragrunt.hcl",
+  "app/tidy.hcl",
+  "app/zzz.hcl",
+  "blank/terragrunt.hcl",
+  "bom/terragrunt.hcl",
+  "broken/terragrunt.hcl",
+  "crlf/terragrunt.hcl",
+  "dir.hcl/inner.hcl",
+  "dup/terragrunt.hcl",
+  "empty/terragrunt.hcl",
+  "ext/main.tf",
+  "ext/terragrunt.hcl.json",
+  "ext/x.HCL",
+  "ext/y.hcl.bak",
+  "f/.h/t.hcl",
+  "f/1/t.hcl",
+  "f/a b/t.hcl",
+  "f/a/b/c/y.hcl",
+  "f/a/b/x.hcl",
+  "f/a/terragrunt.hcl",
+  "f/a/x.hcl",
+  "f/ab/x.hcl",
+  "f/b/terragrunt.hcl",
+  "f/c/a/terragrunt.hcl",
+  "f/top.hcl",
+  "f/x-y/z.hcl",
+  "f/é/t.hcl",
+  "heredoc/terragrunt.hcl",
+  "latin/terragrunt.hcl",
+  "mode/terragrunt.hcl",
+  "names/a.hcl",
+  "names/m.hcl",
+  "names/z.hcl",
+  "node_modules/x.hcl",
+  "nonl/terragrunt.hcl",
+  "other/skip/terragrunt.hcl",
+  "outside-target.hcl",
+  "quirk/-first.hcl",
+  "quirk/.terragrunt-cache",
+  "quirk/z.hcl",
+  "skip/deep/terragrunt.hcl"
+ ],
+ "cases": [
+  {
+   "queries": [
+    ")../",
+    "[b^|.hcl",
+    "../name=...type=\\"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "x!!"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./!|[!a]"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "é\\unit**"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "x.hclname=terragrunt.hcl,y",
+    "{name=*/!!"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    " | ../**/{}/f/.hcl-",
+    " ..=*b",
+    ",/**/"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "unit"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "**.hcla...",
+    "name=",
+    "} | ?a..//"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "terragrunt.hclreading=",
+    "...terragrunt.hcl!!",
+    "a bx.hcla "
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "a b]b"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "ax}",
+    "...x.hcl|"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "[",
+    "*/1unit./,[!a]"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "^|tt,y",
+    "y[!a]!(-",
+    "{**/ /[!a]"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    ")*/1.hcl.hcla b"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "reading=",
+    "a^"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "é",
+    "tx=",
+    "y"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    ".hcl(a b)b"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "yreading=name=^",
+    "={b"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{}/f/terragrunt.hclterragrunt.hclname=.hclexternal=true"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "unit",
+    " | ]}{}/f//**../",
+    "..a b]"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    ".{a,b}unit"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    ")c | "
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!!}{a,b}-=",
+    "{ | [ab]/**"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "**,y",
+    "[ab]=c}reading=",
+    "../\\name=}x\\"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "[|../*}type="
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "***,",
+    "**/byunit"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "unita^../unit",
+    "{a,b}1..-./,",
+    "?a"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "name=",
+    "{external=truet"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "external=true!!{a,b}t"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "/,t-"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{\\(1)",
+    "[ab][ab]"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "t../?[{",
+    "./,!!!!,/**"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    ")*type={}/f/"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "t!"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{a,b}/**external=true1^"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "name=*/(*terragrunt.hclc"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "y|reading=",
+    "{[!a]...x}",
+    ".hclreading=.hcl*/./external=true"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    " external=true.**"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "\\",
+    "name=.**{\\reading=",
+    " {"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "x"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{}/f/",
+    "[ab]..}\\"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{",
+    "]"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    ",)-"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "...},",
+    "{}/f/]^}"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "=",
+    "(![!a]!",
+    "\\*/"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "[!a]unit1.hcl^/**"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{...)",
+    "x{"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "reading=^",
+    "y | {a b"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    " | !.**/"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "c\\!"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    " | t["
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!!"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "reading=="
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "="
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "[!a]...y"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    ",",
+    "})",
+    "...\\external=truea"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "}./!!!!y)"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "|[ab]?t"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    " | type=terragrunt.hcl.hcl{"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "[ab]..!***",
+    "aa[!a]{a,b}"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "=**1a b"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    ")../?unit"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{}/f/t{}/f/*/{}/f/",
+    "unity]*/-é"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    ".."
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "y|/[ab]terragrunt.hclé"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "y",
+    "...x"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "}{a,b}",
+    "1a b!!external=true!!"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "=/,"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "(=\\,.hcl"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "type=.."
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "/a b[.hcl"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "[ab]terragrunt.hcl {a,b}"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "?{-"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    ".hclname="
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "type=reading=xé | ["
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    ",(é"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!*/.c",
+    "c**//**^./"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    ",\\***external=true}",
+    "ctype="
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "b{}/f/.//[reading="
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    ",type=)x.hcl...",
+    "{é]x.hcl*/("
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "**/",
+    "(ya[/?",
+    "={a,b}1"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "external=true"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "/!!...^b",
+    "c*,",
+    "..,[reading=y"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "a b\\..(\\"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "c{}/f/*..",
+    "](\\**/"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "?*c.."
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "-name=aterragrunt.hcl",
+    "at",
+    "."
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    ")(...-unitb"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "**/"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/.h/t.hcl",
+    "f/1/t.hcl",
+    "f/a b/t.hcl",
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl",
+    "f/ab/x.hcl",
+    "f/b/terragrunt.hcl",
+    "f/c/a/terragrunt.hcl",
+    "f/top.hcl",
+    "f/x-y/z.hcl",
+    "f/é/t.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "x.hcl**../)b("
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "-external=true../t"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "]"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    ".terragrunt.hcl",
+    "!**//unit..)"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./\\",
+    "{a,b}[b",
+    "[...**/{}/f/.hclx.hcl"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "x.hcl | *x.hcl]."
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "/é("
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "x",
+    "**.hcl\\é",
+    " | {}/f/=b"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    ".hclterragrunt.hcl1",
+    "x.hcl1/**{}"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{a,b}unit",
+    " | x.hcl{!...\\",
+    "=x./../-"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    " | {"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "[!a]**/ | "
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./x"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "*/terragrunt.hclc]"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "x.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "t,!y",
+    "**/,1?.\\"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "../a bb",
+    "]./\\|/**",
+    "x"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "}][!a]"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "/**external=true?/[*"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "?",
+    "terragrunt.hcl-"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "-"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "yreading=b!!/^"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{a,b}unit?c./terragrunt.hcl",
+    ")",
+    "a.."
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "*/../...",
+    "**reading=]!"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "*/../{a,b}!{a,b}é",
+    "external=true{}/f/t{}/f/",
+    ".hclx"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "é",
+    " | ..!",
+    "a b"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "c"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    ".hcl{x..type=**"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "**a!terragrunt.hcl=[!a]",
+    "!name=terragrunt.hcl",
+    "...{{|/**"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!../",
+    ")1/**t({}/f/",
+    "terragrunt.hclt1}."
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "*/.hcl|]"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "t}[ab]treading=-"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "unitexternal=true="
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "-terragrunt.hcl./ | \\"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "[ab]]té"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "unit*"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "*/?{",
+    "../x.hcl",
+    "a*/*/"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "é[name="
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "external=trueexternal=true!reading=^."
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "..x..."
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "reading=**/c",
+    "./a b",
+    ")reading=.,**."
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    " ",
+    "external=true**/\\-[ab].."
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "type=./**../",
+    "type=[",
+    "type=...name=,y{"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    ".."
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "[!a]**/?../external=true(",
+    "name="
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "[!a]**/(",
+    "\\b[ab]"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "x",
+    ".hcl../",
+    "../({a,b}"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "é.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "[unit=./x",
+    "{a,b}**/|!!!!**/",
+    "*/"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{a,b}",
+    "!"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "\\",
+    "/**-x....hcl",
+    "unitt|.."
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "[xx**/unit?"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "/\\",
+    "name=,areading=b"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "=c",
+    "...}../\\/-",
+    "b*}unit"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "a=1=c{}/f/",
+    "name=",
+    "?- "
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    " ",
+    "[!a]b[!a]"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{ b",
+    "{}/f/-terragrunt.hcltype="
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "**/name=",
+    "(",
+    "]! | "
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "...type=terragrunt.hcl",
+    "**/x.hclreading=a b{}/f/{",
+    "x"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "^[[[\\a"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    ".unit...[name=^"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    ".unit=**/(!"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "*y1./.hcl|"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{}/f/ ...|\\"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "*/}1*/x.hcl"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "! | external=true"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "/**=t*/[!a]"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "unit | ..",
+    "]^{a,b}/?"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "=ya)/**"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!!}"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "../c*../",
+    "external=true"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "x.hcl*{}/f/aé",
+    "x[ab]|a",
+    "x.hclexternal=truey[unit-"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "/ "
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "*/unitname=reading=\\"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "name=é",
+    "b|",
+    "y=./unit-*/"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "....(...*/"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "...{éname=",
+    "}x"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "^{a,b}x(\\!!",
+    "=*/\\a"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "x.hcl!!y../"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "?[!!"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./{a,b}[.hcl",
+    "]"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "type=x("
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "..x**/**[..",
+    ",reading=x/{a,b}\\",
+    "]"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "y |  **"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    ".terragrunt.hcl[[]/**"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "1./(terragrunt.hcl.",
+    "external=trueunit",
+    "?={}/f/"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./reading={a,b}",
+    "{terragrunt.hclb../"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "terragrunt.hcl/**../**/*"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "type=",
+    "-{a,b}é",
+    "x.hcl[!a]a[ab]-"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "unit\\= ",
+    "-./x.hcl"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "1 | a b",
+    "é,-(",
+    "*/"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    ")"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{a,b}=",
+    "={tx!!**",
+    "b"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "[{..../type={"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "name=?="
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "terragrunt.hcl/**/**x.hcl\\"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "*\\}"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "-**/[ab] | ..[ab]"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "terragrunt.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./[!a]=y{a,b}terragrunt.hcl"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    ".a b**external=true.external=true",
+    "*c.",
+    "^..x,)}"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "*/breading=../!",
+    "a b**/[type=",
+    "external=true./*/unit.**"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "reading=\\]"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "]{}/f/x"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "é1"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "terragrunt.hcl",
+    "!!-({"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!! | c"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "=]external=truecx"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "..=!name="
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "*/1"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "?y{}/f/./......"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{{}/f/./,",
+    "*"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "}^x}.name="
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "x1x../",
+    "a b**/",
+    ",[ab]x.hcl...{}/f/?"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    ")**\\.**",
+    "...1.y)"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!!="
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "...a b,x.hcl\\"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{,))yunit"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "ct | "
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "name={}/f/",
+    "é{}/f/[",
+    ",!..?"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "b**/[ab][ab]"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "abé[ab]\\",
+    "a b.hcla"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "^bexternal=truecname=?"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!!/**x1../external=true",
+    "x.hcl("
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "....terragrunt.hcl",
+    "terragrunt.hcl[ab]name="
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "** | {.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "tcxterragrunt.hcl",
+    "[!a][",
+    "unit"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "(a b("
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "...external=true^=terragrunt.hcl"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "1\\"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./a/c",
+    "!{}/f/* | ./.h/a b/?/*"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    ".//c | !!./*.hcl/*a*/?.hcl | ../c/1"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./1/top.hcl/.h/a |{./x=y/{x,y}.hcl}"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!!./a"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!!./.."
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!!./**",
+    "!./b"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/.h/t.hcl",
+    "f/1/t.hcl",
+    "f/a b/t.hcl",
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl",
+    "f/ab/x.hcl",
+    "f/b/terragrunt.hcl",
+    "f/c/a/terragrunt.hcl",
+    "f/top.hcl",
+    "f/x-y/z.hcl",
+    "f/é/t.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "!**/?",
+    "{./top.hcl/./**} | ./**/a b/../ | ./x.hcl/y.hcl",
+    "{./*/../é/a*}"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "a/] | ./a/**/a/.."
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{top.hcl/\\*/{a,b}} | ./a b/x-y"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!!/*.hcl",
+    "./.."
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./a b/b | !{./*.hcl/*.hcl/*} | !./x-y/t*",
+    "{}/f/b/a/b | ../ | .//1/?/*.hcl/t*"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    " ./t*/a/a/|./a b/x.hcl|./top.hcl/."
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    ".//a* |!./terragrunt.hcl/y.hcl/terragrunt.hcl/*.hcl"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{./a b}..."
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{./?/.} |!!./a*/t.hcl/?"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./terragrunt.hcl |!x.hcl/./a/t.hcl",
+    "!1/\\*/a|./é/*"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/é/t.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "{}/f/c/**|!{./é}",
+    "{}/f/x=y/b/é/*a*"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./b |  ../*.hcl/a/é/.h"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./*.hcl|top.hcl/b/?/b"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    ".//a/?/**a/a/ |  {}/f/**/a/x.hcl/ab"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!../x-y/c | .//*a*/top.hcl/../",
+    "!c/]/ |!./t.hcl/**a |{./[a-c]/**a}",
+    "!{./*.hcl/b/1/[ab]}"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    " ./**/c/**"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": [
+    "f/a/b/c/y.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "!./*a*/{a,b}",
+    "../* | {}/f/*.hcl",
+    "{./*.hcl/c} |../**/b"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "../.h/** | ./x.hcl/a/top.hcl"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./*.hcl/*",
+    "!../a b/ab/*.hcl/b | .//?.hcl/*.hcl | ./a b"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!{./c/t*/b}"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/.h/t.hcl",
+    "f/1/t.hcl",
+    "f/a b/t.hcl",
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl",
+    "f/ab/x.hcl",
+    "f/b/terragrunt.hcl",
+    "f/c/a/terragrunt.hcl",
+    "f/top.hcl",
+    "f/x-y/z.hcl",
+    "f/é/t.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "./ab/b/x.hcl/**| ./**a/*"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!{}/f/.."
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/.h/t.hcl",
+    "f/1/t.hcl",
+    "f/a b/t.hcl",
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl",
+    "f/ab/x.hcl",
+    "f/b/terragrunt.hcl",
+    "f/c/a/terragrunt.hcl",
+    "f/top.hcl",
+    "f/x-y/z.hcl",
+    "f/é/t.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "!{}/f/**/c/?.hcl | !!.//a",
+    "{./[ab]/?.hcl} | ./. | !.//t.hcl/[/b",
+    "!{./a/*.hcl/**/x.hcl}"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./a/a b/*/.. |./terragrunt.hcl/**/a"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!{./*/a*/é} | ../a b | {./1/y.hcl} |",
+    "!!/*a*/*",
+    "{./y.hcl/[!a]}"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "... {./?/*.hcl/**a/t.hcl}",
+    "../**a/*/*"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./x.hcl/top.hcl/t.hcl |  {./*.hcl/..}",
+    "{./a*/*.hcl} |./**/**/a/y.hcl",
+    "!!{./b/[a-c]/}"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!{./x.hcl/a/*.hcl}|!{}/f/*.hcl/y.hcl/*|../z.hcl/**"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    ".//a/t*/*.hcl/x-y|{./**a}|!!./**/a*/?.hcl/"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{./*/.h/z.hcl} | !../{x,y}.hcl/é/b/*.hcl | ./?/t.hcl/./1"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{./]}",
+    "./*.hcl/x-y/* |!./*.hcl |.//b/1/a"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{./x.hcl/*a*/x.hcl} | !./a/a b/a/terragrunt.hcl |  {}/f/*"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{}/f/terragrunt.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{}/f/y.hcl/?/top.hcl/x-y | !{}/f/.h/1"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!**/z.hcl/x.hcl/ |!!./1/a/?.hcl |!!./*a*"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!{}/f/c/*.hcl",
+    "1.../**",
+    "./a b/t*/?.hcl/b"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{.//} | {**/.h}"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./*/a/c/.h | {[!a]/1/1}"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!!{}/f/**/a/b/ab|!{}/f/*.hcl/*/?.hcl/.|!!./z.hcl/t*",
+    "../a b/*.hcl/b",
+    "!.//a*/**/t.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    ".//*.hcl/y.hcl/.h/1",
+    "./t*/a/b"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "../*/*"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./t.hcl/a/t*"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./.h/**/a/b | !!{terragrunt.hcl/a b}",
+    "./y.hcl|{**/**/z.hcl/**a}|!!{./a/a*/x-y/c/}"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!!t.hcl/*.hcl/top.hcl/*.hcl | !./b/b/y.hcl/c"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!{./*}"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": [
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "./é/t*/b",
+    "././top.hcl/** |./? |{}/f/a/a/../*.hcl",
+    "!{}/f/x-y/a b/b"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    " ../.."
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!!{}/f/**/a*/?.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./.h/a*/a/top.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!!../top.hcl/?/*a*/y.hcl",
+    "!.h/terragrunt.hcl/c | !{./*.hcl/*.hcl/x.hcl/**} | !./?",
+    " {./t.hcl/[ab]/*a*}"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./*/"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/.h/t.hcl",
+    "f/1/t.hcl",
+    "f/a b/t.hcl",
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl",
+    "f/ab/x.hcl",
+    "f/b/terragrunt.hcl",
+    "f/c/a/terragrunt.hcl",
+    "f/x-y/z.hcl",
+    "f/é/t.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "1...a b/*/1/*"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    " .//a b/*.hcl | {}/f/y.hcl/a/a b"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    " ./*.hcl/1/** | !{./*.hcl/*.hcl/z.hcl}"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    " ./a*/t* | ../*/t*"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "/top.hcl/*.hcl/a |!{}/f/a/z.hcl",
+    "./*.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/top.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "!/** | ./ab/1",
+    "./**/x-y|!./.h/top.hcl|{./[a-c]/a b/a/z.hcl}"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    " {./c/./c/*}",
+    "./*.hcl/*/a | !!{./x-y} !",
+    "...{./x-y/?.hcl}|./a b/**/c/*.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{./*/top.hcl}",
+    "!!./*.hcl/**/**/. | !{}/f/?"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{}/f/*.hcl/*.hcl | !../top.hcl/*.hcl | !./1",
+    "./a b"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "a/é/?",
+    "{./*.hcl/t.hcl/*}",
+    "./a*/*/**a"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!!./top.hcl/*a*/*/* |!!./x.hcl/."
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./t*/a* |{./*/t.hcl/b/.}"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "/*/é"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{./*a*/[ab]//*}"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/a/b/x.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "!./a b/t.hcl/*.hcl | !../ab/"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/.h/t.hcl",
+    "f/1/t.hcl",
+    "f/a b/t.hcl",
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl",
+    "f/ab/x.hcl",
+    "f/b/terragrunt.hcl",
+    "f/c/a/terragrunt.hcl",
+    "f/top.hcl",
+    "f/x-y/z.hcl",
+    "f/é/t.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "{./t*} |!./*//t.hcl..."
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./*/t*",
+    "*/t*/é"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/.h/t.hcl",
+    "f/1/t.hcl",
+    "f/a b/t.hcl",
+    "f/a/terragrunt.hcl",
+    "f/b/terragrunt.hcl",
+    "f/é/t.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "{?/z.hcl}"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!!./**/a/*a* | {./a*/t*/*.hcl}"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./t.hcl/a/**/*"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/.h/t.hcl",
+    "f/1/t.hcl",
+    "f/a b/t.hcl",
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl",
+    "f/ab/x.hcl",
+    "f/b/terragrunt.hcl",
+    "f/c/a/terragrunt.hcl",
+    "f/top.hcl",
+    "f/x-y/z.hcl",
+    "f/é/t.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "./**a/*/1/terragrunt.hcl |  {./1/b/*.hcl/.}"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./.",
+    "!!{terragrunt.hcl/..} | !{./x.hcl/../t.hcl/a}",
+    "!!././*.hcl/*/* | !{./*/.}"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!.//a* | ./[!a]"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    " {}/f/./t.hcl/a/|!./?.hcl/**/terragrunt.hcl/.h|../b",
+    "../top.hcl/b/{a,b}/z.hcl | {}/f/*.hcl | {t.hcl/**/*.hcl}"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{./*/*/y.hcl/*.hcl/}"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    " {}/f/ab/../t.hcl/*.hcl |./a b"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!{./terragrunt.hcl/*.hcl/t*/.h}"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/.h/t.hcl",
+    "f/1/t.hcl",
+    "f/a b/t.hcl",
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl",
+    "f/ab/x.hcl",
+    "f/b/terragrunt.hcl",
+    "f/c/a/terragrunt.hcl",
+    "f/top.hcl",
+    "f/x-y/z.hcl",
+    "f/é/t.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "!{./*.hcl/a/**a}",
+    "!./*/**a |../a/x.hcl/*",
+    "{./1/[a-c]/[ab]/é} |  ./a/y.hcl/a/"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./x.hcl |!./*",
+    "!!{}/f/*"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./a/a/b/ab",
+    "!././*/\\*/**a | !{}/f/**/?/**",
+    " ./ab|!././."
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{./a/*a*}"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!{./**a/*.hcl} | {./b}",
+    "{}/f/[ab]/** |  {././x-y/a}"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./../."
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": [
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "...{.h/a/b} | ../**/é/a | ./1",
+    " ../é/**/t.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{./*.hcl/.h/b}"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./*/a/*.hcl/b"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!{./[ab]} | !!{./*/b/}",
+    "!{}/f/a | !././c/ab",
+    "!./é |  ./a/b/**"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "!{./c/x-y/a/a*}",
+    "{[!a]/*/../[!a]}",
+    "!./z.hcl/1"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./x.hcl/*/.h/terragrunt.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    " {}/f/.",
+    "...{}/f/x-y/",
+    "/1"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!{./b/..}",
+    "!!{./terragrunt.hcl/**a} | !./t*/*/**"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{b/b}"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./top.hcl/",
+    "!./b/*/x.hcl/c | !{./a b} | !{./[!a]}"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    " ./**/1/*/a..."
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!!{}/f/y.hcl",
+    "!../?.hcl/b/ab/"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./*.hcl",
+    ".//terragrunt.hcl/t* | ./t*"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./y.hcl | !{}/f/**/{a,b}/x-y/t*"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./b/.h"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{./a}"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./*",
+    "!!{}/f/t*/a/?.hcl|{}/f/ab/*.hcl/a|./*/?/a*"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/top.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "!{a/*a*/*.hcl/**}|../b/.h",
+    "./é/x-y/.. | !.//]/b/*a*/t*/",
+    "!./é/[!a]/[ab] | ./z.hcl/. | ../*.hcl/**/t*"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    ".///**/* name=a"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!a/b/["
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!{}/f/z.hcl/**a",
+    "{./1/a}"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./*|{./.h/*/t.hcl}",
+    "!{y.hcl}",
+    "!{./a/*/a*} | !{./é}"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    ".//*.hcl/**a/{x,y}.hcl/c | {./**/é}"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./b | !!../*/z.hcl/ab",
+    " {./t.hcl/[ab]/**/[ab]}",
+    "!!{}/f/b/**/**a"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./.h/z.hcl/x-y",
+    "!!{./[ab]/c/**a}"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!../a b/?/é|!!{}/f/b/top.hcl"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!{./t.hcl} | ./**/terragrunt.hcl/*a* | .//*/./b"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!!{./a/1/a/}"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!{}/f/**/*/.h/a |"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "../ab/t.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    " {}/f/../c"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    ".//*/**/**a/.. | .//a !",
+    "{./?} |{./a/[ab]/*a*} |./**a/z.hcl/a"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!!./*.hcl/y.hcl/x-y |  {}/f/*.hcl/b/terragrunt.hcl/",
+    "./[!a]/terragrunt.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./a*/a* | !!./*/*.hcl/x-y",
+    "!./*/*/a* |./a b/**a/a*/.h",
+    " ./x.hcl | !{./**} | !!./z.hcl/*/*a*"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!!./a*|./a/z.hcl/a",
+    "!!./x-y/*.hcl/ |./*.hcl |./a/t*/t*/"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!!./a*"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{./ab/*/[!a]/.h} | ./b/?.hcl/a b"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "../*/**/t.hcl/c |!!./*/b/../*"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./**",
+    "!!{}/f/ab/*.hcl/?/t*|!./*.hcl/*.hcl/*.hcl/|!!./ab/a/a*",
+    "{./*.hcl/t*/?/é/} |!.//b/é/.h"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/.h/t.hcl",
+    "f/1/t.hcl",
+    "f/a b/t.hcl",
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl",
+    "f/ab/x.hcl",
+    "f/b/terragrunt.hcl",
+    "f/c/a/terragrunt.hcl",
+    "f/top.hcl",
+    "f/x-y/z.hcl",
+    "f/é/t.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "!{}/f/terragrunt.hcl/a b/a/*.hcl"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": [
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "./?.hcl/x-y/top.hcl",
+    "!./t.hcl/x.hcl | !!{./../b} | {}/f/*/{a,b}/1"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./*.hcl/. |  ./*.hcl",
+    "./../1/z.hcl | !./top.hcl/1/?.hcl | ./\\*"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/top.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "!!./**/a"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    " ./b/.h"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "^!!./*|./z.hcl/t.hcl/a"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./a b/1/b"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": [
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "{./1/*/**a}"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./b/t.hcl/x.hcl/1"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/.h/t.hcl",
+    "f/1/t.hcl",
+    "f/a b/t.hcl",
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl",
+    "f/ab/x.hcl",
+    "f/b/terragrunt.hcl",
+    "f/c/a/terragrunt.hcl",
+    "f/top.hcl",
+    "f/x-y/z.hcl",
+    "f/é/t.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "^!./terragrunt.hcl/*a*",
+    "!!./z.hcl/**"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    " ./top.hcl/**/** |.//**/../t.hcl/** |!!{}/f/1/a*/*/z.hcl",
+    "t*/x.hcl",
+    "!.//b/[ |!!./a/x.hcl"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./x.hcl/c/1/y.hcl/ |{./*a*/y.hcl}"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!!./b/t.hcl| ./a/a",
+    "!./*.hcl/a |../*a*/x-y/*.hcl | ../t*"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./*.hcl/t.hcl/*",
+    "./.. |./**a/*/**/.."
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!../**/?.hcl/y.hcl",
+    "{a/c}",
+    "!!./1/c/ab/a* | !{}/f/*/**"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    " {./c/1/[!a]}"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!.//../"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/.h/t.hcl",
+    "f/1/t.hcl",
+    "f/a b/t.hcl",
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl",
+    "f/ab/x.hcl",
+    "f/b/terragrunt.hcl",
+    "f/c/a/terragrunt.hcl",
+    "f/top.hcl",
+    "f/x-y/z.hcl",
+    "f/é/t.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "/z.hcl | !c/",
+    "!!{}/f/b/z.hcl/x.hcl/é"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./a*/a",
+    "../a*/*.hcl/z.hcl/** |  {}/f/z.hcl/**/a !",
+    "!{}/f/*.hcl|./t.hcl/.h"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!{}/f/**/a*/* | !!{./?/x.hcl} | !.//c/c",
+    "...{}/f/\\*",
+    " ./]/x-y/?.hcl/b |!{./terragrunt.hcl/**/a}"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "/**a/?.hcl/a",
+    "./é/*/z.hcl/c|./y.hcl/*a*",
+    "./c/x.hcl/y.hcl |/*/a"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./x-y|.//**/*"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./a*/**"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/a b/t.hcl",
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl",
+    "f/ab/x.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "!./t*/*/?/*.hcl|./x.hcl/top.hcl/terragrunt.hcl/c"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!{}/f/*.hcl/ab"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/.h/t.hcl",
+    "f/1/t.hcl",
+    "f/a b/t.hcl",
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl",
+    "f/ab/x.hcl",
+    "f/b/terragrunt.hcl",
+    "f/c/a/terragrunt.hcl",
+    "f/top.hcl",
+    "f/x-y/z.hcl",
+    "f/é/t.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "!!./?/y.hcl/*.hcl/*.hcl",
+    "!*.hcl/*a*/*",
+    "{./x-y/*/y.hcl} |!./*/b"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "..../c/**a |  ./../é/ | ../*.hcl/1"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    " ./x-y/*/.h"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{*}"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/top.hcl"
+   ]
+  },
+  {
+   "queries": [
+    " {./x.hcl/**/c/**a}"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    " /*/c |{}/f/x-y/*.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    ".//a/*/b/top.hcl | !./c/**/**/a | {}/f/a b/ab",
+    "./\\*/ab/*| ./**/**a",
+    "./b/*/z.hcl | !!{./1/c/*/*}"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{}/f/terragrunt.hcl/c/b | !!**/**a/a b/x-y | !.//x-y"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "../*/\\*/top.hcl/*"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./.h/[|.//*/?.hcl"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!**a | !../a b/.h/z.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    " ../**/**/a/a b",
+    "./.h|{./terragrunt.hcl/[a-c]/*/[ab]} name=a",
+    "^!{./1/[ab]/} | {./[!a]/t.hcl/*.hcl/[a-c]}"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./c/c/../*a*"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": [
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "...{./x.hcl/c/t*}|!.//a/**a",
+    "!!?/terragrunt.hcl | ../b/c/1/.",
+    "../t.hcl/y.hcl|/b/x-y/*/?| {*.hcl/*/**/y.hcl}"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    " ./{a,b}/1/{x,y}.hcl/.. | !{}/f/x.hcl | !./*.hcl/a/.h/**"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "x.hcl/terragrunt.hcl/a b/a/",
+    "!./x=y/*/b/a/ | ./a/?/z.hcl | !./x=y"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!../b/terragrunt.hcl/a* |!!{./a*/t.hcl/terragrunt.hcl/{a,b}}"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "../b | ../t.hcl/a/../c"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{./z.hcl}|!.//*a*",
+    "!!./top.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/top.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "./**|!!./*/*.hcl/c|!!{}/f/*/a/"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./*.hcl/top.hcl/a b/t.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!!../b/x-y/",
+    "!!./é|!**a/.",
+    "1... {./*.hcl}"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{}/f/x.hcl/*/?"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./**a/\\*/../x.hcl",
+    "./a",
+    " .//*.hcl | ./**a | !./a*/*.hcl/*.hcl/a"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./a/y.hcl"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "/y.hcl/*/"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    " {./a/a b}",
+    "././z.hcl |!./* |./b",
+    "!!./*.hcl/../?.hcl |  ./a b"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./?",
+    "./c/1/b"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "*/a/top.hcl"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "../? | !!{./*}"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./**/ab/a"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/.h/t.hcl",
+    "f/1/t.hcl",
+    "f/a b/t.hcl",
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl",
+    "f/ab/x.hcl",
+    "f/b/terragrunt.hcl",
+    "f/c/a/terragrunt.hcl",
+    "f/top.hcl",
+    "f/x-y/z.hcl",
+    "f/é/t.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "{}/f/**/x.hcl/.h"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    ".//x-y"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./c/a name=a"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./*.hcl| ./a/a b"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./?.hcl/*.hcl/.. |{}/f/a* |./**/x.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{}/f/c/.h |!../z.hcl/a b"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./**a/?.hcl/a",
+    "../x.hcl/?.hcl/?.hcl/**|./terragrunt.hcl/x-y/**a"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!!/z.hcl | /*/ab/../x.hcl",
+    ".//**/**/*.hcl/"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": [
+    "f/a/b/c/y.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "!!./* | .//a b",
+    "!./a*/b/",
+    "!{}/f/t*/c/top.hcl|!./**/**/?.hcl|./*.hcl/"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/top.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "{./*/.}"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/top.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "{./y.hcl}",
+    "./**/y.hcl/a | {}/f/z.hcl/x-y"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{./a/*/*.hcl/} |{./?} |{./a/*}"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    " {}/f/*.hcl/a",
+    "!{./top.hcl/../t*}"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./x-y/top.hcl/*/"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/.h/t.hcl",
+    "f/1/t.hcl",
+    "f/a b/t.hcl",
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl",
+    "f/ab/x.hcl",
+    "f/b/terragrunt.hcl",
+    "f/c/a/terragrunt.hcl",
+    "f/top.hcl",
+    "f/x-y/z.hcl",
+    "f/é/t.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "!!{}/f/x.hcl/z.hcl | !./*/*/c | !{./*a*/*}"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./t.hcl/a |!/*.hcl/z.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/.h/t.hcl",
+    "f/1/t.hcl",
+    "f/a b/t.hcl",
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl",
+    "f/ab/x.hcl",
+    "f/b/terragrunt.hcl",
+    "f/c/a/terragrunt.hcl",
+    "f/top.hcl",
+    "f/x-y/z.hcl",
+    "f/é/t.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "!./t*/y.hcl/**a"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": [
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "!{./[ab]/**/**/top.hcl}",
+    "!../**/b/**a/terragrunt.hcl"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": [
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "!{*/a b/**}",
+    "!./**|{é/x-y}|!./b",
+    "./t*/terragrunt.hcl/y.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./terragrunt.hcl/ | !../**/c"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/.h/t.hcl",
+    "f/1/t.hcl",
+    "f/a b/t.hcl",
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl",
+    "f/ab/x.hcl",
+    "f/b/terragrunt.hcl",
+    "f/c/a/terragrunt.hcl",
+    "f/top.hcl",
+    "f/x-y/z.hcl",
+    "f/é/t.hcl"
+   ]
+  },
+  {
+   "queries": [
+    " ./**/t*/x-y"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./x-y/**/y.hcl"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": [
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "{}/f/x-y/.h/*/** | /**/*.hcl/** | !{./t.hcl/*.hcl/x.hcl}",
+    "!{}/f/*.hcl/b/]/1/ |!{}/f/**a/* |!.././t*/",
+    "!./a"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    " ./z.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!{}/f/../x.hcl/**/.h|!!{y.hcl/./*.hcl}|!!../x.hcl/**a/?.hcl/a b"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "../top.hcl | !{./..}"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!{**}|{}/f//c/**",
+    "!../t.hcl/a*",
+    "!./a/é/*.hcl/a"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    " ./*.hcl | !!./c | ../../t*/a b",
+    "!{./1}",
+    "!{}/f/top.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "../b/x-y/a/a b name=a"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!../**",
+    "!./a*/*.hcl/?/top.hcl |!{./a/a b/a/a}"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": [
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "!{./..}",
+    "{./1/é/.h}",
+    "!!.//a b/t.hcl/*/t.hcl |.//b/t*/x.hcl/a"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!../b/*/*/x.hcl",
+    " ./.h/*/*/.."
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/.h/t.hcl"
+   ]
+  },
+  {
+   "queries": [
+    " ./1/y.hcl |{./?.hcl/x.hcl}"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{}/f/a|b/terragrunt.hcl/../** | !./*/terragrunt.hcl/"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "../*.hcl | ./../../** | !../*/*.hcl/**"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!!../**/*.hcl/1/** |!./*.hcl/a*/b/ab"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "1... ../**/*/a* | ./ab/**",
+    "./?/*.hcl/1",
+    "!ab/a/*a* | ./a | !{c/terragrunt.hcl}"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{./*/a*/a/[a-c]}",
+    "!./../../**/b",
+    "!{}/f/**"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./x.hcl | ./t*",
+    "a b/top.hcl/**/1"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{./top.hcl} | !a*"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./*.hcl | ./y.hcl/é/**/a*/"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./c | {./[a-c]/a/z.hcl/*} | !./y.hcl",
+    "{./y.hcl/?/**/**} | !{./**/1} | ./?/b/x.hcl/a"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!../a b/*/é/*"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/.h/t.hcl",
+    "f/1/t.hcl",
+    "f/a b/t.hcl",
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl",
+    "f/ab/x.hcl",
+    "f/b/terragrunt.hcl",
+    "f/c/a/terragrunt.hcl",
+    "f/top.hcl",
+    "f/x-y/z.hcl",
+    "f/é/t.hcl"
+   ]
+  },
+  {
+   "queries": [
+    ".//.h/a/*/{x,y}.hcl | ./**",
+    "../1/t.hcl/c..."
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    " {./**/.} | !!./?.hcl/**/]/**",
+    "{./*.hcl/t.hcl/c} | !!././\\* | !{./c/*}",
+    "./t.hcl/** |  ./*/**a/x-y/"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "...!{1/a|b/**/*.hcl}"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./a/**/.h|./.",
+    "!!{./.h/x.hcl}",
+    "./** | {}/f/**/z.hcl/.."
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/.h/t.hcl",
+    "f/1/t.hcl",
+    "f/a b/t.hcl",
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl",
+    "f/ab/x.hcl",
+    "f/b/terragrunt.hcl",
+    "f/c/a/terragrunt.hcl",
+    "f/top.hcl",
+    "f/x-y/z.hcl",
+    "f/é/t.hcl"
+   ]
+  },
+  {
+   "queries": [
+    " {./é/**/[!a]} |  {t*/..}"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    " ./y.hcl/x.hcl/*/? | !./*/*.hcl | !./*.hcl/x.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    " {*.hcl}"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/top.hcl"
+   ]
+  },
+  {
+   "queries": [
+    " {./y.hcl/./.h/[!a]}|{./ab/a*/b}"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./?.hcl/b | /z.hcl/b/a b/*.hcl | !../a*/a b/é",
+    "!./terragrunt.hcl/*/a*/.."
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "1...!!./.h/x-y/z.hcl/terragrunt.hcl | {./*/.h/.h} | !./b/t*/a b/*"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{}/f/top.hcl/**/terragrunt.hcl/*.hcl | !{}/f/t*",
+    "!./*.hcl/b",
+    "!.//*.hcl | {}/f/a b/b"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    ".h|./a b/t*/**/*.hcl|!.//../x-y",
+    " {././[ab]} | ./*.hcl/?/*/..",
+    "{./y.hcl/y.hcl/*a*}"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!/*.hcl/**/?.hcl/b| ../*|!{./t.hcl/.h/[a-c]}",
+    " ./é/.h/**"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./y.hcl/./.",
+    "!{}/f/*/.h/?.hcl name=a",
+    "!./**/"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!!{./?.hcl/?}| {t.hcl/?.hcl/é} |"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{./**a/c} | .//1/"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{}/f/**a/1/a | ./*.hcl/a b/",
+    "./?/* | ./*/* | !{}/f/x-y/é/x=y/.",
+    "!./terragrunt.hcl/1/x-y"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!!terragrunt.hcl/ab/t.hcl/a b !",
+    "./*/*.hcl/*.hcl/ab"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./y.hcl",
+    "!!./t.hcl/]/terragrunt.hcl/?"
+   ],
+   "workingDir": "{}/f/a",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    " {}/f/*.hcl |./../a/*/?.hcl/ name=a",
+    "!{}/f/t.hcl/?/ab/y.hcl |../*.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{./a/?.hcl/c}",
+    "!./**/*.hcl/** | {./a/z.hcl/?.hcl/c} | {}/f/*.hcl/./z.hcl",
+    "{}/f/*.hcl/*.hcl/?.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "ab| {}/f/a b/"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!././*.hcl/top.hcl/t* | ./t.hcl | !{*/z.hcl/a/b}",
+    "!{}/f/**a/a/*a*/b",
+    "!./y.hcl/c/**a/."
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./*/y.hcl/*.hcl/ab/|!./top.hcl/y.hcl/b/**"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/.h/t.hcl",
+    "f/1/t.hcl",
+    "f/a b/t.hcl",
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl",
+    "f/ab/x.hcl",
+    "f/b/terragrunt.hcl",
+    "f/c/a/terragrunt.hcl",
+    "f/top.hcl",
+    "f/x-y/z.hcl",
+    "f/é/t.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "!!../* |  ./t.hcl/*"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "!./?/x-y/?/top.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": [
+    "f/.h/t.hcl",
+    "f/1/t.hcl",
+    "f/a b/t.hcl",
+    "f/a/b/c/y.hcl",
+    "f/a/b/x.hcl",
+    "f/a/terragrunt.hcl",
+    "f/a/x.hcl",
+    "f/ab/x.hcl",
+    "f/b/terragrunt.hcl",
+    "f/c/a/terragrunt.hcl",
+    "f/top.hcl",
+    "f/x-y/z.hcl",
+    "f/é/t.hcl"
+   ]
+  },
+  {
+   "queries": [
+    "./a"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    " ./a*/*.hcl | ./**/./t*/*",
+    "./.h/*a* |  ././b/",
+    "!./** | !!{}/f/]"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{}/f/t*/b/é/x-y"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  },
+  {
+   "queries": [
+    "./x=y/x.hcl/*.hcl/a|b"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "1...{}/f/b/?.hcl | !{./*/a/?} | !./t*/*.hcl/x.hcl/y.hcl"
+   ],
+   "workingDir": "{}/f",
+   "failed": true,
+   "selected": []
+  },
+  {
+   "queries": [
+    "{./[!a]/} |  {./top.hcl/y.hcl/1/}"
+   ],
+   "workingDir": "{}/f",
+   "failed": false,
+   "selected": []
+  }
+ ]
+}

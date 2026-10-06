@@ -108,7 +108,7 @@ unit "app" {
 		await fs.mkdir(appDirectory, { recursive: true });
 		await fs.mkdir(targetDirectory, { recursive: true });
 		await fs.writeFile(path.join(targetDirectory, 'terragrunt.hcl'), 'inputs = {}');
-		await fs.writeFile(path.join(targetDirectory, 'terragrunt.stack.hcl'), 'unit "x" { source = "x" path = "x" }');
+		await fs.writeFile(path.join(targetDirectory, 'terragrunt.stack.hcl'), 'unit "x" {\n  source = "x"\n  path = "x"\n}\n');
 		const appPath = path.join(appDirectory, 'terragrunt.hcl');
 		const content = 'dependency "target" { config_path = "../target" }';
 		await fs.writeFile(appPath, content);

@@ -8,6 +8,7 @@ import type { FunctionContext, FunctionDefinition, ResolvedReference, RuntimeVal
 import { Token } from './model';
 import type { ModuleFileError, ModuleVariable } from './module-variables';
 import { SyntaxError } from './parser';
+import { HclSyntaxError } from './hcl-syntax';
 import { parseHclSyntax } from './syntax';
 import type { RemoteSourceErrorCode } from './remote-errors';
 import type { ParserTracerEvent } from './parser';
@@ -1013,13 +1014,29 @@ export class ParsedDocument {
 				this.tokens = [this.parseNode(this.ast)];
 				return;
 			}
-			this.ast = parseHclSyntax(this.content, this.uri, this.parserTracer());
+			this.ast = parseHclSyntax(this.content, this.uri, filePath, this.parserTracer());
 			this.tokens = [this.parseNode(this.ast)];
 			this.diagnostics = this.diagnosticsProvider.getDiagnostics(this);
 		} catch (error) {
 			this.ast = null;
 			this.tokens = [];
-			if (error instanceof SyntaxError && error.location) {
+			if (error instanceof HclSyntaxError) {
+				// The problem's own line and column are the HCL library's, counted its way. An editor counts from the
+				// offsets.
+				const content = this.content;
+				const editorPosition = (offset: number) => {
+					const lineStart = content.lastIndexOf('\n', offset - 1) + 1;
+					let line = 0;
+					for (let index = content.indexOf('\n'); index >= 0 && index < lineStart; index = content.indexOf('\n', index + 1)) line++;
+					return { line, character: offset - lineStart };
+				};
+				this.diagnostics.push({
+					severity: 1,
+					range: { start: editorPosition(error.problem.start.offset), end: editorPosition(error.problem.end.offset) },
+					message: `${error.problem.summary}: ${error.problem.detail}`,
+					source: 'terragrunt'
+				});
+			} else if (error instanceof SyntaxError && error.location) {
 				// Convert the parser's location format to VSCode's format
 				this.diagnostics.push({
 					severity: 1,

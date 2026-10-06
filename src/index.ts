@@ -6,8 +6,9 @@ export type {ConfigEvaluationResult, DependencyRequest, EvaluatedSpan} from './E
 export {ParsedDocument} from './ParsedDocument';
 export {CompletionsProvider} from './providers/CompletionsProvider';
 export {DiagnosticsProvider} from './providers/DiagnosticsProvider';
-export type {VerbatimSpan} from './hcl-format';
-export {formatHcl, formatHclTokens, HclSyntaxError} from './hcl-format';
+export {formatHcl, formatHclTokens} from './hcl-format';
+export type {HclPosition, HclSyntaxProblem} from './hcl-syntax';
+export {assertHclSyntax, findHclSyntaxProblem, HclSyntaxError} from './hcl-syntax';
 export {HoverProvider} from './providers/HoverProvider';
 export {LinkProvider} from './providers/LinkProvider';
 export {Schema} from './Schema';

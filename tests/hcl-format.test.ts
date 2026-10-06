@@ -1,6 +1,7 @@
 import { expect } from 'chai';
 
-import { formatHcl, formatHclTokens, HclSyntaxError } from '../src/hcl-format';
+import { formatHcl, formatHclTokens } from '../src/hcl-format';
+import { HclSyntaxError } from '../src/hcl-syntax';
 import { unifiedDiff } from '../src/unified-diff';
 
 // Every expected text below is the reference's own output for the source beside it, recorded from hclwrite.Format
@@ -155,10 +156,15 @@ describe('HCL formatting', () => {
 		for (const layout of layouts) expect(significant(formatHclTokens(layout.source)), layout.name).to.equal(significant(layout.source));
 	});
 
-	it('refuses source that does not parse, saying where', () => {
-		expect(() => formatHcl('inputs = {\n  a = \n}\n', 'unit/terragrunt.hcl'))
-			.to.throw(HclSyntaxError, 'line 3, column 1: unexpected "}"');
-		expect(() => formatHcl('a = "unterminated\n')).to.throw(HclSyntaxError, 'line 2, column 1: unexpected end of input');
+	it('refuses source the HCL parser reports an error in, saying where and what in its words', () => {
+		expect(() => formatHcl('inputs = {\n  a = \n}\n'))
+			.to.throw(HclSyntaxError, 'line 2, column 7: Invalid expression; Expected the start of an expression, but found an invalid expression token.');
+		expect(() => formatHcl('a = "unterminated\n')).to.throw(HclSyntaxError, 'line 1, column 18: Invalid multi-line string; Quoted strings may not be split over multiple lines.');
+	});
+
+	it('names the source in an error that points back at an earlier part of it', () => {
+		expect(() => formatHcl('a = 1\na = 2\n', 'unit/terragrunt.hcl'))
+			.to.throw(HclSyntaxError, 'line 2, column 1: Attribute redefined; The argument "a" was already set at unit/terragrunt.hcl:1,1-2. Each argument may be set only once.');
 	});
 
 	it('formats what parses the way the token formatter does', () => {

@@ -17,7 +17,7 @@ describe('CLI configuration discovery', function () {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-cli-'));
 		await fs.mkdir(path.join(root, 'z', '.hidden'), {recursive: true});
 		await fs.mkdir(path.join(root, 'a'), {recursive: true});
-		await fs.writeFile(path.join(root, 'z', 'terragrunt.stack.hcl'), 'unit "app" { source = "." path = "app" }');
+		await fs.writeFile(path.join(root, 'z', 'terragrunt.stack.hcl'), 'unit "app" {\n  source = "."\n  path = "app"\n}\n');
 		await fs.writeFile(path.join(root, 'a', 'terragrunt.hcl'), 'inputs = {}');
 		await fs.writeFile(path.join(root, 'z', '.hidden', 'terragrunt.hcl'), 'inputs = {}');
 
@@ -40,7 +40,7 @@ describe('CLI configuration discovery', function () {
 			'unit "app" {',
 			'  source = "./modules/app"',
 			'  path = "generated/app"',
-			'  values = { region = "eu" replicas = 2 }',
+			'  values = { region = "eu", replicas = 2 }',
 			'}',
 			''
 		].join('\n'));
@@ -55,7 +55,7 @@ describe('CLI configuration discovery', function () {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-stack-lifecycle-'));
 		await fs.mkdir(path.join(root, 'module'), {recursive: true});
 		await fs.writeFile(path.join(root, 'module', 'terragrunt.hcl'), 'inputs = {}\n');
-		await fs.writeFile(path.join(root, 'terragrunt.stack.hcl'), 'unit "app" { source = "./module" path = "generated/app" }\n');
+		await fs.writeFile(path.join(root, 'terragrunt.stack.hcl'), 'unit "app" {\n  source = "./module"\n  path = "generated/app"\n}\n');
 		const cli = path.resolve('dist/cli.cjs');
 		const run = spawnSync(process.execPath, [cli, 'stack', 'run', '--working-dir', root, '--tf-path', '/bin/echo', 'plan'], {encoding: 'utf8'});
 		expect(run.status).to.equal(0, run.stderr);
@@ -80,7 +80,7 @@ describe('CLI configuration discovery', function () {
 			const result = spawnSync('git', args, {cwd: repository, encoding: 'utf8', shell: false});
 			expect(result.status).to.equal(0, result.stderr);
 		}
-		await fs.writeFile(path.join(root, 'terragrunt.stack.hcl'), `unit "app" { source = "git::file://${repository}//module" path = "generated/app" }\n`);
+		await fs.writeFile(path.join(root, 'terragrunt.stack.hcl'), `unit "app" {\n  source = "git::file://${repository}//module"\n  path = "generated/app"\n}\n`);
 		const cli = path.resolve('dist/cli.cjs');
 		const result = spawnSync(process.execPath, [cli, 'stack', 'generate', '--working-dir', root], {encoding: 'utf8'});
 		expect(result.status).to.equal(0, result.stderr);
@@ -105,8 +105,8 @@ describe('CLI configuration discovery', function () {
 		await fs.mkdir(unitDir, {recursive: true});
 		await fs.mkdir(moduleDir, {recursive: true});
 		await fs.mkdir(path.join(root, '.git'));
-		await fs.writeFile(path.join(moduleDir, 'variables.tf'), 'variable "name" { type = string }\nvariable "region" { type = string\n default = "eu-west-1" }\n');
-		await fs.writeFile(path.join(root, 'global.hcl'), 'locals { region = "eu-west-1"\n zone = "a" }\n');
+		await fs.writeFile(path.join(moduleDir, 'variables.tf'), 'variable "name" { type = string }\nvariable "region" {\n  type = string\n  default = "eu-west-1"\n}\n');
+		await fs.writeFile(path.join(root, 'global.hcl'), 'locals {\n  region = "eu-west-1"\n  zone = "a"\n}\n');
 		await fs.writeFile(path.join(root, 'secrets.yaml'), 'token: x\n');
 		await fs.writeFile(path.join(root, 'root.hcl'), 'function greet(who) { return `hi ${who}`; }\nlocals {\n  global = read_terragrunt_config(find_in_parent_folders("global.hcl"))\n  secrets = yamldecode(sops_decrypt_file(find_in_parent_folders("secrets.yaml")))\n}\ngenerate "provider" {\n  path = "provider.tf"\n  if_exists = "overwrite"\n  contents = ""\n}\ninputs = { name = "shared" }\nterraform_version_constraint = "1.5.5"\nterraform_binary = "terraform"\n');
 		await fs.writeFile(path.join(unitDir, 'terragrunt.hcl'), 'include "root" { path = find_in_parent_folders("root.hcl") }\nterraform { source = "../../modules/app" }\ninputs = { regoin = "eu-west-2" }\n');
@@ -387,7 +387,7 @@ describe('CLI configuration discovery', function () {
 		expect(outputEscape.stderr).to.contain('inside the working directory');
 		const unknown = spawnSync(process.execPath, [cli, 'hcl', 'format', '--definitely-unknown', '--working-dir', root], {encoding: 'utf8'});
 		expect(unknown.status).to.not.equal(0);
-		expect(unknown.stderr).to.contain('Unknown format option');
+		expect(unknown.stderr).to.contain('flag provided but not defined: -definitely-unknown');
 		await fs.rm(root, {recursive: true, force: true});
 		await fs.rm(outside, {recursive: true, force: true});
 	});
@@ -510,7 +510,7 @@ describe('CLI configuration discovery', function () {
 
 	it('performs local backend bootstrap and forced state deletion', async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-backend-'));
-		await fs.writeFile(path.join(root, 'terragrunt.hcl'), 'remote_state { backend = "local" config = { path = "state.tfstate" } }\n');
+		await fs.writeFile(path.join(root, 'terragrunt.hcl'), 'remote_state {\n  backend = "local"\n  config = { path = "state.tfstate" }\n}\n');
 		await fs.writeFile(path.join(root, 'state.tfstate'), '{}\n');
 		const cli = path.resolve('dist/cli.cjs');
 		const bootstrap = spawnSync(process.execPath, [cli, 'backend', 'bootstrap', '--tf-path', '/bin/echo', '--working-dir', root], {encoding: 'utf8'});
@@ -532,7 +532,7 @@ describe('CLI configuration discovery', function () {
 		const log = path.join(root, 'provider.log');
 		const provider = path.join(bin, 'aws');
 		await fs.writeFile(provider, `#!/usr/bin/env node\nconst fs=require('node:fs'); const args=process.argv.slice(2); fs.appendFileSync(${JSON.stringify(log)}, args.join(' ')+'\\n'); if ((args[0]==='s3api' && args[1]==='head-bucket') || (args[0]==='dynamodb' && args[1]==='describe-table')) process.exit(1);\n`, {mode: 0o755});
-		await fs.writeFile(path.join(root, 'terragrunt.hcl'), 'remote_state { backend = "s3" config = { bucket = "state" key = "env/app.tfstate" region = "eu-west-1" dynamodb_table = "locks" } }\n');
+		await fs.writeFile(path.join(root, 'terragrunt.hcl'), 'remote_state {\n  backend = "s3"\n  config = { bucket = "state", key = "env/app.tfstate", region = "eu-west-1", dynamodb_table = "locks" }\n}\n');
 		const cli = path.resolve('dist/cli.cjs');
 		const environment = {...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`};
 		const bootstrap = spawnSync(process.execPath, [cli, 'backend', 'bootstrap', '--working-dir', root], {encoding: 'utf8', env: environment});
@@ -556,8 +556,8 @@ describe('CLI configuration discovery', function () {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-hooks-'));
 		await fs.writeFile(path.join(root, 'terragrunt.hcl'), [
 			'terraform {',
-			'  before_hook "before" { commands = ["plan"] execute = ["/bin/echo", "before"] }',
-			'  after_hook "after" { commands = ["plan"] execute = ["/bin/echo", "after"] }',
+			'  before_hook "before" {\n    commands = ["plan"]\n    execute = ["/bin/echo", "before"]\n  }',
+			'  after_hook "after" {\n    commands = ["plan"]\n    execute = ["/bin/echo", "after"]\n  }',
 			'}',
 			'inputs = {}',
 			''
@@ -1048,7 +1048,7 @@ describe('CLI configuration discovery', function () {
 		]);
 		await fs.writeFile(path.join(made.root, 'terragrunt.hcl'), [
 			'dependency "producer" { config_path = "../producer" }',
-			'inputs = { inherited = dependency.producer.outputs.answer stable = "known" }'
+			'inputs = { inherited = dependency.producer.outputs.answer, stable = "known" }'
 		].join('\n'));
 		const args = [cli, 'render', '--json', '--working-dir', made.consumer];
 		const incomplete = spawnSync(process.execPath, args, {cwd: made.consumer, encoding: 'utf8'});
@@ -1058,7 +1058,7 @@ describe('CLI configuration discovery', function () {
 
 		await fs.writeFile(path.join(made.consumer, 'terragrunt.hcl'), [
 			'include "root" { path = find_in_parent_folders("terragrunt.hcl") }',
-			'inputs = { inherited = "override" child = "known" }'
+			'inputs = { inherited = "override", child = "known" }'
 		].join('\n'));
 		const overridden = spawnSync(process.execPath, args, {cwd: made.consumer, encoding: 'utf8'});
 		expect(overridden.status).to.equal(0, overridden.stderr);
@@ -1071,11 +1071,11 @@ describe('CLI configuration discovery', function () {
 		const cli = path.resolve('dist/cli.cjs');
 		const made = await workspaceWithUnappliedDependency([
 			'include "root" { path = find_in_parent_folders("terragrunt.hcl") }',
-			'generate "file" { path = "x.tf" contents = "known" }'
+			'generate "file" {\n  path = "x.tf"\n  contents = "known"\n}'
 		]);
 		await fs.writeFile(path.join(made.root, 'terragrunt.hcl'), [
 			'dependency "producer" { config_path = "../producer" }',
-			'generate "file" { path = "x.tf" contents = dependency.producer.outputs.answer }'
+			'generate "file" {\n  path = "x.tf"\n  contents = dependency.producer.outputs.answer\n}'
 		].join('\n'));
 		const result = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', made.consumer],
 			{cwd: made.consumer, encoding: 'utf8'});

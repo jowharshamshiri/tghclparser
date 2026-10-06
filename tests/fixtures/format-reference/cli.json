@@ -1,0 +1,2425 @@
+{
+ "tree": {
+  "files": [
+   {
+    "path": "app/terragrunt.hcl",
+    "base64": "aW5wdXRzID0gewogIGEgICA9IDEKICBsb25nX25hbWUgPSAieCIKfQo="
+   },
+   {
+    "path": "app/tidy.hcl",
+    "base64": "YSA9IDEK"
+   },
+   {
+    "path": "app/zzz.hcl",
+    "base64": "eiAgID0gMQo="
+   },
+   {
+    "path": "quirk/-first.hcl",
+    "base64": "cSAgID0gMQo="
+   },
+   {
+    "path": "quirk/.terragrunt-cache",
+    "base64": "bm90IGEgZGlyZWN0b3J5Cg=="
+   },
+   {
+    "path": "quirk/z.hcl",
+    "base64": "cSAgID0gMQo="
+   },
+   {
+    "path": "bom/terragrunt.hcl",
+    "base64": "77u/YSAgID0gMQo="
+   },
+   {
+    "path": "crlf/terragrunt.hcl",
+    "base64": "YSAgID0gMQ0KYmIgPSAyDQo="
+   },
+   {
+    "path": "empty/terragrunt.hcl",
+    "base64": ""
+   },
+   {
+    "path": "blank/terragrunt.hcl",
+    "base64": "ICAgCgoJCg=="
+   },
+   {
+    "path": "nonl/terragrunt.hcl",
+    "base64": "YSAgID0gMQ=="
+   },
+   {
+    "path": "broken/terragrunt.hcl",
+    "base64": "YSA9IAo="
+   },
+   {
+    "path": "dup/terragrunt.hcl",
+    "base64": "YSAgID0gMQphID0gMgo="
+   },
+   {
+    "path": "latin/terragrunt.hcl",
+    "base64": "YSAgID0gIv8iCg=="
+   },
+   {
+    "path": ".hidden/terragrunt.hcl",
+    "base64": "aCAgID0gMQo="
+   },
+   {
+    "path": ".git/x.hcl",
+    "base64": "ZyAgID0gMQo="
+   },
+   {
+    "path": "node_modules/x.hcl",
+    "base64": "biAgID0gMQo="
+   },
+   {
+    "path": ".terragrunt-cache/x/terragrunt.hcl",
+    "base64": "YyAgID0gMQo="
+   },
+   {
+    "path": ".boilerplate/terragrunt.hcl",
+    "base64": "YyAgID0gMQo="
+   },
+   {
+    "path": ".terragrunt-stack/u/terragrunt.hcl",
+    "base64": "YyAgID0gMQo="
+   },
+   {
+    "path": "skip/deep/terragrunt.hcl",
+    "base64": "cyAgID0gMQo="
+   },
+   {
+    "path": "other/skip/terragrunt.hcl",
+    "base64": "cyAgID0gMQo="
+   },
+   {
+    "path": "names/a.hcl",
+    "base64": "YSAgID0gMQo="
+   },
+   {
+    "path": "names/m.hcl",
+    "base64": "bSAgID0gMQo="
+   },
+   {
+    "path": "names/z.hcl",
+    "base64": "eiAgID0gMQo="
+   },
+   {
+    "path": "ext/terragrunt.hcl.json",
+    "base64": "eyJhIjogICAxfQo="
+   },
+   {
+    "path": "ext/main.tf",
+    "base64": "YSAgID0gMQo="
+   },
+   {
+    "path": "ext/x.HCL",
+    "base64": "YSAgID0gMQo="
+   },
+   {
+    "path": "ext/y.hcl.bak",
+    "base64": "YSAgID0gMQo="
+   },
+   {
+    "path": "mode/terragrunt.hcl",
+    "base64": "YSAgID0gMQo=",
+    "mode": 416
+   },
+   {
+    "path": "heredoc/terragrunt.hcl",
+    "base64": "YSA9IDw8RU9UCiAga2VlcCAgICR7IGIgfQpFT1QKYmIgICA9IDEK"
+   },
+   {
+    "path": "dir.hcl/inner.hcl",
+    "base64": "ZCAgID0gMQo="
+   },
+   {
+    "path": "outside-target.hcl",
+    "base64": "byAgID0gMQo="
+   },
+   {
+    "path": "f/a/terragrunt.hcl",
+    "base64": "YSAgID0gMQo="
+   },
+   {
+    "path": "f/a/b/x.hcl",
+    "base64": "YSAgID0gMQo="
+   },
+   {
+    "path": "f/a/b/c/y.hcl",
+    "base64": "YSAgID0gMQo="
+   },
+   {
+    "path": "f/b/terragrunt.hcl",
+    "base64": "YSAgID0gMQo="
+   },
+   {
+    "path": "f/a b/t.hcl",
+    "base64": "YSAgID0gMQo="
+   },
+   {
+    "path": "f/é/t.hcl",
+    "base64": "YSAgID0gMQo="
+   },
+   {
+    "path": "f/.h/t.hcl",
+    "base64": "YSAgID0gMQo="
+   },
+   {
+    "path": "f/top.hcl",
+    "base64": "YSAgID0gMQo="
+   },
+   {
+    "path": "f/ab/x.hcl",
+    "base64": "YSAgID0gMQo="
+   },
+   {
+    "path": "f/a/x.hcl",
+    "base64": "YSAgID0gMQo="
+   },
+   {
+    "path": "f/c/a/terragrunt.hcl",
+    "base64": "YSAgID0gMQo="
+   },
+   {
+    "path": "f/1/t.hcl",
+    "base64": "YSAgID0gMQo="
+   },
+   {
+    "path": "f/x-y/z.hcl",
+    "base64": "YSAgID0gMQo="
+   }
+  ],
+  "links": [
+   {
+    "path": "names/link.hcl",
+    "target": "../app/zzz.hcl"
+   },
+   {
+    "path": "names/dirlink",
+    "target": "../skip"
+   },
+   {
+    "path": "names/dangling.hcl",
+    "target": "missing.hcl"
+   }
+  ]
+ },
+ "scenarios": [
+  {
+   "name": "whole tree",
+   "args": [
+    "format",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "whole tree from cwd",
+   "args": [
+    "format"
+   ]
+  },
+  {
+   "name": "fmt alias",
+   "args": [
+    "fmt",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "check",
+   "args": [
+    "format",
+    "--check",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "check names",
+   "args": [
+    "format",
+    "--check",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "diff names",
+   "args": [
+    "format",
+    "--diff",
+    "--working-dir",
+    "{}/app"
+   ]
+  },
+  {
+   "name": "check diff app",
+   "args": [
+    "format",
+    "--check",
+    "--diff",
+    "--working-dir",
+    "{}/app"
+   ]
+  },
+  {
+   "name": "file relative",
+   "args": [
+    "format",
+    "--file",
+    "app/terragrunt.hcl",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "file equals form",
+   "args": [
+    "format",
+    "--file=app/terragrunt.hcl",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "file absolute",
+   "args": [
+    "format",
+    "--file",
+    "{}/app/terragrunt.hcl",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "file outside working dir",
+   "args": [
+    "format",
+    "--file",
+    "../outside-target.hcl",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "file missing",
+   "args": [
+    "format",
+    "--file",
+    "nope.hcl",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "file is a directory",
+   "args": [
+    "format",
+    "--file",
+    "app",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "file not hcl",
+   "args": [
+    "format",
+    "--file",
+    "ext/main.tf",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "file json",
+   "args": [
+    "format",
+    "--file",
+    "ext/terragrunt.hcl.json",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "file twice",
+   "args": [
+    "format",
+    "--file",
+    "names/a.hcl",
+    "--file",
+    "names/z.hcl",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "file symlink",
+   "args": [
+    "format",
+    "--file",
+    "names/link.hcl",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "file bom",
+   "args": [
+    "format",
+    "--file",
+    "bom/terragrunt.hcl",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "file bom check",
+   "args": [
+    "format",
+    "--check",
+    "--diff",
+    "--file",
+    "bom/terragrunt.hcl",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "file crlf diff",
+   "args": [
+    "format",
+    "--check",
+    "--diff",
+    "--file",
+    "crlf/terragrunt.hcl",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "file empty",
+   "args": [
+    "format",
+    "--check",
+    "--file",
+    "empty/terragrunt.hcl",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "file blank",
+   "args": [
+    "format",
+    "--check",
+    "--diff",
+    "--file",
+    "blank/terragrunt.hcl",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "file no newline",
+   "args": [
+    "format",
+    "--diff",
+    "--file",
+    "nonl/terragrunt.hcl",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "file duplicate argument",
+   "args": [
+    "format",
+    "--file",
+    "dup/terragrunt.hcl",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "file not utf8",
+   "args": [
+    "format",
+    "--file",
+    "latin/terragrunt.hcl",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "positional file",
+   "args": [
+    "format",
+    "app/terragrunt.hcl",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "positional dir",
+   "args": [
+    "format",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "exclude dir",
+   "args": [
+    "format",
+    "--exclude-dir",
+    "skip",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "exclude dir twice",
+   "args": [
+    "format",
+    "--exclude-dir",
+    "skip",
+    "--exclude-dir",
+    "names",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "exclude dir comma",
+   "args": [
+    "format",
+    "--exclude-dir",
+    "skip,names",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "exclude dir path",
+   "args": [
+    "format",
+    "--exclude-dir",
+    "skip/deep",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "exclude a file name",
+   "args": [
+    "format",
+    "--exclude-dir",
+    "m.hcl",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "exclude the root name",
+   "args": [
+    "format",
+    "--exclude-dir",
+    "names",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "root is a cache dir",
+   "args": [
+    "format",
+    "--working-dir",
+    "{}/.terragrunt-cache"
+   ]
+  },
+  {
+   "name": "working dir missing",
+   "args": [
+    "format",
+    "--working-dir",
+    "{}/nope"
+   ]
+  },
+  {
+   "name": "working dir is a file",
+   "args": [
+    "format",
+    "--working-dir",
+    "{}/app/tidy.hcl"
+   ]
+  },
+  {
+   "name": "stdin",
+   "args": [
+    "format",
+    "--stdin"
+   ],
+   "stdin": "a   = 1\n"
+  },
+  {
+   "name": "stdin check",
+   "args": [
+    "format",
+    "--stdin",
+    "--check"
+   ],
+   "stdin": "a   = 1\n"
+  },
+  {
+   "name": "stdin check diff",
+   "args": [
+    "format",
+    "--stdin",
+    "--check",
+    "--diff"
+   ],
+   "stdin": "a   = 1\n"
+  },
+  {
+   "name": "stdin formatted check",
+   "args": [
+    "format",
+    "--stdin",
+    "--check"
+   ],
+   "stdin": "a = 1\n"
+  },
+  {
+   "name": "stdin empty",
+   "args": [
+    "format",
+    "--stdin"
+   ],
+   "stdin": ""
+  },
+  {
+   "name": "stdin bom",
+   "args": [
+    "format",
+    "--stdin"
+   ],
+   "stdin": "﻿a   = 1\n"
+  },
+  {
+   "name": "stdin crlf",
+   "args": [
+    "format",
+    "--stdin"
+   ],
+   "stdin": "a   = 1\r\nbb = 2\r\n"
+  },
+  {
+   "name": "stdin broken",
+   "args": [
+    "format",
+    "--stdin"
+   ],
+   "stdin": "a = \n"
+  },
+  {
+   "name": "stdin with file",
+   "args": [
+    "format",
+    "--stdin",
+    "--file",
+    "app/terragrunt.hcl",
+    "--working-dir",
+    "{}"
+   ],
+   "stdin": "a   = 1\n"
+  },
+  {
+   "name": "stdin with exclude",
+   "args": [
+    "format",
+    "--stdin",
+    "--exclude-dir",
+    "x"
+   ],
+   "stdin": "a   = 1\n"
+  },
+  {
+   "name": "unknown flag",
+   "args": [
+    "format",
+    "--definitely-unknown",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "legacy check flag",
+   "args": [
+    "format",
+    "--terragrunt-check",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "legacy hclfmt file flag",
+   "args": [
+    "format",
+    "--terragrunt-hclfmt-file",
+    "names/a.hcl",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "legacy working dir flag",
+   "args": [
+    "format",
+    "--terragrunt-working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "legacy non interactive flag",
+   "args": [
+    "format",
+    "--terragrunt-non-interactive",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "tf path flag",
+   "args": [
+    "format",
+    "--tf-path",
+    "tofu",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "parallelism flag",
+   "args": [
+    "format",
+    "--parallelism",
+    "2",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "log level flag",
+   "args": [
+    "format",
+    "--log-level",
+    "debug",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "env check",
+   "args": [
+    "format",
+    "--working-dir",
+    "{}/names"
+   ],
+   "env": {
+    "TG_CHECK": "true"
+   }
+  },
+  {
+   "name": "env diff",
+   "args": [
+    "format",
+    "--working-dir",
+    "{}/app"
+   ],
+   "env": {
+    "TG_DIFF": "true",
+    "TG_CHECK": "true"
+   }
+  },
+  {
+   "name": "env file",
+   "args": [
+    "format",
+    "--working-dir",
+    "{}"
+   ],
+   "env": {
+    "TG_FILE": "names/a.hcl"
+   }
+  },
+  {
+   "name": "env exclude dir",
+   "args": [
+    "format",
+    "--working-dir",
+    "{}"
+   ],
+   "env": {
+    "TG_EXCLUDE_DIR": "skip,names"
+   }
+  },
+  {
+   "name": "env stdin",
+   "args": [
+    "format"
+   ],
+   "env": {
+    "TG_STDIN": "true"
+   },
+   "stdin": "a   = 1\n"
+  },
+  {
+   "name": "env working dir",
+   "args": [
+    "format"
+   ],
+   "env": {
+    "TG_WORKING_DIR": "{}/names"
+   }
+  },
+  {
+   "name": "env legacy check",
+   "args": [
+    "format",
+    "--working-dir",
+    "{}/names"
+   ],
+   "env": {
+    "TERRAGRUNT_CHECK": "true"
+   }
+  },
+  {
+   "name": "env legacy hclfmt file",
+   "args": [
+    "format",
+    "--working-dir",
+    "{}"
+   ],
+   "env": {
+    "TG_HCLFMT_FILE": "names/a.hcl"
+   }
+  },
+  {
+   "name": "env check false",
+   "args": [
+    "format",
+    "--check",
+    "--working-dir",
+    "{}/names"
+   ],
+   "env": {
+    "TG_CHECK": "false"
+   }
+  },
+  {
+   "name": "check equals false",
+   "args": [
+    "format",
+    "--check=false",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "hclfmt command",
+   "args": [
+    "fmt",
+    "--check",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "flags after positional",
+   "args": [
+    "format",
+    "x",
+    "--check",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "single dash",
+   "args": [
+    "format",
+    "-check",
+    "-working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "check then false",
+   "args": [
+    "format",
+    "--check",
+    "false",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "double dash",
+   "args": [
+    "format",
+    "--working-dir",
+    "{}/names",
+    "--",
+    "--check"
+   ]
+  },
+  {
+   "name": "exclude comma",
+   "args": [
+    "format",
+    "--exclude-dir",
+    "skip,names",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "env check 1",
+   "args": [
+    "format",
+    "--working-dir",
+    "{}/names"
+   ],
+   "env": {
+    "TG_CHECK": "1"
+   }
+  },
+  {
+   "name": "env check yes",
+   "args": [
+    "format",
+    "--working-dir",
+    "{}/names"
+   ],
+   "env": {
+    "TG_CHECK": "yes"
+   }
+  },
+  {
+   "name": "strict legacy env",
+   "args": [
+    "format",
+    "--strict-mode",
+    "--working-dir",
+    "{}/names"
+   ],
+   "env": {
+    "TERRAGRUNT_CHECK": "true"
+   }
+  },
+  {
+   "name": "filters file auto",
+   "args": [
+    "format",
+    "--working-dir",
+    "{}"
+   ],
+   "files": {
+    ".terragrunt-filters": "./names/*\n"
+   }
+  },
+  {
+   "name": "filters file in subdir wd",
+   "args": [
+    "format",
+    "--working-dir",
+    "{}/names"
+   ],
+   "files": {
+    ".terragrunt-filters": "./a.hcl\n"
+   }
+  },
+  {
+   "name": "no filters file",
+   "args": [
+    "format",
+    "--no-filters-file",
+    "--working-dir",
+    "{}"
+   ],
+   "files": {
+    ".terragrunt-filters": "./names/*\n"
+   }
+  },
+  {
+   "name": "filter path glob",
+   "args": [
+    "format",
+    "--filter",
+    "./names/*",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "filter path dir",
+   "args": [
+    "format",
+    "--filter",
+    "./names",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "filter path file",
+   "args": [
+    "format",
+    "--filter",
+    "./names/a.hcl",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "filter name",
+   "args": [
+    "format",
+    "--filter",
+    "name=a.hcl",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "filter bare",
+   "args": [
+    "format",
+    "--filter",
+    "a.hcl",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "filter bare dir",
+   "args": [
+    "format",
+    "--filter",
+    "names",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "filter negate",
+   "args": [
+    "format",
+    "--filter",
+    "!./names/**",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "filter braces",
+   "args": [
+    "format",
+    "--filter",
+    "{names/a.hcl}",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "filter two",
+   "args": [
+    "format",
+    "--filter",
+    "./names/a.hcl",
+    "--filter",
+    "./names/z.hcl",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "filter intersect",
+   "args": [
+    "format",
+    "--filter",
+    "./names/** | !name=m.hcl",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "filter type stack",
+   "args": [
+    "format",
+    "--filter",
+    "type=stack",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "filter type unit",
+   "args": [
+    "format",
+    "--filter",
+    "type=unit",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "filter graph",
+   "args": [
+    "format",
+    "--filter",
+    "names...",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "filter git",
+   "args": [
+    "format",
+    "--filter",
+    "[main...HEAD]",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "filter affected",
+   "args": [
+    "format",
+    "--filter-affected",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "filter bad syntax",
+   "args": [
+    "format",
+    "--filter",
+    "./names/* |",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "filter doublestar",
+   "args": [
+    "format",
+    "--filter",
+    "**/a.hcl",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "filter abs",
+   "args": [
+    "format",
+    "--filter",
+    "{}/names/a.hcl",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "filter external",
+   "args": [
+    "format",
+    "--filter",
+    "external=false",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "filter reading",
+   "args": [
+    "format",
+    "--filter",
+    "reading=a.hcl",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "filter with file flag",
+   "args": [
+    "format",
+    "--filter",
+    "./names/z.hcl",
+    "--file",
+    "names/a.hcl",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "filter with stdin",
+   "args": [
+    "format",
+    "--filter",
+    "./nope",
+    "--stdin"
+   ],
+   "stdin": "a   = 1\n"
+  },
+  {
+   "name": "excludes file",
+   "args": [
+    "format",
+    "--working-dir",
+    "{}"
+   ],
+   "files": {
+    ".terragrunt-excludes": "./names/**\n# c\n\n./skip/**\n"
+   }
+  },
+  {
+   "name": "excludes and filters",
+   "args": [
+    "format",
+    "--working-dir",
+    "{}"
+   ],
+   "files": {
+    ".terragrunt-excludes": "./names/m.hcl\n",
+    ".terragrunt-filters": "./names/*\n"
+   }
+  },
+  {
+   "name": "filters file flag",
+   "args": [
+    "format",
+    "--filters-file",
+    "custom",
+    "--working-dir",
+    "{}"
+   ],
+   "files": {
+    "custom": "./names/a.hcl\n",
+    ".terragrunt-filters": "./names/z.hcl\n"
+   }
+  },
+  {
+   "name": "filters file missing",
+   "args": [
+    "format",
+    "--filters-file",
+    "nope",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "filters file bad",
+   "args": [
+    "format",
+    "--working-dir",
+    "{}/names"
+   ],
+   "files": {
+    "names/.terragrunt-filters": "./a.hcl |\n"
+   }
+  },
+  {
+   "name": "filters file bad with stdin",
+   "args": [
+    "format",
+    "--stdin",
+    "--working-dir",
+    "{}/names"
+   ],
+   "files": {
+    "names/.terragrunt-filters": "./a.hcl |\n"
+   },
+   "stdin": "a   = 1\n"
+  },
+  {
+   "name": "filters file name filter",
+   "args": [
+    "format",
+    "--working-dir",
+    "{}/names"
+   ],
+   "files": {
+    "names/.terragrunt-filters": "name=a.hcl\n"
+   }
+  },
+  {
+   "name": "filter env list",
+   "args": [
+    "format",
+    "--working-dir",
+    "{}"
+   ],
+   "env": {
+    "TG_FILTER": "./names/a.hcl,./names/z.hcl"
+   }
+  },
+  {
+   "name": "filter dedupe",
+   "args": [
+    "format",
+    "--filter",
+    "./names/a.hcl",
+    "--filter",
+    "./names/a.hcl",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "filter negations only",
+   "args": [
+    "format",
+    "--filter",
+    "!./names/**",
+    "--filter",
+    "!./app/**",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "filter mix",
+   "args": [
+    "format",
+    "--filter",
+    "./names/**",
+    "--filter",
+    "!./names/m.hcl",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "filter negated intersection",
+   "args": [
+    "format",
+    "--filter",
+    "!./names/a.hcl | !./names/z.hcl",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "filter select intersection",
+   "args": [
+    "format",
+    "--filter",
+    "!./a.hcl | ./*.hcl",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "filter double negation",
+   "args": [
+    "format",
+    "--filter",
+    "!!./a.hcl",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "filter dot",
+   "args": [
+    "format",
+    "--filter",
+    ".",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "filter parent",
+   "args": [
+    "format",
+    "--filter",
+    "../app/*",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "filter braces alt",
+   "args": [
+    "format",
+    "--filter",
+    "./{a,z}.hcl",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "filter braced alt",
+   "args": [
+    "format",
+    "--filter",
+    "{./[az].hcl}",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "filter class",
+   "args": [
+    "format",
+    "--filter",
+    "./[am].hcl",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "filter question",
+   "args": [
+    "format",
+    "--filter",
+    "./?.hcl",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "filter star slash",
+   "args": [
+    "format",
+    "--filter",
+    "./*/terragrunt.hcl",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "filter trailing slash",
+   "args": [
+    "format",
+    "--filter",
+    "./names/",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "filter spaces",
+   "args": [
+    "format",
+    "--filter",
+    "  ./a.hcl  ",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "filter empty",
+   "args": [
+    "format",
+    "--filter",
+    "",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "filter bad glob",
+   "args": [
+    "format",
+    "--filter",
+    "./[a",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "filter caret",
+   "args": [
+    "format",
+    "--filter",
+    "^./a.hcl",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "filter depth",
+   "args": [
+    "format",
+    "--filter",
+    "1..../a.hcl",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "filter boundary",
+   "args": [
+    "format",
+    "--filter",
+    "(.)...{./a.hcl}",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "filter git single",
+   "args": [
+    "format",
+    "--filter",
+    "[main]",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "filter attr value path",
+   "args": [
+    "format",
+    "--filter",
+    "reading=./a.hcl",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "strict legacy file env",
+   "args": [
+    "format",
+    "--strict-mode",
+    "--working-dir",
+    "{}"
+   ],
+   "env": {
+    "TG_HCLFMT_FILE": "names/a.hcl"
+   }
+  },
+  {
+   "name": "strict control legacy env",
+   "args": [
+    "format",
+    "--strict-control",
+    "deprecated-env-vars",
+    "--working-dir",
+    "{}"
+   ],
+   "env": {
+    "TG_HCLFMT_FILE": "names/a.hcl"
+   }
+  },
+  {
+   "name": "legacy and current env",
+   "args": [
+    "format",
+    "--working-dir",
+    "{}"
+   ],
+   "env": {
+    "TG_HCLFMT_FILE": "names/a.hcl",
+    "TG_FILE": "names/z.hcl"
+   }
+  },
+  {
+   "name": "legacy terragrunt file env",
+   "args": [
+    "format",
+    "--working-dir",
+    "{}"
+   ],
+   "env": {
+    "TERRAGRUNT_HCLFMT_FILE": "names/a.hcl"
+   }
+  },
+  {
+   "name": "legacy exclude env",
+   "args": [
+    "format",
+    "--working-dir",
+    "{}"
+   ],
+   "env": {
+    "TG_HCLFMT_EXCLUDE_DIR": "names,skip"
+   }
+  },
+  {
+   "name": "flag over env file",
+   "args": [
+    "format",
+    "--file",
+    "names/z.hcl",
+    "--working-dir",
+    "{}"
+   ],
+   "env": {
+    "TG_FILE": "names/a.hcl"
+   }
+  },
+  {
+   "name": "env stdin false flag",
+   "args": [
+    "format",
+    "--stdin=false",
+    "--working-dir",
+    "{}/names"
+   ],
+   "env": {
+    "TG_STDIN": "true"
+   }
+  },
+  {
+   "name": "parallelism bad",
+   "args": [
+    "format",
+    "--parallelism",
+    "x",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "missing value",
+   "args": [
+    "format",
+    "--working-dir"
+   ]
+  },
+  {
+   "name": "file equals empty",
+   "args": [
+    "format",
+    "--file=",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "check bad value",
+   "args": [
+    "format",
+    "--check=maybe",
+    "--working-dir",
+    "{}/names"
+   ]
+  },
+  {
+   "name": "working dir symlink",
+   "args": [
+    "format",
+    "--working-dir",
+    "{}/names/dirlink"
+   ]
+  },
+  {
+   "name": "working dir relative",
+   "args": [
+    "format",
+    "--working-dir",
+    "names"
+   ]
+  },
+  {
+   "name": "working dir twice",
+   "args": [
+    "format",
+    "--working-dir",
+    "{}/names",
+    "--working-dir",
+    "{}/app"
+   ]
+  },
+  {
+   "name": "exclude dir equals",
+   "args": [
+    "format",
+    "--exclude-dir=skip",
+    "--working-dir",
+    "{}"
+   ]
+  },
+  {
+   "name": "quirk dir",
+   "args": [
+    "format",
+    "--working-dir",
+    "{}/quirk"
+   ]
+  },
+  {
+   "name": "exclude names twice env and flag",
+   "args": [
+    "format",
+    "--exclude-dir",
+    "skip",
+    "--working-dir",
+    "{}"
+   ],
+   "env": {
+    "TG_EXCLUDE_DIR": "names"
+   }
+  },
+  {
+   "name": "diff whole app",
+   "args": [
+    "format",
+    "--diff",
+    "--working-dir",
+    "{}/crlf"
+   ]
+  },
+  {
+   "name": "check diff heredoc",
+   "args": [
+    "format",
+    "--check",
+    "--diff",
+    "--working-dir",
+    "{}/heredoc"
+   ]
+  },
+  {
+   "name": "filter 000: )../ ; [b^|.hcl ; ../name=...type=\\",
+   "args": [
+    "format",
+    "--filter",
+    ")../",
+    "--filter",
+    "[b^|.hcl",
+    "--filter",
+    "../name=...type=\\",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "filter 008: terragrunt.hclreading= ; ...terragrunt.hcl!! ; a bx.hcla ",
+   "args": [
+    "format",
+    "--filter",
+    "terragrunt.hclreading=",
+    "--filter",
+    "...terragrunt.hcl!!",
+    "--filter",
+    "a bx.hcla ",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "filter 016: .hcl(a b)b",
+   "args": [
+    "format",
+    "--filter",
+    ".hcl(a b)b",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "filter 024: [|../*}type=",
+   "args": [
+    "format",
+    "--filter",
+    "[|../*}type=",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "filter 032: )*type={}/f/",
+   "args": [
+    "format",
+    "--filter",
+    ")*type={}/f/",
+    "--check",
+    "--working-dir",
+    "{}/f/a"
+   ]
+  },
+  {
+   "name": "filter 040: {}/f/ ; [ab]..}\\",
+   "args": [
+    "format",
+    "--filter",
+    "{}/f/",
+    "--filter",
+    "[ab]..}\\",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "filter 048:  | !.**/",
+   "args": [
+    "format",
+    "--filter",
+    " | !.**/",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "filter 056: }./!!!!y)",
+   "args": [
+    "format",
+    "--filter",
+    "}./!!!!y)",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "filter 064: y|/[ab]terragrunt.hclé",
+   "args": [
+    "format",
+    "--filter",
+    "y|/[ab]terragrunt.hclé",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "filter 072: ?{-",
+   "args": [
+    "format",
+    "--filter",
+    "?{-",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "filter 080: **/ ; (ya[/? ; ={a,b}1",
+   "args": [
+    "format",
+    "--filter",
+    "**/",
+    "--filter",
+    "(ya[/?",
+    "--filter",
+    "={a,b}1",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "filter 088: **/",
+   "args": [
+    "format",
+    "--filter",
+    "**/",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "filter 096: x ; **.hcl\\é ;  | {}/f/=b",
+   "args": [
+    "format",
+    "--filter",
+    "x",
+    "--filter",
+    "**.hcl\\é",
+    "--filter",
+    " | {}/f/=b",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "filter 104: t,!y ; **/,1?.\\",
+   "args": [
+    "format",
+    "--filter",
+    "t,!y",
+    "--filter",
+    "**/,1?.\\",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "filter 112: */../... ; **reading=]!",
+   "args": [
+    "format",
+    "--filter",
+    "*/../...",
+    "--filter",
+    "**reading=]!",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "filter 120: t}[ab]treading=-",
+   "args": [
+    "format",
+    "--filter",
+    "t}[ab]treading=-",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "filter 128: ..x...",
+   "args": [
+    "format",
+    "--filter",
+    "..x...",
+    "--check",
+    "--working-dir",
+    "{}/f/a"
+   ]
+  },
+  {
+   "name": "filter 136: é.hcl",
+   "args": [
+    "format",
+    "--filter",
+    "é.hcl",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "filter 144:   ; [!a]b[!a]",
+   "args": [
+    "format",
+    "--filter",
+    " ",
+    "--filter",
+    "[!a]b[!a]",
+    "--check",
+    "--working-dir",
+    "{}/f/a"
+   ]
+  },
+  {
+   "name": "filter 152: {}/f/ ...|\\",
+   "args": [
+    "format",
+    "--filter",
+    "{}/f/ ...|\\",
+    "--check",
+    "--working-dir",
+    "{}/f/a"
+   ]
+  },
+  {
+   "name": "filter 160: x.hcl*{}/f/aé ; x[ab]|a ; x.hclexternal=truey[unit-",
+   "args": [
+    "format",
+    "--filter",
+    "x.hcl*{}/f/aé",
+    "--filter",
+    "x[ab]|a",
+    "--filter",
+    "x.hclexternal=truey[unit-",
+    "--check",
+    "--working-dir",
+    "{}/f/a"
+   ]
+  },
+  {
+   "name": "filter 168: ?[!!",
+   "args": [
+    "format",
+    "--filter",
+    "?[!!",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "filter 176: terragrunt.hcl/**../**/*",
+   "args": [
+    "format",
+    "--filter",
+    "terragrunt.hcl/**../**/*",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "filter 184: terragrunt.hcl/**/**x.hcl\\",
+   "args": [
+    "format",
+    "--filter",
+    "terragrunt.hcl/**/**x.hcl\\",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "filter 192: reading=\\]",
+   "args": [
+    "format",
+    "--filter",
+    "reading=\\]",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "filter 200: ?y{}/f/./......",
+   "args": [
+    "format",
+    "--filter",
+    "?y{}/f/./......",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "filter 208: ct | ",
+   "args": [
+    "format",
+    "--filter",
+    "ct | ",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "filter 216: tcxterragrunt.hcl ; [!a][ ; unit",
+   "args": [
+    "format",
+    "--filter",
+    "tcxterragrunt.hcl",
+    "--filter",
+    "[!a][",
+    "--filter",
+    "unit",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "path filter 004: !!./..",
+   "args": [
+    "format",
+    "--filter",
+    "!!./..",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "path filter 012: .//a* |!./terragrunt.hcl/y.hcl/terragrunt.hcl/*.hcl",
+   "args": [
+    "format",
+    "--filter",
+    ".//a* |!./terragrunt.hcl/y.hcl/terragrunt.hcl/*.hcl",
+    "--check",
+    "--working-dir",
+    "{}/f/a"
+   ]
+  },
+  {
+   "name": "path filter 020: !../x-y/c | .//*a*/top.hcl/../ ; !c/]/ |!./t.hcl/**a |{./[a-c]/**a} ; !{./*.hcl/b/1/[ab]}",
+   "args": [
+    "format",
+    "--filter",
+    "!../x-y/c | .//*a*/top.hcl/../",
+    "--filter",
+    "!c/]/ |!./t.hcl/**a |{./[a-c]/**a}",
+    "--filter",
+    "!{./*.hcl/b/1/[ab]}",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "path filter 028: !{}/f/**/c/?.hcl | !!.//a ; {./[ab]/?.hcl} | ./. | !.//t.hcl/[/b ; !{./a/*.hcl/**/x.hcl}",
+   "args": [
+    "format",
+    "--filter",
+    "!{}/f/**/c/?.hcl | !!.//a",
+    "--filter",
+    "{./[ab]/?.hcl} | ./. | !.//t.hcl/[/b",
+    "--filter",
+    "!{./a/*.hcl/**/x.hcl}",
+    "--check",
+    "--working-dir",
+    "{}/f/a"
+   ]
+  },
+  {
+   "name": "path filter 036: {./]} ; ./*.hcl/x-y/* |!./*.hcl |.//b/1/a",
+   "args": [
+    "format",
+    "--filter",
+    "{./]}",
+    "--filter",
+    "./*.hcl/x-y/* |!./*.hcl |.//b/1/a",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "path filter 044: !!{}/f/**/a/b/ab|!{}/f/*.hcl/*/?.hcl/.|!!./z.hcl/t* ; ../a b/*.hcl/b ; !.//a*/**/t.hcl",
+   "args": [
+    "format",
+    "--filter",
+    "!!{}/f/**/a/b/ab|!{}/f/*.hcl/*/?.hcl/.|!!./z.hcl/t*",
+    "--filter",
+    "../a b/*.hcl/b",
+    "--filter",
+    "!.//a*/**/t.hcl",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "path filter 052:  ../..",
+   "args": [
+    "format",
+    "--filter",
+    " ../..",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "path filter 060:  ./a*/t* | ../*/t*",
+   "args": [
+    "format",
+    "--filter",
+    " ./a*/t* | ../*/t*",
+    "--check",
+    "--working-dir",
+    "{}/f/a"
+   ]
+  },
+  {
+   "name": "path filter 068: !./t*/a* |{./*/t.hcl/b/.}",
+   "args": [
+    "format",
+    "--filter",
+    "!./t*/a* |{./*/t.hcl/b/.}",
+    "--check",
+    "--working-dir",
+    "{}/f/a"
+   ]
+  },
+  {
+   "name": "path filter 076: !./t.hcl/a/**/*",
+   "args": [
+    "format",
+    "--filter",
+    "!./t.hcl/a/**/*",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "path filter 084: !{./*.hcl/a/**a} ; !./*/**a |../a/x.hcl/* ; {./1/[a-c]/[ab]/é} |  ./a/y.hcl/a/",
+   "args": [
+    "format",
+    "--filter",
+    "!{./*.hcl/a/**a}",
+    "--filter",
+    "!./*/**a |../a/x.hcl/*",
+    "--filter",
+    "{./1/[a-c]/[ab]/é} |  ./a/y.hcl/a/",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "path filter 092: ./*/a/*.hcl/b",
+   "args": [
+    "format",
+    "--filter",
+    "./*/a/*.hcl/b",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "path filter 100:  ./**/1/*/a...",
+   "args": [
+    "format",
+    "--filter",
+    " ./**/1/*/a...",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "path filter 108: .///**/* name=a",
+   "args": [
+    "format",
+    "--filter",
+    ".///**/* name=a",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "path filter 116: !{./t.hcl} | ./**/terragrunt.hcl/*a* | .//*/./b",
+   "args": [
+    "format",
+    "--filter",
+    "!{./t.hcl} | ./**/terragrunt.hcl/*a* | .//*/./b",
+    "--check",
+    "--working-dir",
+    "{}/f/a"
+   ]
+  },
+  {
+   "name": "path filter 124: !!./a*|./a/z.hcl/a ; !!./x-y/*.hcl/ |./*.hcl |./a/t*/t*/",
+   "args": [
+    "format",
+    "--filter",
+    "!!./a*|./a/z.hcl/a",
+    "--filter",
+    "!!./x-y/*.hcl/ |./*.hcl |./a/t*/t*/",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "path filter 132: !!./**/a",
+   "args": [
+    "format",
+    "--filter",
+    "!!./**/a",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "path filter 140: ./x.hcl/c/1/y.hcl/ |{./*a*/y.hcl}",
+   "args": [
+    "format",
+    "--filter",
+    "./x.hcl/c/1/y.hcl/ |{./*a*/y.hcl}",
+    "--check",
+    "--working-dir",
+    "{}/f/a"
+   ]
+  },
+  {
+   "name": "path filter 148: !{}/f/**/a*/* | !!{./?/x.hcl} | !.//c/c ; ...{}/f/\\* ;  ./]/x-y/?.hcl/b |!{./terragrunt.hcl/**/a}",
+   "args": [
+    "format",
+    "--filter",
+    "!{}/f/**/a*/* | !!{./?/x.hcl} | !.//c/c",
+    "--filter",
+    "...{}/f/\\*",
+    "--filter",
+    " ./]/x-y/?.hcl/b |!{./terragrunt.hcl/**/a}",
+    "--check",
+    "--working-dir",
+    "{}/f/a"
+   ]
+  },
+  {
+   "name": "path filter 156:  ./x-y/*/.h",
+   "args": [
+    "format",
+    "--filter",
+    " ./x-y/*/.h",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "path filter 164: !**a | !../a b/.h/z.hcl",
+   "args": [
+    "format",
+    "--filter",
+    "!**a | !../a b/.h/z.hcl",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "path filter 172: {./z.hcl}|!.//*a* ; !!./top.hcl",
+   "args": [
+    "format",
+    "--filter",
+    "{./z.hcl}|!.//*a*",
+    "--filter",
+    "!!./top.hcl",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "path filter 180:  {./a/a b} ; ././z.hcl |!./* |./b ; !!./*.hcl/../?.hcl |  ./a b",
+   "args": [
+    "format",
+    "--filter",
+    " {./a/a b}",
+    "--filter",
+    "././z.hcl |!./* |./b",
+    "--filter",
+    "!!./*.hcl/../?.hcl |  ./a b",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "path filter 188: ./*.hcl| ./a/a b",
+   "args": [
+    "format",
+    "--filter",
+    "./*.hcl| ./a/a b",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "path filter 196: {./a/*/*.hcl/} |{./?} |{./a/*}",
+   "args": [
+    "format",
+    "--filter",
+    "{./a/*/*.hcl/} |{./?} |{./a/*}",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "path filter 204: !./terragrunt.hcl/ | !../**/c",
+   "args": [
+    "format",
+    "--filter",
+    "!./terragrunt.hcl/ | !../**/c",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "path filter 212:  ./*.hcl | !!./c | ../../t*/a b ; !{./1} ; !{}/f/top.hcl",
+   "args": [
+    "format",
+    "--filter",
+    " ./*.hcl | !!./c | ../../t*/a b",
+    "--filter",
+    "!{./1}",
+    "--filter",
+    "!{}/f/top.hcl",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "path filter 220: !!../**/*.hcl/1/** |!./*.hcl/a*/b/ab",
+   "args": [
+    "format",
+    "--filter",
+    "!!../**/*.hcl/1/** |!./*.hcl/a*/b/ab",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "path filter 228: .//.h/a/*/{x,y}.hcl | ./** ; ../1/t.hcl/c...",
+   "args": [
+    "format",
+    "--filter",
+    ".//.h/a/*/{x,y}.hcl | ./**",
+    "--filter",
+    "../1/t.hcl/c...",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "path filter 236: !./?.hcl/b | /z.hcl/b/a b/*.hcl | !../a*/a b/é ; !./terragrunt.hcl/*/a*/..",
+   "args": [
+    "format",
+    "--filter",
+    "!./?.hcl/b | /z.hcl/b/a b/*.hcl | !../a*/a b/é",
+    "--filter",
+    "!./terragrunt.hcl/*/a*/..",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "path filter 244: {}/f/**a/1/a | ./*.hcl/a b/ ; ./?/* | ./*/* | !{}/f/x-y/é/x=y/. ; !./terragrunt.hcl/1/x-y",
+   "args": [
+    "format",
+    "--filter",
+    "{}/f/**a/1/a | ./*.hcl/a b/",
+    "--filter",
+    "./?/* | ./*/* | !{}/f/x-y/é/x=y/.",
+    "--filter",
+    "!./terragrunt.hcl/1/x-y",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  },
+  {
+   "name": "path filter 252: !!../* |  ./t.hcl/*",
+   "args": [
+    "format",
+    "--filter",
+    "!!../* |  ./t.hcl/*",
+    "--check",
+    "--working-dir",
+    "{}/f"
+   ]
+  }
+ ]
+}

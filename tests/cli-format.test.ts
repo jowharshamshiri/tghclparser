@@ -118,7 +118,7 @@ describe('CLI hcl format', function () {
 		await write('zeta/terragrunt.hcl', unformatted);
 		const result = format(['--working-dir', root]);
 		expect(result.status).to.equal(1);
-		expect(result.stderr).to.equal(`Error parsing ${path.join(root, 'broken/terragrunt.hcl')}: line 3, column 1: unexpected "}"\n`);
+		expect(result.stderr).to.equal(`Error parsing ${path.join(root, 'broken/terragrunt.hcl')}: line 2, column 7: Invalid expression; Expected the start of an expression, but found an invalid expression token.\n`);
 		expect(await read('broken/terragrunt.hcl')).to.equal('inputs = {\n  a = \n}\n');
 		expect(await read('zeta/terragrunt.hcl')).to.equal(formatted);
 	});
@@ -158,7 +158,7 @@ describe('CLI hcl format', function () {
 		const broken = format(['--stdin'], 'a = \n');
 		expect(broken.status).to.equal(1);
 		expect(broken.stdout).to.equal('');
-		expect(broken.stderr).to.equal('error parsing hcl from stdin: line 2, column 1: unexpected end of input\n');
+		expect(broken.stderr).to.equal('error parsing hcl from stdin: line 1, column 5: Invalid expression; Expected the start of an expression, but found an invalid expression token.\n');
 
 		const both = format(['--stdin', '--file', 'terragrunt.hcl'], unformatted);
 		expect(both.status).to.not.equal(0);

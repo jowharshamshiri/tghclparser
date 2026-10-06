@@ -1,0 +1,2947 @@
+{
+ "syntax": [
+  {
+   "source": "a = 1\nb = \"two\"\nblock \"label\" {\n  c = [1, 2]\n}\n",
+   "problems": []
+  },
+  {
+   "source": "a = 1 b = 2\n",
+   "problems": [
+    {
+     "summary": "Missing newline after argument",
+     "detail": "An argument definition must end with a newline.",
+     "range": [
+      1,
+      7,
+      1,
+      8
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = 1, b = 2\n",
+   "problems": [
+    {
+     "summary": "Unexpected comma after argument",
+     "detail": "Argument definitions must be separated by newlines, not commas. An argument definition must end with a newline.",
+     "range": [
+      1,
+      6,
+      1,
+      7
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \n",
+   "problems": [
+    {
+     "summary": "Invalid expression",
+     "detail": "Expected the start of an expression, but found an invalid expression token.",
+     "range": [
+      1,
+      5,
+      2,
+      1
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = ",
+   "problems": [
+    {
+     "summary": "Missing expression",
+     "detail": "Expected the start of an expression, but found the end of the file.",
+     "range": [
+      1,
+      5,
+      1,
+      5
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a\n",
+   "problems": [
+    {
+     "summary": "Argument or block definition required",
+     "detail": "An argument or block definition is required here. To set an argument, use the equals sign \"=\" to introduce the argument value.",
+     "range": [
+      1,
+      1,
+      1,
+      2
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a b\n",
+   "problems": [
+    {
+     "summary": "Invalid block definition",
+     "detail": "A block definition must have block content delimited by \"{\" and \"}\", starting on the same line as the block header.",
+     "range": [
+      1,
+      4,
+      2,
+      1
+     ]
+    }
+   ]
+  },
+  {
+   "source": "\"a\" = 1\n",
+   "problems": [
+    {
+     "summary": "Invalid argument name",
+     "detail": "Argument names must not be quoted.",
+     "range": [
+      1,
+      1,
+      1,
+      2
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = 1\na = 2\n",
+   "problems": [
+    {
+     "summary": "Attribute redefined",
+     "detail": "The argument \"a\" was already set at terragrunt.hcl:1,1-2. Each argument may be set only once.",
+     "range": [
+      2,
+      1,
+      2,
+      2
+     ]
+    }
+   ]
+  },
+  {
+   "source": "b {\n  a = 1\n  a = 2\n}\n",
+   "problems": [
+    {
+     "summary": "Attribute redefined",
+     "detail": "The argument \"a\" was already set at terragrunt.hcl:2,3-4. Each argument may be set only once.",
+     "range": [
+      3,
+      3,
+      3,
+      4
+     ]
+    }
+   ]
+  },
+  {
+   "source": "b {\n  a = 1\n",
+   "problems": [
+    {
+     "summary": "Unclosed configuration block",
+     "detail": "There is no closing brace for this block before the end of the file. This may be caused by incorrect brace nesting elsewhere in this file.",
+     "range": [
+      1,
+      3,
+      1,
+      4
+     ]
+    }
+   ]
+  },
+  {
+   "source": "b { a = 1\n}\n",
+   "problems": [
+    {
+     "summary": "Invalid single-argument block definition",
+     "detail": "An argument definition on the same line as its containing block creates a single-line block definition, which must also be closed on the same line. Place the block's closing brace immediately after the argument definition.",
+     "range": [
+      1,
+      10,
+      2,
+      1
+     ]
+    }
+   ]
+  },
+  {
+   "source": "b { a = 1, c = 2 }\n",
+   "problems": [
+    {
+     "summary": "Invalid single-argument block definition",
+     "detail": "Single-line block syntax can include only one argument definition. To define multiple arguments, use the multi-line block syntax with one argument definition per line.",
+     "range": [
+      1,
+      10,
+      1,
+      11
+     ]
+    }
+   ]
+  },
+  {
+   "source": "b { a = 1 } c = 2\n",
+   "problems": [
+    {
+     "summary": "Missing newline after block definition",
+     "detail": "A block definition must end with a newline.",
+     "range": [
+      1,
+      13,
+      1,
+      14
+     ]
+    }
+   ]
+  },
+  {
+   "source": "b { c { } }\n",
+   "problems": [
+    {
+     "summary": "Argument definition required",
+     "detail": "A single-line block definition can contain only a single argument. If you meant to define argument \"c\", use an equals sign to assign it a value. To define a nested block, place it on a line of its own within its parent block.",
+     "range": [
+      1,
+      5,
+      1,
+      8
+     ]
+    }
+   ]
+  },
+  {
+   "source": "b = { a = 1\n",
+   "problems": [
+    {
+     "summary": "Missing expression",
+     "detail": "Expected the start of an expression, but found the end of the file.",
+     "range": [
+      2,
+      1,
+      2,
+      1
+     ]
+    }
+   ]
+  },
+  {
+   "source": "b \"l\"\n{\n}\n",
+   "problems": [
+    {
+     "summary": "Invalid block definition",
+     "detail": "A block definition must have block content delimited by \"{\" and \"}\", starting on the same line as the block header.",
+     "range": [
+      1,
+      6,
+      2,
+      1
+     ]
+    }
+   ]
+  },
+  {
+   "source": "b \"l\" = 1\n",
+   "problems": [
+    {
+     "summary": "Invalid block definition",
+     "detail": "The equals sign \"=\" indicates an argument definition, and must not be used when defining a block.",
+     "range": [
+      1,
+      7,
+      1,
+      8
+     ]
+    }
+   ]
+  },
+  {
+   "source": "b \"${x}\" {}\n",
+   "problems": [
+    {
+     "summary": "Invalid string literal",
+     "detail": "Template sequences are not allowed in this string. To include a literal \"$\", double it (as \"$$\") to escape it.",
+     "range": [
+      1,
+      4,
+      1,
+      6
+     ]
+    }
+   ]
+  },
+  {
+   "source": "b \"\\q\" {}\n",
+   "problems": [
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "The symbol \"q\" is not a valid escape sequence selector.",
+     "range": [
+      1,
+      4,
+      1,
+      6
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"\\q\"\n",
+   "problems": [
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "The symbol \"q\" is not a valid escape sequence selector.",
+     "range": [
+      1,
+      6,
+      1,
+      8
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"\\u12\"\n",
+   "problems": [
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "The \\u escape sequence must be followed by four hexadecimal digits.",
+     "range": [
+      1,
+      6,
+      1,
+      10
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"\\uD800\"\n",
+   "problems": [
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "Cannot encode character U+d800 in UTF-8.",
+     "range": [
+      1,
+      6,
+      1,
+      12
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"\\U00110000\"\n",
+   "problems": [
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "Cannot encode character U+110000 in UTF-8.",
+     "range": [
+      1,
+      6,
+      1,
+      16
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"line\nbreak\"\n",
+   "problems": [
+    {
+     "summary": "Invalid multi-line string",
+     "detail": "Quoted strings may not be split over multiple lines. To produce a multi-line string, either use the \\n escape to represent a newline character or use the \"heredoc\" multi-line template syntax.",
+     "range": [
+      1,
+      10,
+      2,
+      1
+     ]
+    },
+    {
+     "summary": "Unterminated template string",
+     "detail": "No closing marker was found for the string.",
+     "range": [
+      1,
+      10,
+      2,
+      1
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = 'single'\n",
+   "problems": [
+    {
+     "summary": "Invalid character",
+     "detail": "Single quotes are not valid. Use double quotes (\") to enclose strings.",
+     "range": [
+      1,
+      5,
+      1,
+      6
+     ]
+    },
+    {
+     "summary": "Invalid expression",
+     "detail": "Expected the start of an expression, but found an invalid expression token.",
+     "range": [
+      1,
+      5,
+      1,
+      6
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = `tick`\n",
+   "problems": [
+    {
+     "summary": "Invalid character",
+     "detail": "The \"`\" character is not valid. To create a multi-line string, use the \"heredoc\" syntax, like \"<<EOT\".",
+     "range": [
+      1,
+      5,
+      1,
+      6
+     ]
+    },
+    {
+     "summary": "Invalid expression",
+     "detail": "Expected the start of an expression, but found an invalid expression token.",
+     "range": [
+      1,
+      5,
+      1,
+      6
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = 1;\n",
+   "problems": [
+    {
+     "summary": "Invalid character",
+     "detail": "The \";\" character is not valid. Use newlines to separate arguments and blocks, and commas to separate items in collection values.",
+     "range": [
+      1,
+      6,
+      1,
+      7
+     ]
+    },
+    {
+     "summary": "Missing newline after argument",
+     "detail": "An argument definition must end with a newline.",
+     "range": [
+      1,
+      6,
+      1,
+      7
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = b & c\n",
+   "problems": [
+    {
+     "summary": "Unsupported operator",
+     "detail": "Bitwise operators are not supported. Did you mean boolean AND (\"&&\")?",
+     "range": [
+      1,
+      7,
+      1,
+      8
+     ]
+    },
+    {
+     "summary": "Missing newline after argument",
+     "detail": "An argument definition must end with a newline.",
+     "range": [
+      1,
+      7,
+      1,
+      8
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = b | c\n",
+   "problems": [
+    {
+     "summary": "Unsupported operator",
+     "detail": "Bitwise operators are not supported. Did you mean boolean OR (\"||\")?",
+     "range": [
+      1,
+      7,
+      1,
+      8
+     ]
+    },
+    {
+     "summary": "Missing newline after argument",
+     "detail": "An argument definition must end with a newline.",
+     "range": [
+      1,
+      7,
+      1,
+      8
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = ~b\n",
+   "problems": [
+    {
+     "summary": "Unsupported operator",
+     "detail": "Bitwise operators are not supported. Did you mean boolean NOT (\"!\")?",
+     "range": [
+      1,
+      5,
+      1,
+      6
+     ]
+    },
+    {
+     "summary": "Invalid expression",
+     "detail": "Expected the start of an expression, but found an invalid expression token.",
+     "range": [
+      1,
+      5,
+      1,
+      6
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = b ^ c\n",
+   "problems": [
+    {
+     "summary": "Unsupported operator",
+     "detail": "Bitwise operators are not supported.",
+     "range": [
+      1,
+      7,
+      1,
+      8
+     ]
+    },
+    {
+     "summary": "Missing newline after argument",
+     "detail": "An argument definition must end with a newline.",
+     "range": [
+      1,
+      7,
+      1,
+      8
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = “curly”\n",
+   "problems": [
+    {
+     "summary": "Invalid character",
+     "detail": "\"Curly quotes\" are not valid here. These can sometimes be inadvertently introduced when sharing code via documents or discussion forums. It might help to replace the character with a \"straight quote\".",
+     "range": [
+      1,
+      5,
+      1,
+      6
+     ]
+    },
+    {
+     "summary": "Invalid character",
+     "detail": "\"Curly quotes\" are not valid here. These can sometimes be inadvertently introduced when sharing code via documents or discussion forums. It might help to replace the character with a \"straight quote\".",
+     "range": [
+      1,
+      11,
+      1,
+      12
+     ]
+    },
+    {
+     "summary": "Invalid expression",
+     "detail": "Expected the start of an expression, but found an invalid expression token.",
+     "range": [
+      1,
+      5,
+      1,
+      6
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = @\n",
+   "problems": [
+    {
+     "summary": "Invalid character",
+     "detail": "This character is not used within the language.",
+     "range": [
+      1,
+      5,
+      1,
+      6
+     ]
+    },
+    {
+     "summary": "Invalid expression",
+     "detail": "Expected the start of an expression, but found an invalid expression token.",
+     "range": [
+      1,
+      5,
+      1,
+      6
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = 1.2.3\n",
+   "problems": [
+    {
+     "summary": "Invalid number literal",
+     "detail": "Failed to recognize the value of this number literal.",
+     "range": [
+      1,
+      5,
+      1,
+      10
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = 1e5e2\n",
+   "problems": [
+    {
+     "summary": "Invalid number literal",
+     "detail": "Failed to recognize the value of this number literal.",
+     "range": [
+      1,
+      5,
+      1,
+      10
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = 1e99999999999\n",
+   "problems": [
+    {
+     "summary": "Invalid number literal",
+     "detail": "Failed to recognize the value of this number literal.",
+     "range": [
+      1,
+      5,
+      1,
+      18
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = b.\n",
+   "problems": [
+    {
+     "summary": "Invalid attribute name",
+     "detail": "An attribute name is required after a dot.",
+     "range": [
+      1,
+      7,
+      2,
+      1
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = b.0.1\n",
+   "problems": [
+    {
+     "summary": "Invalid legacy index syntax",
+     "detail": "When using the legacy index syntax, chaining two indexes together is not permitted. Use the proper index syntax instead, like [0][1].",
+     "range": [
+      1,
+      7,
+      1,
+      10
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = b.*.*\n",
+   "problems": [
+    {
+     "summary": "Nested splat expression not allowed",
+     "detail": "A splat expression (*) cannot be used inside another attribute-only splat expression.",
+     "range": [
+      1,
+      9,
+      1,
+      10
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = b.*.c.0.1\n",
+   "problems": [
+    {
+     "summary": "Invalid legacy index syntax",
+     "detail": "When using the legacy index syntax, chaining two indexes together is not permitted. Use the proper index syntax with a full splat expression [*] instead, like [0][1].",
+     "range": [
+      1,
+      7,
+      1,
+      8
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = b[*\n",
+   "problems": [
+    {
+     "summary": "Missing close bracket on splat index",
+     "detail": "The star for a full splat operator must be immediately followed by a closing bracket (\"]\").",
+     "range": [
+      2,
+      1,
+      2,
+      1
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = b[0\n",
+   "problems": [
+    {
+     "summary": "Missing close bracket on index",
+     "detail": "The index operator must end with a closing bracket (\"]\").",
+     "range": [
+      2,
+      1,
+      2,
+      1
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = (1\n",
+   "problems": [
+    {
+     "summary": "Unbalanced parentheses",
+     "detail": "Expected a closing parenthesis to terminate the expression.",
+     "range": [
+      2,
+      1,
+      2,
+      1
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = f(1 2)\n",
+   "problems": [
+    {
+     "summary": "Missing argument separator",
+     "detail": "A comma is required to separate each function argument from the next.",
+     "range": [
+      1,
+      9,
+      1,
+      10
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = f(1\n",
+   "problems": [
+    {
+     "summary": "Unterminated function call",
+     "detail": "There is no closing parenthesis for this function call before the end of the file. This may be caused by incorrect parenthesis nesting elsewhere in this file.",
+     "range": [
+      1,
+      5,
+      1,
+      7
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = f(x..., y)\n",
+   "problems": [
+    {
+     "summary": "Missing closing parenthesis",
+     "detail": "An expanded function argument (with ...) must be immediately followed by closing parentheses.",
+     "range": [
+      1,
+      8,
+      1,
+      11
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = ns::\n",
+   "problems": [
+    {
+     "summary": "Missing function name",
+     "detail": "Function scope resolution symbol :: must be followed by a function name in this scope.",
+     "range": [
+      1,
+      9,
+      2,
+      1
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = ns::f\n",
+   "problems": [
+    {
+     "summary": "Missing open parenthesis",
+     "detail": "Function selector must be followed by an open parenthesis to begin the function call.",
+     "range": [
+      1,
+      10,
+      2,
+      1
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = [1 2]\n",
+   "problems": [
+    {
+     "summary": "Missing item separator",
+     "detail": "Expected a comma to mark the beginning of the next item.",
+     "range": [
+      1,
+      8,
+      1,
+      9
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = [1,\n",
+   "problems": [
+    {
+     "summary": "Missing expression",
+     "detail": "Expected the start of an expression, but found the end of the file.",
+     "range": [
+      2,
+      1,
+      2,
+      1
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = { b }\n",
+   "problems": [
+    {
+     "summary": "Missing key/value separator",
+     "detail": "Expected an equals sign (\"=\") to mark the beginning of the attribute value.",
+     "range": [
+      1,
+      9,
+      1,
+      10
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = { b c = 1 }\n",
+   "problems": [
+    {
+     "summary": "Missing key/value separator",
+     "detail": "Expected an equals sign (\"=\") to mark the beginning of the attribute value. If you intended to given an attribute name containing periods or spaces, write the name in quotes to create a string literal.",
+     "range": [
+      1,
+      9,
+      1,
+      10
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = { b = 1 c = 2 }\n",
+   "problems": [
+    {
+     "summary": "Missing attribute separator",
+     "detail": "Expected a newline or comma to mark the beginning of the next attribute.",
+     "range": [
+      1,
+      13,
+      1,
+      14
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = { b = 1\n",
+   "problems": [
+    {
+     "summary": "Missing expression",
+     "detail": "Expected the start of an expression, but found the end of the file.",
+     "range": [
+      2,
+      1,
+      2,
+      1
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = x ? y\n",
+   "problems": [
+    {
+     "summary": "Missing false expression in conditional",
+     "detail": "The conditional operator (...?...:...) requires a false expression, delimited by a colon.",
+     "range": [
+      1,
+      10,
+      2,
+      1
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = [for]\n",
+   "problems": [
+    {
+     "summary": "Invalid 'for' expression",
+     "detail": "For expression requires variable name after 'for'.",
+     "range": [
+      1,
+      9,
+      1,
+      10
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = [for x]\n",
+   "problems": [
+    {
+     "summary": "Invalid 'for' expression",
+     "detail": "For expression requires the 'in' keyword after its name declarations.",
+     "range": [
+      1,
+      11,
+      1,
+      12
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = [for x, ]\n",
+   "problems": [
+    {
+     "summary": "Invalid 'for' expression",
+     "detail": "For expression requires value variable name after comma.",
+     "range": [
+      1,
+      13,
+      1,
+      14
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = [for x in y]\n",
+   "problems": [
+    {
+     "summary": "Invalid 'for' expression",
+     "detail": "For expression requires a colon after the collection expression.",
+     "range": [
+      1,
+      16,
+      1,
+      17
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = [for x in y : x x]\n",
+   "problems": [
+    {
+     "summary": "Invalid 'for' expression",
+     "detail": "Extra characters after the end of the 'for' expression.",
+     "range": [
+      1,
+      21,
+      1,
+      22
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = [for x in y : k => v]\n",
+   "problems": [
+    {
+     "summary": "Invalid 'for' expression",
+     "detail": "Key expression is not valid when building a tuple.",
+     "range": [
+      1,
+      19,
+      1,
+      20
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = [for x in y : x...]\n",
+   "problems": [
+    {
+     "summary": "Invalid 'for' expression",
+     "detail": "Grouping ellipsis (...) cannot be used when building a tuple.",
+     "range": [
+      1,
+      20,
+      1,
+      23
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = {for x in y : x}\n",
+   "problems": [
+    {
+     "summary": "Invalid 'for' expression",
+     "detail": "Key expression is required when building an object.",
+     "range": [
+      1,
+      19,
+      1,
+      20
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"${\"\n",
+   "problems": [
+    {
+     "summary": "Invalid multi-line string",
+     "detail": "Quoted strings may not be split over multiple lines. To produce a multi-line string, either use the \\n escape to represent a newline character or use the \"heredoc\" multi-line template syntax.",
+     "range": [
+      1,
+      9,
+      2,
+      1
+     ]
+    },
+    {
+     "summary": "Unterminated template string",
+     "detail": "No closing marker was found for the string.",
+     "range": [
+      1,
+      9,
+      2,
+      1
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"${x\"\n",
+   "problems": [
+    {
+     "summary": "Invalid multi-line string",
+     "detail": "Quoted strings may not be split over multiple lines. To produce a multi-line string, either use the \\n escape to represent a newline character or use the \"heredoc\" multi-line template syntax.",
+     "range": [
+      1,
+      10,
+      2,
+      1
+     ]
+    },
+    {
+     "summary": "Unclosed template interpolation sequence",
+     "detail": "There is no closing brace for this interpolation sequence before the end of the quoted template. This might be caused by incorrect nesting inside the given expression.",
+     "range": [
+      1,
+      6,
+      1,
+      8
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"${x:y}\"\n",
+   "problems": [
+    {
+     "summary": "Extra characters after interpolation expression",
+     "detail": "Template interpolation doesn't expect a colon at this location. Did you intend this to be a literal sequence to be processed as part of another language? If so, you can escape it by starting with \"$${\" instead of just \"${\".",
+     "range": [
+      1,
+      9,
+      1,
+      10
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"${x y}\"\n",
+   "problems": [
+    {
+     "summary": "Extra characters after interpolation expression",
+     "detail": "Expected a closing brace to end the interpolation expression, but found extra characters.\n\nThis can happen when you include interpolation syntax for another language, such as shell scripting, but forget to escape the interpolation start token. If this is an embedded sequence for another language, escape it by starting with \"$${\" instead of just \"${\".",
+     "range": [
+      1,
+      10,
+      1,
+      11
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"%{}\"\n",
+   "problems": [
+    {
+     "summary": "Invalid template directive",
+     "detail": "A template directive keyword (\"if\", \"for\", etc) is expected at the beginning of a %{ sequence.",
+     "range": [
+      1,
+      8,
+      1,
+      9
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"%{ nope }\"\n",
+   "problems": [
+    {
+     "summary": "Invalid template control keyword",
+     "detail": "\"nope\" is not a valid template control keyword.",
+     "range": [
+      1,
+      9,
+      1,
+      13
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"%{ ife x }\"\n",
+   "problems": [
+    {
+     "summary": "Invalid template control keyword",
+     "detail": "\"ife\" is not a valid template control keyword. Did you mean \"if\"?",
+     "range": [
+      1,
+      9,
+      1,
+      12
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"%{ if x y }\"\n",
+   "problems": [
+    {
+     "summary": "Extra characters in if marker",
+     "detail": "Expected a closing brace to end the sequence, but found extra characters.",
+     "range": [
+      1,
+      14,
+      1,
+      15
+     ]
+    },
+    {
+     "summary": "Unexpected end of template",
+     "detail": "The if directive at terragrunt.hcl:1,6-15 is missing its corresponding endif directive.",
+     "range": [
+      1,
+      17,
+      1,
+      18
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"%{ if x }\"\n",
+   "problems": [
+    {
+     "summary": "Unexpected end of template",
+     "detail": "The if directive at terragrunt.hcl:1,6-15 is missing its corresponding endif directive.",
+     "range": [
+      1,
+      15,
+      1,
+      16
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"%{ for x in y }\"\n",
+   "problems": [
+    {
+     "summary": "Unexpected end of template",
+     "detail": "The for directive at terragrunt.hcl:1,6-21 is missing its corresponding endfor directive.",
+     "range": [
+      1,
+      21,
+      1,
+      22
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"%{ endif }\"\n",
+   "problems": [
+    {
+     "summary": "Unexpected endif directive",
+     "detail": "The control directives within this template are unbalanced.",
+     "range": [
+      1,
+      6,
+      1,
+      16
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"%{ else }\"\n",
+   "problems": [
+    {
+     "summary": "Unexpected else directive",
+     "detail": "The control directives within this template are unbalanced.",
+     "range": [
+      1,
+      6,
+      1,
+      15
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"%{ if x }%{ else }%{ else }%{ endif }\"\n",
+   "problems": [
+    {
+     "summary": "Unexpected else directive",
+     "detail": "Already in the else clause for the if started at terragrunt.hcl:1,6-15.",
+     "range": [
+      1,
+      24,
+      1,
+      33
+     ]
+    },
+    {
+     "summary": "Unexpected endif directive",
+     "detail": "The control directives within this template are unbalanced.",
+     "range": [
+      1,
+      33,
+      1,
+      43
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"%{ if x }%{ endfor }\"\n",
+   "problems": [
+    {
+     "summary": "Unexpected endfor directive",
+     "detail": "Expecting an endif directive for the if started at terragrunt.hcl:1,6-15.",
+     "range": [
+      1,
+      15,
+      1,
+      26
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"%{ for x in y }%{ else }%{ endfor }\"\n",
+   "problems": [
+    {
+     "summary": "Unexpected else directive",
+     "detail": "An else clause is not expected for a for directive.",
+     "range": [
+      1,
+      21,
+      1,
+      30
+     ]
+    },
+    {
+     "summary": "Unexpected endfor directive",
+     "detail": "The control directives within this template are unbalanced.",
+     "range": [
+      1,
+      30,
+      1,
+      41
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"%{ for x in y }%{ endif }\"\n",
+   "problems": [
+    {
+     "summary": "Unexpected endif directive",
+     "detail": "Expecting an endfor directive corresponding to the for directive at terragrunt.hcl:1,6-21.",
+     "range": [
+      1,
+      21,
+      1,
+      31
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"%{ for }\"\n",
+   "problems": [
+    {
+     "summary": "Invalid 'for' directive",
+     "detail": "For directive requires variable name after 'for'.",
+     "range": [
+      1,
+      13,
+      1,
+      14
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"%{ for x, }\"\n",
+   "problems": [
+    {
+     "summary": "Invalid 'for' directive",
+     "detail": "For directive requires value variable name after comma.",
+     "range": [
+      1,
+      16,
+      1,
+      17
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"%{ for x y }\"\n",
+   "problems": [
+    {
+     "summary": "Invalid 'for' directive",
+     "detail": "For directive requires 'in' keyword after names.",
+     "range": [
+      1,
+      15,
+      1,
+      16
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"unterminated\n",
+   "problems": [
+    {
+     "summary": "Invalid multi-line string",
+     "detail": "Quoted strings may not be split over multiple lines. To produce a multi-line string, either use the \\n escape to represent a newline character or use the \"heredoc\" multi-line template syntax.",
+     "range": [
+      1,
+      18,
+      2,
+      1
+     ]
+    },
+    {
+     "summary": "Unterminated template string",
+     "detail": "No closing marker was found for the string.",
+     "range": [
+      1,
+      18,
+      2,
+      1
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = <<EOT\nnever closed\n",
+   "problems": [
+    {
+     "summary": "Unterminated template string",
+     "detail": "No closing marker was found for the string.",
+     "range": [
+      3,
+      1,
+      3,
+      1
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = <<EOT\n${\nEOT\n",
+   "problems": [
+    {
+     "summary": "Unclosed template interpolation sequence",
+     "detail": "There is no closing brace for this interpolation sequence before the end of the file. This might be caused by incorrect nesting inside the given expression.",
+     "range": [
+      2,
+      1,
+      2,
+      3
+     ]
+    }
+   ]
+  },
+  {
+   "source": "}\n",
+   "problems": [
+    {
+     "summary": "Argument or block definition required",
+     "detail": "An argument or block definition is required here.",
+     "range": [
+      1,
+      1,
+      1,
+      2
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = }\n",
+   "problems": [
+    {
+     "summary": "Invalid expression",
+     "detail": "Expected the start of an expression, but found an invalid expression token.",
+     "range": [
+      1,
+      5,
+      1,
+      6
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = 1 # comment\nb = 2 // comment\nc = /* inline */ 3\n",
+   "problems": []
+  },
+  {
+   "source": "a = [\n  1,\n  2,\n]\nb = f(\n  1,\n)\nc = {\n  d = 1,\n  e = 2\n}\n",
+   "problems": []
+  },
+  {
+   "source": "a = \"${ x ~}%{~ if y }z%{ endif ~}\"\n",
+   "problems": []
+  },
+  {
+   "source": "a = <<-EOT\n  ${x}\n  EOT\n",
+   "problems": []
+  },
+  {
+   "source": "a = b.0\nc = d.*.e\nf = g[*].h\ni = j[\"k\"]\n",
+   "problems": []
+  },
+  {
+   "source": "a = [for k, v in m : k => v... if v]\n",
+   "problems": [
+    {
+     "summary": "Invalid 'for' expression",
+     "detail": "Key expression is not valid when building a tuple.",
+     "range": [
+      1,
+      22,
+      1,
+      23
+     ]
+    },
+    {
+     "summary": "Invalid 'for' expression",
+     "detail": "Grouping ellipsis (...) cannot be used when building a tuple.",
+     "range": [
+      1,
+      28,
+      1,
+      31
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = {for k, v in m : k => v...}\n",
+   "problems": []
+  },
+  {
+   "source": "a = -1 + !b\n",
+   "problems": []
+  },
+  {
+   "source": "a = 1e5\nb = 1.5\nc = 0.5e-3\nd = 007\n",
+   "problems": []
+  },
+  {
+   "source": "b { a = c.1.2 ",
+   "problems": [
+    {
+     "summary": "Unclosed configuration block",
+     "detail": "There is no closing brace for this block before the end of the file. This may be caused by incorrect brace nesting elsewhere in this file.",
+     "range": [
+      1,
+      3,
+      1,
+      4
+     ]
+    },
+    {
+     "summary": "Invalid legacy index syntax",
+     "detail": "When using the legacy index syntax, chaining two indexes together is not permitted. Use the proper index syntax instead, like [1][2].",
+     "range": [
+      1,
+      11,
+      1,
+      14
+     ]
+    }
+   ]
+  },
+  {
+   "source": "b { a = 1e5e2\n}\n",
+   "problems": [
+    {
+     "summary": "Invalid single-argument block definition",
+     "detail": "An argument definition on the same line as its containing block creates a single-line block definition, which must also be closed on the same line. Place the block's closing brace immediately after the argument definition.",
+     "range": [
+      1,
+      14,
+      2,
+      1
+     ]
+    },
+    {
+     "summary": "Invalid number literal",
+     "detail": "Failed to recognize the value of this number literal.",
+     "range": [
+      1,
+      9,
+      1,
+      14
+     ]
+    }
+   ]
+  },
+  {
+   "source": "b {{\n}\n",
+   "problems": [
+    {
+     "summary": "Argument or block definition required",
+     "detail": "An argument or block definition is required here.",
+     "range": [
+      1,
+      4,
+      1,
+      5
+     ]
+    }
+   ]
+  },
+  {
+   "source": "b { a = \"\\q\" c }\n",
+   "problems": [
+    {
+     "summary": "Invalid single-argument block definition",
+     "detail": "A single-line block definition must end with a closing brace immediately after its single argument definition.",
+     "range": [
+      1,
+      14,
+      1,
+      15
+     ]
+    },
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "The symbol \"q\" is not a valid escape sequence selector.",
+     "range": [
+      1,
+      10,
+      1,
+      12
+     ]
+    }
+   ]
+  },
+  {
+   "source": "b { a = 1, c = 2 }\n",
+   "problems": [
+    {
+     "summary": "Invalid single-argument block definition",
+     "detail": "Single-line block syntax can include only one argument definition. To define multiple arguments, use the multi-line block syntax with one argument definition per line.",
+     "range": [
+      1,
+      10,
+      1,
+      11
+     ]
+    }
+   ]
+  },
+  {
+   "source": "﻿a = @\n",
+   "problems": [
+    {
+     "summary": "Invalid character",
+     "detail": "This character is not used within the language.",
+     "range": [
+      1,
+      5,
+      1,
+      6
+     ]
+    },
+    {
+     "summary": "Invalid expression",
+     "detail": "Expected the start of an expression, but found an invalid expression token.",
+     "range": [
+      1,
+      5,
+      1,
+      6
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"é\\q\"\n",
+   "problems": [
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "The symbol \"q\" is not a valid escape sequence selector.",
+     "range": [
+      1,
+      7,
+      1,
+      9
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"é\\q\"\n",
+   "problems": [
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "The symbol \"q\" is not a valid escape sequence selector.",
+     "range": [
+      1,
+      7,
+      1,
+      9
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"\\ń\\q\"\n",
+   "problems": [
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "The symbol \"q\" is not a valid escape sequence selector.",
+     "range": [
+      1,
+      9,
+      1,
+      11
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"👨‍👩‍👧\\u12\"\n",
+   "problems": [
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "The \\u escape sequence must be followed by four hexadecimal digits.",
+     "range": [
+      1,
+      7,
+      1,
+      11
+     ]
+    }
+   ]
+  },
+  {
+   "source": "é = 1 2\n",
+   "problems": [
+    {
+     "summary": "Missing newline after argument",
+     "detail": "An argument definition must end with a newline.",
+     "range": [
+      1,
+      7,
+      1,
+      8
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = [\n  1\n  2\n]\n",
+   "problems": [
+    {
+     "summary": "Missing item separator",
+     "detail": "Expected a comma to mark the beginning of the next item.",
+     "range": [
+      3,
+      3,
+      3,
+      4
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = b[c,]\n",
+   "problems": [
+    {
+     "summary": "Missing close bracket on index",
+     "detail": "The index operator must end with a closing bracket (\"]\").",
+     "range": [
+      1,
+      9,
+      1,
+      10
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = b[ * \n ]\n",
+   "problems": [
+    {
+     "summary": "Missing close bracket on splat index",
+     "detail": "The star for a full splat operator must be immediately followed by a closing bracket (\"]\").",
+     "range": [
+      2,
+      2,
+      2,
+      3
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = f(\n",
+   "problems": [
+    {
+     "summary": "Missing expression",
+     "detail": "Expected the start of an expression, but found the end of the file.",
+     "range": [
+      2,
+      1,
+      2,
+      1
+     ]
+    }
+   ]
+  },
+  {
+   "source": "x \"",
+   "problems": [
+    {
+     "summary": "Unterminated string literal",
+     "detail": "Unable to find the closing quote mark before the end of the file.",
+     "range": [
+      1,
+      4,
+      1,
+      4
+     ]
+    },
+    {
+     "summary": "Invalid block definition",
+     "detail": "Either a quoted string block label or an opening brace (\"{\") is expected here.",
+     "range": [
+      1,
+      4,
+      1,
+      4
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = {for k, v in m : v}\n",
+   "problems": [
+    {
+     "summary": "Invalid 'for' expression",
+     "detail": "Key expression is required when building an object.",
+     "range": [
+      1,
+      22,
+      1,
+      23
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = [for v in m : k => v]\n",
+   "problems": [
+    {
+     "summary": "Invalid 'for' expression",
+     "detail": "Key expression is not valid when building a tuple.",
+     "range": [
+      1,
+      19,
+      1,
+      20
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = [for v in m : v...]\n",
+   "problems": [
+    {
+     "summary": "Invalid 'for' expression",
+     "detail": "Grouping ellipsis (...) cannot be used when building a tuple.",
+     "range": [
+      1,
+      20,
+      1,
+      23
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = 1 # c\nb = ;\n",
+   "problems": [
+    {
+     "summary": "Invalid character",
+     "detail": "The \";\" character is not valid. Use newlines to separate arguments and blocks, and commas to separate items in collection values.",
+     "range": [
+      2,
+      5,
+      2,
+      6
+     ]
+    },
+    {
+     "summary": "Invalid expression",
+     "detail": "Expected the start of an expression, but found an invalid expression token.",
+     "range": [
+      2,
+      5,
+      2,
+      6
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"x\\U0011FFFFy\"\n",
+   "problems": [
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "Cannot encode character U+11ffff in UTF-8.",
+     "range": [
+      1,
+      7,
+      1,
+      17
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"\\\"\n",
+   "problems": [
+    {
+     "summary": "Invalid multi-line string",
+     "detail": "Quoted strings may not be split over multiple lines. To produce a multi-line string, either use the \\n escape to represent a newline character or use the \"heredoc\" multi-line template syntax.",
+     "range": [
+      1,
+      8,
+      2,
+      1
+     ]
+    },
+    {
+     "summary": "Unterminated template string",
+     "detail": "No closing marker was found for the string.",
+     "range": [
+      1,
+      8,
+      2,
+      1
+     ]
+    }
+   ]
+  }
+ ],
+ "tokens": [
+  {
+   "source": "a = 1\n",
+   "tokens": [
+    "Ident",
+    "a",
+    "Equal",
+    "=",
+    "NumberLit",
+    "1",
+    "Newline",
+    "\n",
+    "EOF",
+    ""
+   ]
+  },
+  {
+   "source": "a=b.c[0]",
+   "tokens": [
+    "Ident",
+    "a",
+    "Equal",
+    "=",
+    "Ident",
+    "b",
+    "Dot",
+    ".",
+    "Ident",
+    "c",
+    "OBrack",
+    "[",
+    "NumberLit",
+    "0",
+    "CBrack",
+    "]",
+    "EOF",
+    ""
+   ]
+  },
+  {
+   "source": "a = \"x${ y }z$${w}%%{v}\"\n",
+   "tokens": [
+    "Ident",
+    "a",
+    "Equal",
+    "=",
+    "OQuote",
+    "\"",
+    "QuotedLit",
+    "x",
+    "TemplateInterp",
+    "${",
+    "Ident",
+    "y",
+    "TemplateSeqEnd",
+    "}",
+    "QuotedLit",
+    "z",
+    "QuotedLit",
+    "$${",
+    "QuotedLit",
+    "w}",
+    "QuotedLit",
+    "%%{",
+    "QuotedLit",
+    "v}",
+    "CQuote",
+    "\"",
+    "Newline",
+    "\n",
+    "EOF",
+    ""
+   ]
+  },
+  {
+   "source": "a = <<EOT\n line $ one\n $x\n $$ two\n $${ three\nEOT\n",
+   "tokens": [
+    "Ident",
+    "a",
+    "Equal",
+    "=",
+    "OHeredoc",
+    "<<EOT\n",
+    "StringLit",
+    " line ",
+    "StringLit",
+    "$",
+    "StringLit",
+    " one\n",
+    "StringLit",
+    " ",
+    "StringLit",
+    "$x",
+    "StringLit",
+    "\n",
+    "StringLit",
+    " ",
+    "StringLit",
+    "$",
+    "StringLit",
+    "$",
+    "StringLit",
+    " two\n",
+    "StringLit",
+    " ",
+    "StringLit",
+    "$${",
+    "StringLit",
+    " three\n",
+    "CHeredoc",
+    "EOT",
+    "Newline",
+    "\n",
+    "EOF",
+    ""
+   ]
+  },
+  {
+   "source": "a = <<-EOT\n\tEOT not ${\n y\n}\n\tEOT\n",
+   "tokens": [
+    "Ident",
+    "a",
+    "Equal",
+    "=",
+    "OHeredoc",
+    "<<-EOT\n",
+    "StringLit",
+    "\tEOT not ",
+    "TemplateInterp",
+    "${",
+    "Newline",
+    "\n",
+    "Ident",
+    "y",
+    "Newline",
+    "\n",
+    "TemplateSeqEnd",
+    "}",
+    "StringLit",
+    "\n",
+    "CHeredoc",
+    "\tEOT",
+    "Newline",
+    "\n",
+    "EOF",
+    ""
+   ]
+  },
+  {
+   "source": "a = <<E\n$\r\r\nE\n",
+   "tokens": [
+    "Ident",
+    "a",
+    "Equal",
+    "=",
+    "OHeredoc",
+    "<<E\n",
+    "StringLit",
+    "$\r",
+    "StringLit",
+    "\r\n",
+    "CHeredoc",
+    "E",
+    "Newline",
+    "\n",
+    "EOF",
+    ""
+   ]
+  },
+  {
+   "source": "a = <<E\n$é\nE\n",
+   "tokens": [
+    "Ident",
+    "a",
+    "Equal",
+    "=",
+    "OHeredoc",
+    "<<E\n",
+    "StringLit",
+    "$",
+    "StringLit",
+    "é\n",
+    "CHeredoc",
+    "E",
+    "Newline",
+    "\n",
+    "EOF",
+    ""
+   ]
+  },
+  {
+   "source": "a = \"$\\\"\"",
+   "tokens": [
+    "Ident",
+    "a",
+    "Equal",
+    "=",
+    "OQuote",
+    "\"",
+    "QuotedLit",
+    "$",
+    "QuotedLit",
+    "\\\"",
+    "CQuote",
+    "\"",
+    "EOF",
+    ""
+   ]
+  },
+  {
+   "source": "a = 1.5e+3 . 1. 0x1f\n",
+   "tokens": [
+    "Ident",
+    "a",
+    "Equal",
+    "=",
+    "NumberLit",
+    "1.5e+3",
+    "Dot",
+    ".",
+    "NumberLit",
+    "1",
+    "Dot",
+    ".",
+    "NumberLit",
+    "0",
+    "Ident",
+    "x1f",
+    "Newline",
+    "\n",
+    "EOF",
+    ""
+   ]
+  },
+  {
+   "source": "a == b != c <= d >= e && f || g => h :: i ... j\n",
+   "tokens": [
+    "Ident",
+    "a",
+    "EqualOp",
+    "==",
+    "Ident",
+    "b",
+    "NotEqual",
+    "!=",
+    "Ident",
+    "c",
+    "LessThanEq",
+    "<=",
+    "Ident",
+    "d",
+    "GreaterThanEq",
+    ">=",
+    "Ident",
+    "e",
+    "And",
+    "&&",
+    "Ident",
+    "f",
+    "Or",
+    "||",
+    "Ident",
+    "g",
+    "FatArrow",
+    "=>",
+    "Ident",
+    "h",
+    "DoubleColon",
+    "::",
+    "Ident",
+    "i",
+    "Ellipsis",
+    "...",
+    "Ident",
+    "j",
+    "Newline",
+    "\n",
+    "EOF",
+    ""
+   ]
+  },
+  {
+   "source": "# c\n// c\n/* c */ /* unterminated\n",
+   "tokens": [
+    "Comment",
+    "# c\n",
+    "Comment",
+    "// c\n",
+    "Comment",
+    "/* c */",
+    "Slash",
+    "/",
+    "Star",
+    "*",
+    "Ident",
+    "unterminated",
+    "Newline",
+    "\n",
+    "EOF",
+    ""
+   ]
+  },
+  {
+   "source": "a = \"line\r\nbreak\"\r\n",
+   "tokens": [
+    "Ident",
+    "a",
+    "Equal",
+    "=",
+    "OQuote",
+    "\"",
+    "QuotedLit",
+    "line",
+    "QuotedNewline",
+    "\r\n",
+    "QuotedLit",
+    "break",
+    "CQuote",
+    "\"",
+    "Newline",
+    "\r\n",
+    "EOF",
+    ""
+   ]
+  },
+  {
+   "source": "a = ~} } \"${ {} }\"\n",
+   "tokens": [
+    "Ident",
+    "a",
+    "Equal",
+    "=",
+    "TemplateSeqEnd",
+    "~}",
+    "CBrace",
+    "}",
+    "OQuote",
+    "\"",
+    "TemplateInterp",
+    "${",
+    "OBrace",
+    "{",
+    "CBrace",
+    "}",
+    "TemplateSeqEnd",
+    "}",
+    "CQuote",
+    "\"",
+    "Newline",
+    "\n",
+    "EOF",
+    ""
+   ]
+  },
+  {
+   "source": "﻿a = 1\n",
+   "tokens": [
+    "Ident",
+    "a",
+    "Equal",
+    "=",
+    "NumberLit",
+    "1",
+    "Newline",
+    "\n",
+    "EOF",
+    ""
+   ]
+  },
+  {
+   "source": "é-1 = _x   @ ; ' `\n",
+   "tokens": [
+    "Ident",
+    "é-1",
+    "Equal",
+    "=",
+    "Ident",
+    "_x",
+    "Invalid",
+    " ",
+    "Invalid",
+    "@",
+    "Semicolon",
+    ";",
+    "Apostrophe",
+    "'",
+    "Backtick",
+    "`",
+    "Newline",
+    "\n",
+    "EOF",
+    ""
+   ]
+  },
+  {
+   "source": "a = <<EOT\nx\rz\nEOT\n",
+   "tokens": [
+    "Ident",
+    "a",
+    "Equal",
+    "=",
+    "OHeredoc",
+    "<<EOT\n",
+    "StringLit",
+    "x",
+    "Invalid",
+    "\rz\nEOT\n",
+    "EOF",
+    ""
+   ]
+  },
+  {
+   "source": "a = \"x\\\n\"\n",
+   "tokens": [
+    "Ident",
+    "a",
+    "Equal",
+    "=",
+    "OQuote",
+    "\"",
+    "QuotedLit",
+    "x",
+    "Invalid",
+    "\\",
+    "QuotedNewline",
+    "\n",
+    "CQuote",
+    "\"",
+    "Newline",
+    "\n",
+    "EOF",
+    ""
+   ]
+  }
+ ],
+ "graphemes": [
+  {
+   "text": "",
+   "count": 0
+  },
+  {
+   "text": "abc",
+   "count": 3
+  },
+  {
+   "text": "é",
+   "count": 1
+  },
+  {
+   "text": "é",
+   "count": 1
+  },
+  {
+   "text": "日本語",
+   "count": 3
+  },
+  {
+   "text": "👍🏽",
+   "count": 1
+  },
+  {
+   "text": "👨‍👩‍👧",
+   "count": 1
+  },
+  {
+   "text": "🇺🇸",
+   "count": 1
+  },
+  {
+   "text": "🇺🇸🇬",
+   "count": 2
+  },
+  {
+   "text": "क्ष",
+   "count": 1
+  },
+  {
+   "text": "क्‍ष",
+   "count": 1
+  },
+  {
+   "text": "각",
+   "count": 1
+  },
+  {
+   "text": "각",
+   "count": 1
+  },
+  {
+   "text": "a\r\nb",
+   "count": 3
+  },
+  {
+   "text": "؀a",
+   "count": 1
+  },
+  {
+   "text": "a‍b",
+   "count": 2
+  },
+  {
+   "text": "🏳️‍🌈",
+   "count": 1
+  },
+  {
+   "text": "नमस्ते",
+   "count": 3
+  },
+  {
+   "text": "‍👩",
+   "count": 2
+  },
+  {
+   "text": "👩‍",
+   "count": 1
+  },
+  {
+   "text": "ก์",
+   "count": 1
+  },
+  {
+   "text": "\u0001\u0002",
+   "count": 2
+  }
+ ],
+ "globs": [
+  {
+   "pattern": "a",
+   "candidates": [
+    "a",
+    "b",
+    "a/b",
+    ""
+   ],
+   "error": false,
+   "matched": [
+    "a"
+   ]
+  },
+  {
+   "pattern": "*",
+   "candidates": [
+    "a",
+    "ab",
+    "a/b",
+    "",
+    ".hidden"
+   ],
+   "error": false,
+   "matched": [
+    "a",
+    "ab",
+    "",
+    ".hidden"
+   ]
+  },
+  {
+   "pattern": "**",
+   "candidates": [
+    "a",
+    "a/b",
+    "",
+    "a/b/c"
+   ],
+   "error": false,
+   "matched": [
+    "a",
+    "a/b",
+    "",
+    "a/b/c"
+   ]
+  },
+  {
+   "pattern": "a/*",
+   "candidates": [
+    "a/b",
+    "a/b/c",
+    "a/",
+    "a"
+   ],
+   "error": false,
+   "matched": [
+    "a/b",
+    "a/"
+   ]
+  },
+  {
+   "pattern": "a/**",
+   "candidates": [
+    "a/b",
+    "a/b/c",
+    "a/",
+    "a"
+   ],
+   "error": false,
+   "matched": [
+    "a/b",
+    "a/b/c",
+    "a/"
+   ]
+  },
+  {
+   "pattern": "a/**/b",
+   "candidates": [
+    "a/b",
+    "a/x/b",
+    "a/x/y/b",
+    "a//b"
+   ],
+   "error": false,
+   "matched": [
+    "a/b",
+    "a/x/b",
+    "a/x/y/b",
+    "a//b"
+   ]
+  },
+  {
+   "pattern": "a/**/*.hcl",
+   "candidates": [
+    "a/x.hcl",
+    "a/b/x.hcl",
+    "a/b/c/x.hcl"
+   ],
+   "error": false,
+   "matched": [
+    "a/b/x.hcl",
+    "a/b/c/x.hcl"
+   ]
+  },
+  {
+   "pattern": "**/x.hcl",
+   "candidates": [
+    "x.hcl",
+    "a/x.hcl",
+    "a/b/x.hcl"
+   ],
+   "error": false,
+   "matched": [
+    "a/x.hcl",
+    "a/b/x.hcl"
+   ]
+  },
+  {
+   "pattern": "*.hcl",
+   "candidates": [
+    "x.hcl",
+    "a/x.hcl",
+    ".hcl"
+   ],
+   "error": false,
+   "matched": [
+    "x.hcl",
+    ".hcl"
+   ]
+  },
+  {
+   "pattern": "?",
+   "candidates": [
+    "a",
+    "ab",
+    "/",
+    "é"
+   ],
+   "error": false,
+   "matched": [
+    "a",
+    "é"
+   ]
+  },
+  {
+   "pattern": "a?c",
+   "candidates": [
+    "abc",
+    "a/c",
+    "ac",
+    "aéc"
+   ],
+   "error": false,
+   "matched": [
+    "abc"
+   ]
+  },
+  {
+   "pattern": "[abc]",
+   "candidates": [
+    "a",
+    "d",
+    "ab"
+   ],
+   "error": false,
+   "matched": [
+    "a"
+   ]
+  },
+  {
+   "pattern": "[!abc]",
+   "candidates": [
+    "a",
+    "d",
+    "/"
+   ],
+   "error": false,
+   "matched": [
+    "d",
+    "/"
+   ]
+  },
+  {
+   "pattern": "[a-c]x",
+   "candidates": [
+    "ax",
+    "dx",
+    "x"
+   ],
+   "error": false,
+   "matched": [
+    "ax"
+   ]
+  },
+  {
+   "pattern": "[!a-c]",
+   "candidates": [
+    "a",
+    "d"
+   ],
+   "error": false,
+   "matched": [
+    "d"
+   ]
+  },
+  {
+   "pattern": "{a,b}",
+   "candidates": [
+    "a",
+    "b",
+    "c",
+    "ab"
+   ],
+   "error": false,
+   "matched": [
+    "a",
+    "b"
+   ]
+  },
+  {
+   "pattern": "{a,b}/x",
+   "candidates": [
+    "a/x",
+    "b/x",
+    "c/x"
+   ],
+   "error": false,
+   "matched": [
+    "a/x",
+    "b/x"
+   ]
+  },
+  {
+   "pattern": "x{a,bc}y",
+   "candidates": [
+    "xay",
+    "xbcy",
+    "xy"
+   ],
+   "error": false,
+   "matched": [
+    "xay",
+    "xbcy"
+   ]
+  },
+  {
+   "pattern": "{a,}",
+   "candidates": [
+    "a",
+    ""
+   ],
+   "error": false,
+   "matched": [
+    "a",
+    ""
+   ]
+  },
+  {
+   "pattern": "{,a}",
+   "candidates": [
+    "a",
+    ""
+   ],
+   "error": false,
+   "matched": [
+    "a",
+    ""
+   ]
+  },
+  {
+   "pattern": "{a/b,c}",
+   "candidates": [
+    "a/b",
+    "c",
+    "a"
+   ],
+   "error": false,
+   "matched": [
+    "a/b",
+    "c"
+   ]
+  },
+  {
+   "pattern": "{*,**}",
+   "candidates": [
+    "a",
+    "a/b"
+   ],
+   "error": false,
+   "matched": [
+    "a",
+    "a/b"
+   ]
+  },
+  {
+   "pattern": "{{a,b},c}",
+   "candidates": [
+    "a",
+    "b",
+    "c",
+    "d"
+   ],
+   "error": false,
+   "matched": [
+    "a",
+    "b",
+    "c"
+   ]
+  },
+  {
+   "pattern": "a\\*b",
+   "candidates": [
+    "a*b",
+    "axb"
+   ],
+   "error": false,
+   "matched": [
+    "a*b"
+   ]
+  },
+  {
+   "pattern": "\\{a\\}",
+   "candidates": [
+    "{a}",
+    "a"
+   ],
+   "error": false,
+   "matched": [
+    "{a}"
+   ]
+  },
+  {
+   "pattern": "a{",
+   "candidates": [
+    "a{",
+    "a"
+   ],
+   "error": true,
+   "matched": []
+  },
+  {
+   "pattern": "a}",
+   "candidates": [
+    "a}",
+    "a"
+   ],
+   "error": false,
+   "matched": [
+    "a}"
+   ]
+  },
+  {
+   "pattern": "[",
+   "candidates": [
+    "["
+   ],
+   "error": true,
+   "matched": []
+  },
+  {
+   "pattern": "[]",
+   "candidates": [
+    "",
+    "]"
+   ],
+   "error": true,
+   "matched": []
+  },
+  {
+   "pattern": "[z-a]",
+   "candidates": [
+    "a"
+   ],
+   "error": true,
+   "matched": []
+  },
+  {
+   "pattern": "{}",
+   "candidates": [
+    "",
+    "{}"
+   ],
+   "error": false,
+   "matched": [
+    ""
+   ]
+  },
+  {
+   "pattern": "{,}",
+   "candidates": [
+    "",
+    ","
+   ],
+   "error": false,
+   "matched": [
+    ""
+   ]
+  },
+  {
+   "pattern": "a{,}",
+   "candidates": [
+    "a",
+    "a,"
+   ],
+   "error": true,
+   "matched": []
+  },
+  {
+   "pattern": "é*",
+   "candidates": [
+    "é",
+    "éa",
+    "é/a"
+   ],
+   "error": false,
+   "matched": [
+    "é",
+    "éa"
+   ]
+  },
+  {
+   "pattern": "?é",
+   "candidates": [
+    "aé",
+    "éé",
+    "é"
+   ],
+   "error": false,
+   "matched": []
+  },
+  {
+   "pattern": "*/*",
+   "candidates": [
+    "a/b",
+    "a",
+    "a/b/c",
+    "/"
+   ],
+   "error": false,
+   "matched": [
+    "a/b",
+    "/"
+   ]
+  },
+  {
+   "pattern": "**/",
+   "candidates": [
+    "a/",
+    "a/b/",
+    "a"
+   ],
+   "error": false,
+   "matched": [
+    "a/",
+    "a/b/"
+   ]
+  },
+  {
+   "pattern": "./a",
+   "candidates": [
+    "./a",
+    "a"
+   ],
+   "error": false,
+   "matched": [
+    "./a"
+   ]
+  },
+  {
+   "pattern": "names/*",
+   "candidates": [
+    "names/a.hcl",
+    "names/sub/a.hcl",
+    "names"
+   ],
+   "error": false,
+   "matched": [
+    "names/a.hcl"
+   ]
+  }
+ ]
+}

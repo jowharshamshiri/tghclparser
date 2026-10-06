@@ -2,7 +2,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
 import { canonicalHost, isPublicRegistry, registerSecret } from './module-source';
-import { parse } from './parser';
+import { parseHclSyntax } from './syntax';
 
 /** Supplies the API token for a registry host, or nothing when the host is to be contacted anonymously. */
 export interface CredentialProvider {
@@ -195,7 +195,7 @@ function credentialsFromJson(content: string): [string, string][] {
 function credentialsFromHcl(content: string, file: string): [string, string][] {
 	let ast: any;
 	try {
-		ast = parse(content, { grammarSource: file, tracer: { trace() {} } });
+		ast = parseHclSyntax(content, file, file);
 	} catch {
 		return [];
 	}

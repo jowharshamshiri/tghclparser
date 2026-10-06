@@ -6,7 +6,7 @@ import path from 'node:path';
 import { FunctionOperation, invokeFunctionOperation, readArgs, FUNCTION_CONTEXT_KEY } from './function-ops';
 import type { InlineFunctionDefinition } from './inline-functions';
 import { checkTypeConstraint, readInlineFunction, readTypeConstraint, synthesizeDefinition } from './inline-functions';
-import { parse } from './parser';
+import { parseHclSyntax } from './syntax';
 import { Schema } from './Schema';
 import type { FunctionContext, FunctionDefinition, RuntimeValue, ValueType } from './model';
 import {
@@ -577,7 +577,7 @@ export class ConfigEvaluator {
 		const unitDir = path.dirname(configPath);
 
 		const own = new Set<string>();
-		for (const node of declaredInlineFunctions(parse(content, { grammarSource: configPath, tracer: { trace() {} } }))) {
+		for (const node of declaredInlineFunctions(parseHclSyntax(content, configPath, configPath))) {
 			own.add(String(node.value ?? ''));
 		}
 
@@ -604,7 +604,7 @@ export class ConfigEvaluator {
 
 			let ast: TNode;
 			try {
-				ast = parse(includedContent, { grammarSource: resolved, tracer: { trace() {} } });
+				ast = parseHclSyntax(includedContent, resolved, resolved);
 			} catch {
 				continue;
 			}
@@ -641,7 +641,7 @@ export class ConfigEvaluator {
 		const targets: string[] = [];
 		let ast: TNode;
 		try {
-			ast = parse(content, { grammarSource: filePath, tracer: { trace() {} } });
+			ast = parseHclSyntax(content, filePath, filePath);
 		} catch {
 			return targets;
 		}
@@ -863,7 +863,7 @@ export class ConfigEvaluator {
 	}
 
 	private async evaluateFileUnguarded(filePath: string, content: string, workDir: string, unitDir?: string, skipInputs = false): Promise<FileResult> {
-		const ast = parse(content, { grammarSource: filePath, tracer: { trace() {} } });
+		const ast = parseHclSyntax(content, filePath, filePath);
 		const dir = path.dirname(filePath);
 		const baseName = path.basename(filePath);
 
@@ -1323,7 +1323,7 @@ export class ConfigEvaluator {
 		if (target.endsWith('.tfvars.json')) {
 			return makeStringValue(content);
 		}
-		const ast = parse(content, { grammarSource: target, tracer: { trace() {} } });
+		const ast = parseHclSyntax(content, target, target);
 		const values = new Map<string, RuntimeValue<ValueType>>();
 		for (const child of ast.children ?? []) {
 			if (child.type === 'assignment') {
@@ -1574,7 +1574,7 @@ export class ConfigEvaluator {
 		if (cached) return cached;
 		await this.assertPathAllowed(resolved, unitScope.workspaceRoot);
 		const content = await fs.readFile(resolved, 'utf8');
-		const scope = structuralScope(resolved, content, parse(content, { grammarSource: resolved, tracer: { trace() {} } }), unitScope.workspaceRoot, unit.unitDir);
+		const scope = structuralScope(resolved, content, parseHclSyntax(content, resolved, resolved), unitScope.workspaceRoot, unit.unitDir);
 		scope.unit = unit;
 		unit.structuralScopes.set(resolved, scope);
 		return scope;
@@ -2245,7 +2245,7 @@ export class ConfigEvaluator {
 }
 
 function makeRootScope(filePath: string, content: string, workspaceRoot = path.dirname(filePath)): Scope {
-	const ast = parse(content, { grammarSource: filePath, tracer: { trace() {} } });
+	const ast = parseHclSyntax(content, filePath, filePath);
 	return {
 		filePath,
 		content,
