@@ -329,7 +329,7 @@ ${unit('"../../modules/app"', '  region = "eu-west-2"')}`);
 		it('names the file and stops calling inputs undeclared, since it may declare them', async () => {
 			const document = await openUnit(unit('"../../modules/app"', '  name = "api"\n  tier = "gold"'));
 			expect(moduleMessages(document)).to.deep.equal([
-				'Module file ../../modules/app/extra.tf does not parse (line 3, column 12: unexpected "$"); the variables it declares are unknown, so undeclared inputs are not reported'
+				'Module file ../../modules/app/extra.tf does not parse (line 3, column 12: Invalid character; This character is not used within the language.); the variables it declares are unknown, so undeclared inputs are not reported'
 			]);
 		});
 
@@ -338,18 +338,18 @@ ${unit('"../../modules/app"', '  region = "eu-west-2"')}`);
 			expect(moduleMessages(document)).to.include('Missing required module inputs: name');
 		});
 
-		it('names a file the grammar rejects by its own checks, not only by syntax', async () => {
+		it('names a file refused for setting an argument twice, saying where it was first set', async () => {
 			await fs.writeFile(path.join(directory, 'modules', 'app', 'extra.tf'), 'variable "tier" {\n  type = string\n  type = number\n}');
 			const document = await openUnit(unit('"../../modules/app"', '  name = "api"\n  tier = "gold"'));
 			expect(moduleMessages(document)).to.deep.equal([
-				'Module file ../../modules/app/extra.tf does not parse (Attribute redefined: type); the variables it declares are unknown, so undeclared inputs are not reported'
+				`Module file ../../modules/app/extra.tf does not parse (line 3, column 3: Attribute redefined; The argument "type" was already set at ${path.join(directory, 'modules', 'app', 'extra.tf')}:2,3-7. Each argument may be set only once.); the variables it declares are unknown, so undeclared inputs are not reported`
 			]);
 		});
 
 		it('says on the inputs hover that the module list may be incomplete', async () => {
 			const document = await openUnit(unit('"../../modules/app"', '  name = "api"'));
 			const inputs = await document.getHoverInfo({ line: 4, character: 2 });
-			expect(inputs?.value).to.include('*`modules/app/extra.tf` does not parse, so this list may be incomplete: line 3, column 12: unexpected "$"*');
+			expect(inputs?.value).to.include('*`modules/app/extra.tf` does not parse, so this list may be incomplete: line 3, column 12: Invalid character; This character is not used within the language\\.*');
 		});
 	});
 

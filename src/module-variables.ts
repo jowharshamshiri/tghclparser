@@ -3,7 +3,8 @@ import * as path from 'node:path';
 
 import type { Position } from 'vscode-languageserver-types';
 
-import { parse, SyntaxError } from './parser';
+import { SyntaxError } from './parser';
+import { parseHclSyntax } from './syntax';
 
 /** The flat shape of a type constraint, enough to choose a value snippet by. */
 export type ModuleVariableTypeKind = 'string' | 'number' | 'bool' | 'list' | 'set' | 'map' | 'object' | 'tuple' | 'any';
@@ -187,11 +188,12 @@ export async function readModuleVariables(moduleDir: string): Promise<ModuleVari
 		const content = await fs.readFile(file, 'utf8');
 		let ast: any;
 		try {
-			ast = parse(content, { grammarSource: file, tracer: { trace() {} } });
+			ast = parseHclSyntax(content, file, file);
 		} catch (error) {
-			// The grammar rejects invalid input by throwing: a SyntaxError where the text does not match, a plain Error
-			// from its own checks, such as a redefined attribute. Both mean the file does not parse, as ParsedDocument
-			// treats them. Only the parse call is guarded, so nothing else is taken for a parse failure.
+			// Invalid input is rejected by throwing: an HclSyntaxError for source that is not valid HCL, and from the
+			// grammar a SyntaxError where the text does not match or a plain Error from its own checks. All mean the
+			// file does not parse, as ParsedDocument treats them. Only the parse call is guarded, so nothing else is
+			// taken for a parse failure.
 			if (!(error instanceof Error)) throw error;
 			unparsed.push({ file, message: parseFailureMessage(error) });
 			continue;
@@ -210,9 +212,9 @@ export async function readModuleVariables(moduleDir: string): Promise<ModuleVari
 }
 
 /**
- * @param error what the grammar threw.
- * @returns for a syntax error, where it stopped and what it found there -- its own message lists every token it
- *   would have accepted, which buries both; for any other rejection, its message.
+ * @param error what parsing threw.
+ * @returns for the grammar's syntax error, where it stopped and what it found there -- its own message lists every
+ *   token it would have accepted, which buries both; for any other rejection, its message.
  */
 function parseFailureMessage(error: Error): string {
 	if (!(error instanceof SyntaxError) || !error.location) return error.message;
