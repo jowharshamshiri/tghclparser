@@ -429,7 +429,7 @@ describe('CLI configuration discovery', function () {
 			const output = path.join(root, 'generated');
 			const cli = path.resolve('dist/cli.cjs');
 			const result = await new Promise<{status: number | null; stdout: string; stderr: string}>((resolve, reject) => {
-				const child = spawn(process.execPath, [cli, 'scaffold', source, '--working-dir', root, '--output-folder', 'generated', '--no-include-root'], {encoding: 'utf8'});
+				const child = spawn(process.execPath, [cli, 'scaffold', source, '--working-dir', root, '--output-folder', 'generated', '--no-include-root']);
 				let stdout = '';
 				let stderr = '';
 				child.stdout.on('data', chunk => { stdout += String(chunk); });
@@ -625,12 +625,12 @@ describe('CLI configuration discovery', function () {
 	});
 
 	it('runs when invoked under the name npm links it as', async () => {
-		// `npm install -g` links `bin/tghclp` at dist/cli.js, so argv[1] is that
-		// bin path rather than a filename ending in `/cli.js`. A check for the
+		// `npm install -g` links `bin/tghclp` at dist/cli.mjs, so argv[1] is that
+		// bin path rather than a filename ending in `/cli.mjs`. A check for the
 		// filename was false for every globally installed copy: the command
 		// exited 0, printed nothing and did nothing, which reads as a program
 		// with no output rather than one that never started.
-		const cli = path.resolve('dist/cli.cjs');
+		const cli = path.resolve('dist/cli.mjs');
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-bin-'));
 		const link = path.join(root, 'tghclp');
 		await fs.symlink(cli, link);

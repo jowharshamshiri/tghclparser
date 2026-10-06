@@ -51,7 +51,7 @@ inputs = {
 ${inputs}
 }`;
 
-	const messages = (document: ParsedDocument) => document.getDiagnostics().map(diagnostic => diagnostic.message);
+	const messages = (document: ParsedDocument) => document.getDiagnostics().map(diagnostic => typeof diagnostic.message === 'string' ? diagnostic.message : diagnostic.message.value);
 	const moduleMessages = (document: ParsedDocument) => messages(document).filter(message => /module/i.test(message));
 
 	it('warns about keys the module does not declare and required variables left unset', async () => {
