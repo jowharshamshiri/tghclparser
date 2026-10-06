@@ -1,7 +1,7 @@
 {
 	"name": "tghclparser",
 	"type": "module",
-	"version": "1.233.1308",
+	"version": "1.238.1366",
 	"description": "A drop-in replacement for the terragrunt CLI, and the HCL parser and language server behind it. Runs OpenTofu/Terraform through Terragrunt configurations — includes, dependencies, generate blocks, stacks — and matches terragrunt's own behaviour, checked against it rather than against the documentation.",
 	"author": {
 		"name": "Bahram Shamshiri",
@@ -54,6 +54,13 @@
 	"types": "./dist/index.d.cts",
 	"bin": {
 		"tghclp": "dist/cli.mjs"
+	},
+	"devEngines": {
+		"runtime": {
+			"name": "node",
+			"version": "^22.18.0 || ^24.11.0 || >=26.0.0",
+			"onFail": "error"
+		}
 	},
 	"files": [
 		"dist"

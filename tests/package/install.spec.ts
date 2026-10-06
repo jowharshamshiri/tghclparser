@@ -88,6 +88,18 @@ describe('published package', function () {
 		expect(result.output).to.contain('HCL validation error');
 	});
 
+	it('prints the package version through the installed bin', async () => {
+		const manifest = JSON.parse(await fs.readFile(path.join(repo, 'package.json'), 'utf8'));
+		expect(execOk(bin, ['--version'], consumer)).to.equal(`${manifest.version}\n`);
+		expect(execOk(bin, ['hcl', 'format', '--version'], consumer)).to.equal(`${manifest.version}\n`);
+	});
+
+	it('formats standard input through the installed bin', () => {
+		const result = spawnSync(bin, ['hcl', 'format', '--stdin'], {cwd: consumer, encoding: 'utf8', input: 'a   = 1\nlong = [1,2]\n'});
+		expect(result.status).to.equal(0, result.stderr);
+		expect(result.stdout).to.equal('a    = 1\nlong = [1, 2]\n');
+	});
+
 	it('exports the same names from require and import', async () => {
 		const {cjsNames, esmNames} = await import(pathToFileURL(path.join(consumer, 'exports.mjs')).href);
 		expect(cjsNames).to.have.length.greaterThan(0);

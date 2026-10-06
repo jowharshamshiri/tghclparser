@@ -1107,17 +1107,26 @@ function formatSource(original: string, name: string, options: FormatOptions): {
 }
 
 /**
- * Prints the version of this tool.
+ * Prints the version of this tool, which is the version of the package this file is in.
  *
- * @throws when the version cannot be read.
+ * The package's manifest sits one directory above this file, in a checkout and in an installed copy alike. The
+ * program is found through the path it was started by with links resolved, because an installed copy is started
+ * through the link npm makes in a `bin` directory, and the manifest is not beside that.
+ *
+ * @throws when the manifest cannot be read or holds no version.
  */
 async function printVersion(): Promise<void> {
-	const versionFile = path.resolve(path.dirname(process.argv[1] ?? process.cwd()), '../version.txt');
+	const entry = process.argv[1];
+	if (!entry) throw new Error('Unable to determine tghclp version: the program was started without a path');
+	const manifestFile = path.resolve(path.dirname(await fs.realpath(entry)), '../package.json');
+	let version: unknown;
 	try {
-		process.stdout.write(`${(await fs.readFile(versionFile, 'utf8')).trim()}\n`);
-	} catch {
-		throw new Error('Unable to determine tghclp version');
+		version = (JSON.parse(await fs.readFile(manifestFile, 'utf8')) as {version?: unknown}).version;
+	} catch (error) {
+		throw new Error(`Unable to determine tghclp version: cannot read ${manifestFile}: ${error instanceof Error ? error.message : String(error)}`);
 	}
+	if (typeof version !== 'string' || version === '') throw new Error(`Unable to determine tghclp version: ${manifestFile} holds no version`);
+	process.stdout.write(`${version}\n`);
 }
 
 /**
