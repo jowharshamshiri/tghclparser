@@ -141,6 +141,8 @@ export class Workspace {
 	/** Units whose state last came from the remote store, by URI, so clearing the cache can fetch them again. */
 	private remoteUnits = new Map<string, PendingUnit>();
 	private moduleListeners = new Set<(uri: string) => void>();
+	/** The last queued change to the graph; each change waits for it, so one never prunes another's unfinished unit. */
+	private graphUpdates: Promise<unknown> = Promise.resolve();
 
 	public constructor() {
 		this.documents = new Map();
@@ -1556,7 +1558,18 @@ export class Workspace {
 		return this.workspaceRoot;
 	}
 
-	async addDocument(document: ParsedDocument) {
+	/** Runs a change to the graph once every change queued before it has settled, whether or not they failed. */
+	private serializeGraphUpdate<T>(update: () => Promise<T>): Promise<T> {
+		const result = this.graphUpdates.then(update, update);
+		this.graphUpdates = result.catch(() => undefined);
+		return result;
+	}
+
+	addDocument(document: ParsedDocument): Promise<void> {
+		return this.serializeGraphUpdate(() => this.applyDocument(document));
+	}
+
+	private async applyDocument(document: ParsedDocument): Promise<void> {
 		const uri = document.getUri();
 		this.documents.set(uri, document);
 
@@ -1589,12 +1602,14 @@ export class Workspace {
 		}
 	}
 
-	async refreshDependencyTree(): Promise<TreeNode<TerragruntConfig> | undefined> {
-		this.configTreeRoot = undefined;
-		this.configMap.clear();
-		this.configContexts.clear();
-		await this.buildDependencyTree();
-		return this.configTreeRoot;
+	refreshDependencyTree(): Promise<TreeNode<TerragruntConfig> | undefined> {
+		return this.serializeGraphUpdate(async () => {
+			this.configTreeRoot = undefined;
+			this.configMap.clear();
+			this.configContexts.clear();
+			await this.buildDependencyTree();
+			return this.configTreeRoot;
+		});
 	}
 
 	private getDependencyName(block: Token): string | undefined {
