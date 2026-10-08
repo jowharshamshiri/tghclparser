@@ -6,7 +6,7 @@ import { expect } from 'chai';
 import { URI } from 'vscode-uri';
 
 import { ParsedDocument } from '../src/ParsedDocument';
-import { Workspace } from '../src/Workspace';
+import { LocatedWorkspaceError, Workspace } from '../src/Workspace';
 
 describe('current Terragrunt workspace graph', () => {
 	let directory: string;
@@ -120,6 +120,55 @@ unit "app" {
 		));
 
 		expect(message).to.include('Ambiguous dependency path');
+	});
+
+	it('locates a dependency path naming a directory with no configuration at its config_path', async () => {
+		const appDirectory = path.join(directory, 'app');
+		await fs.mkdir(appDirectory, { recursive: true });
+		await fs.mkdir(path.join(directory, 'empty'), { recursive: true });
+		const appPath = path.join(appDirectory, 'terragrunt.hcl');
+		const content = `inputs = {}
+
+dependency "empty" {
+  config_path = "../empty"
+}`;
+		await fs.writeFile(appPath, content);
+
+		const workspace = new Workspace();
+		workspace.setWorkspaceRoot(URI.file(directory).toString());
+		const error = await workspace.addDocument(new ParsedDocument(workspace, URI.file(appPath).toString(), content))
+			.then(() => undefined, (reason: unknown) => reason);
+
+		expect(error).to.be.instanceOf(LocatedWorkspaceError);
+		const located = error as LocatedWorkspaceError;
+		expect(located.message).to.include('contains neither terragrunt.hcl nor terragrunt.stack.hcl');
+		expect(located.uri).to.equal(URI.file(appPath).toString());
+		expect(located.range).to.deep.equal({ start: { line: 3, character: 16 }, end: { line: 3, character: 26 } });
+	});
+
+	it('locates a dependency defined in an included configuration in that configuration', async () => {
+		const unitDirectory = path.join(directory, 'live', 'app');
+		await fs.mkdir(unitDirectory, { recursive: true });
+		await fs.mkdir(path.join(directory, '_env'));
+		const envPath = path.join(directory, '_env', 'app.hcl');
+		await fs.writeFile(envPath, `dependency "network" {
+  config_path = "../network"
+}`);
+		const unitPath = path.join(unitDirectory, 'terragrunt.hcl');
+		const content = `include "env" {
+  path = "../../_env/app.hcl"
+}`;
+		await fs.writeFile(unitPath, content);
+
+		const workspace = new Workspace();
+		workspace.setWorkspaceRoot(URI.file(directory).toString());
+		const error = await workspace.addDocument(new ParsedDocument(workspace, URI.file(unitPath).toString(), content))
+			.then(() => undefined, (reason: unknown) => reason);
+
+		expect(error).to.be.instanceOf(LocatedWorkspaceError);
+		const located = error as LocatedWorkspaceError;
+		expect(located.uri).to.equal(URI.file(envPath).toString());
+		expect(located.range.start.line).to.equal(1);
 	});
 
 	it('rejects dependency cycles when constructing the graph', async () => {
