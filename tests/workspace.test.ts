@@ -102,6 +102,20 @@ unit "app" {
 		expect(app?.children.map(node => [node.type, node.data.parameterValue])).to.deep.equal([['unit', 'network']]);
 	});
 
+	it('links the dependency paths that resolve and skips one that does not', async () => {
+		await fs.mkdir(path.join(directory, 'app'), { recursive: true });
+		await fs.mkdir(path.join(directory, 'network'), { recursive: true });
+		await fs.writeFile(path.join(directory, 'network', 'terragrunt.hcl'), '');
+		const content = 'dependency "partial" {\n  config_path = "../ne"\n}\ndependency "network" {\n  config_path = "../network"\n}';
+
+		const workspace = new Workspace();
+		workspace.setWorkspaceRoot(URI.file(directory).toString());
+		const document = new ParsedDocument(workspace, URI.file(path.join(directory, 'app', 'terragrunt.hcl')).toString(), content);
+		const links = await document.getLinks();
+
+		expect(links.map(link => URI.parse(link.target!).fsPath)).to.deep.equal([path.join(directory, 'network', 'terragrunt.hcl')]);
+	});
+
 	it('rejects ambiguous dependency directories instead of choosing a file type', async () => {
 		const appDirectory = path.join(directory, 'app');
 		const targetDirectory = path.join(directory, 'target');

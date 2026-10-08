@@ -19,10 +19,10 @@ export class LinkProvider {
 		if ((token.type === 'string_lit' || token.type === 'interpolated_string' || token.type === 'function_call' || token.type === 'reference') && token.parent?.type === 'attribute') {
 			const block = token.parent.parent;
 			if (token.parent.value === 'config_path' && block?.type === 'block' && block.value === 'dependency') {
-				links.push(this.link(token, await this.document.getWorkspace().resolveDependencyPath(token, this.document.getUri())));
+				await this.linkResolved(token, links, () => this.document.getWorkspace().resolveDependencyPath(token, this.document.getUri()));
 			}
 			if (token.parent.value === 'path' && block?.type === 'block' && block.value === 'include') {
-				links.push(this.link(token, await this.document.getWorkspace().resolveIncludePath(token, this.document.getUri())));
+				await this.linkResolved(token, links, () => this.document.getWorkspace().resolveIncludePath(token, this.document.getUri()));
 			}
 			if (token.parent.value === 'source' && block?.type === 'block' && block.value === 'terraform') {
 				const target = await this.moduleEntryFile(token);
@@ -32,7 +32,7 @@ export class LinkProvider {
 
 		if (token.type === 'array_lit' && token.parent?.value === 'paths' && token.parent.parent?.value === 'dependencies') {
 			for (const child of token.children) {
-				links.push(this.link(child, await this.document.getWorkspace().resolveDependencyPath(child, this.document.getUri())));
+				await this.linkResolved(child, links, () => this.document.getWorkspace().resolveDependencyPath(child, this.document.getUri()));
 			}
 		}
 
@@ -55,6 +55,21 @@ export class LinkProvider {
 		const workspace = this.document.getWorkspace();
 		const resolution = await workspace.resolveModuleSource(token, this.document.getUri());
 		return resolution.kind === 'local' ? workspace.moduleEntryFile(resolution.moduleDir) : undefined;
+	}
+
+	/**
+	 * Links a path token to its resolved target. A path that does not resolve, such as one still being typed, gets no
+	 * link; the problem is a diagnostic's to report.
+	 * @param token the path token the link covers.
+	 * @param links the links collected so far, added to when the path resolves.
+	 * @param resolve resolves the token to the target URI, rejecting when it cannot.
+	 */
+	private async linkResolved(token: Token, links: DocumentLink[], resolve: () => Promise<string>): Promise<void> {
+		try {
+			links.push(this.link(token, await resolve()));
+		} catch {
+			// No link.
+		}
 	}
 
 	private link(token: Token, target: string): DocumentLink {
