@@ -82,7 +82,13 @@ export type ModuleSourceResolution =
  */
 class UnresolvableReadPath extends Error {}
 
-/** A workspace failure caused by one expression in a configuration, so it can be reported where that expression is. */
+/**
+ * A workspace failure caused by one expression in a configuration, so it can be reported where that expression is:
+ * the path of a `dependency` or an `include` that cannot be resolved, or that names nothing that can be read.
+ *
+ * The configuration is the one the expression is written in. For a unit that inherits the expression through an
+ * include, that is the included file and not the unit.
+ */
 export class LocatedWorkspaceError extends Error {
 	/**
 	 * Creates the error.
@@ -203,9 +209,16 @@ export class Workspace {
 		// Process includes
 		const includes = doc.findIncludeBlocks(ast);
 		const includePaths = await Promise.all(includes.map(async inc => {
-			const resolvedPath = await this.resolveIncludePath(inc.path, uri, resolveFrom);
+			const pathRange = { start: inc.path.startPosition, end: inc.path.endPosition };
+			let resolvedPath: string;
+			try {
+				resolvedPath = await this.resolveIncludePath(inc.path, uri, resolveFrom);
+			} catch (error) {
+				if (error instanceof Error) throw new LocatedWorkspaceError(error.message, uri, pathRange, { cause: error });
+				throw error;
+			}
 			if (!await this.fileExists(URI.parse(resolvedPath).fsPath)) {
-				throw new Error(`Included configuration not found: ${URI.parse(resolvedPath).fsPath}`);
+				throw new LocatedWorkspaceError(`Included configuration not found: ${URI.parse(resolvedPath).fsPath}`, uri, pathRange);
 			}
 
 			// Create or update the included config
@@ -301,7 +314,7 @@ export class Workspace {
 			if (exists) {
 				content = await fs.readFile(URI.parse(resolvedPath).fsPath, 'utf-8');
 				const dependencyDocument = await this.getParsedDocument(resolvedPath);
-				if (!dependencyDocument) throw new Error(`Unable to parse dependency configuration: ${URI.parse(resolvedPath).fsPath}`);
+				if (!dependencyDocument) throw new LocatedWorkspaceError(`Unable to parse dependency configuration: ${URI.parse(resolvedPath).fsPath}`, uri, pathRange);
 				outputs = await dependencyDocument.getAllOutputs();
 			} else if (!depConfig) {
 				throw new LocatedWorkspaceError(`Dependency configuration not found: ${URI.parse(resolvedPath).fsPath}`, uri, pathRange);

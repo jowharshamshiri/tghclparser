@@ -146,6 +146,25 @@ dependency "empty" {
 		expect(located.range).to.deep.equal({ start: { line: 3, character: 16 }, end: { line: 3, character: 26 } });
 	});
 
+	it('locates an include path naming a file that is not there at its path', async () => {
+		const appDirectory = path.join(directory, 'app');
+		await fs.mkdir(appDirectory, { recursive: true });
+		const appPath = path.join(appDirectory, 'terragrunt.hcl');
+		const content = 'inputs = {}\n\ninclude "root" {\n  path = "../root.hcl"\n}';
+		await fs.writeFile(appPath, content);
+
+		const workspace = new Workspace();
+		workspace.setWorkspaceRoot(URI.file(directory).toString());
+		const error = await workspace.addDocument(new ParsedDocument(workspace, URI.file(appPath).toString(), content))
+			.then(() => undefined, (reason: unknown) => reason);
+
+		expect(error).to.be.instanceOf(LocatedWorkspaceError);
+		const located = error as LocatedWorkspaceError;
+		expect(located.message).to.equal(`Included configuration not found: ${path.join(directory, 'root.hcl')}`);
+		expect(located.uri).to.equal(URI.file(appPath).toString());
+		expect(located.range).to.deep.equal({ start: { line: 3, character: 9 }, end: { line: 3, character: 22 } });
+	});
+
 	it('locates a dependency defined in an included configuration in that configuration', async () => {
 		const unitDirectory = path.join(directory, 'live', 'app');
 		await fs.mkdir(unitDirectory, { recursive: true });

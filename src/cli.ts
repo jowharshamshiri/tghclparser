@@ -24,7 +24,7 @@ import { unifiedDiff } from './unified-diff';
 import { createRegistryResolver } from './registry';
 import { RemoteModuleStore } from './remote-modules';
 import { parseHclSyntax } from './syntax';
-import { Workspace } from './Workspace';
+import { LocatedWorkspaceError, Workspace } from './Workspace';
 
 export interface CLIOptions {
 	json: boolean;
@@ -243,6 +243,10 @@ function inspectUsage(): string {
 		'described by what it contributes and how it is included, and each file read while evaluating described',
 		'by its locals and inputs keys.',
 		'',
+		'When the configuration cannot be added to the workspace, "error" says why and the command exits 2. For a',
+		'dependency or include path that cannot be resolved, "errorLocation" holds the URI of the configuration the',
+		'path is written in and the range of the path, counted from zero.',
+		'',
 		'Options:',
 		'  --json                  Print the state as JSON',
 		'  --format=json          Equivalent to --json (also accepts --format json)',
@@ -340,11 +344,14 @@ async function inspectDocument(argv: string[]): Promise<number> {
 	);
 	const document = new ParsedDocument(workspace, uri, await fs.readFile(realConfig, 'utf8'));
 	let workspaceError: string | undefined;
+	// Where the expression that caused the error is, when the workspace can say.
+	let errorLocation: {uri: string; range: LocatedWorkspaceError['range']} | undefined;
 	try {
 		await workspace.addDocument(document);
 		await workspace.remoteModulesSettled();
 	} catch (error) {
 		workspaceError = error instanceof Error ? error.message : String(error);
+		if (error instanceof LocatedWorkspaceError) errorLocation = {uri: error.uri, range: error.range};
 	}
 
 	const state = document.getModuleVariables();
@@ -387,10 +394,15 @@ async function inspectDocument(argv: string[]): Promise<number> {
 				reads: await inspectReads(workspace, relationships.reads)
 			}
 			: null,
-		...(workspaceError !== undefined ? {error: workspaceError} : {})
+		...(workspaceError !== undefined ? {error: workspaceError} : {}),
+		...(errorLocation !== undefined ? {errorLocation} : {})
 	};
 	process.stdout.write(`${JSON.stringify(view)}\n`);
-	if (workspaceError !== undefined) process.stderr.write(`${workspaceError}\n`);
+	if (workspaceError !== undefined) {
+		// Lines and columns are printed from one, as editors and compilers show them; the JSON keeps the range from zero.
+		const where = errorLocation ? `${fileURLToPath(errorLocation.uri)}:${errorLocation.range.start.line + 1}:${errorLocation.range.start.character + 1}: ` : '';
+		process.stderr.write(`${where}${workspaceError}\n`);
+	}
 	return workspaceError !== undefined ? 2 : 0;
 }
 
