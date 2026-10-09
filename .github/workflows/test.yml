@@ -32,6 +32,9 @@ jobs:
       - name: Lint
         run: npm run lint:ci -- --format gha
 
+      - name: Typecheck
+        run: npm run typecheck
+
   test:
     runs-on: ubuntu-latest
     steps:

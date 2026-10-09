@@ -429,7 +429,7 @@ describe('CLI configuration discovery', function () {
 			const output = path.join(root, 'generated');
 			const cli = path.resolve('dist/cli.cjs');
 			const result = await new Promise<{status: number | null; stdout: string; stderr: string}>((resolve, reject) => {
-				const child = spawn(process.execPath, [cli, 'scaffold', source, '--working-dir', root, '--output-folder', 'generated', '--no-include-root'], {encoding: 'utf8'});
+				const child = spawn(process.execPath, [cli, 'scaffold', source, '--working-dir', root, '--output-folder', 'generated', '--no-include-root']);
 				let stdout = '';
 				let stderr = '';
 				child.stdout.on('data', chunk => { stdout += String(chunk); });

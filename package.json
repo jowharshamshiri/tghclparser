@@ -62,7 +62,8 @@
 		"prepare": "npm run build",
 		"prepublishOnly": "npm test && npm run lint",
 		"pretest": "npm run build",
-		"test": "mocha"
+		"test": "mocha",
+		"typecheck": "tsc"
 	},
 	"peerDependencies": {
 		"typescript": ">=4.7.0"
