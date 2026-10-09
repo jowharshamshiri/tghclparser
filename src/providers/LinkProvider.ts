@@ -59,17 +59,23 @@ export class LinkProvider {
 
 	/**
 	 * Links a path token to its resolved target. A path that does not resolve, such as one still being typed, gets no
-	 * link; the problem is a diagnostic's to report.
+	 * link: the workspace reports that problem when the document is added to it, with the same message.
 	 * @param token the path token the link covers.
 	 * @param links the links collected so far, added to when the path resolves.
 	 * @param resolve resolves the token to the target URI, rejecting when it cannot.
+	 * @throws what `resolve` rejected with when that is a defect and not a path that does not resolve.
 	 */
 	private async linkResolved(token: Token, links: DocumentLink[], resolve: () => Promise<string>): Promise<void> {
+		let target: string;
 		try {
-			links.push(this.link(token, await resolve()));
-		} catch {
-			// No link.
+			target = await resolve();
+		} catch (error) {
+			// The resolvers say a path does not resolve with a plain Error. Anything else is a defect in resolving,
+			// and leaving a link out would hide it.
+			if (!(error instanceof Error) || error instanceof TypeError || error instanceof RangeError || error instanceof ReferenceError) throw error;
+			return;
 		}
+		links.push(this.link(token, target));
 	}
 
 	private link(token: Token, target: string): DocumentLink {

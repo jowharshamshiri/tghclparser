@@ -102,6 +102,19 @@ unit "app" {
 		expect(app?.children.map(node => [node.type, node.data.parameterValue])).to.deep.equal([['unit', 'network']]);
 	});
 
+	it('does not take a defect in resolving a path for a path that does not resolve', async () => {
+		await fs.mkdir(path.join(directory, 'app'), { recursive: true });
+		const content = 'dependency "network" {\n  config_path = "../network"\n}';
+		const workspace = new Workspace();
+		workspace.setWorkspaceRoot(URI.file(directory).toString());
+		workspace.resolveDependencyPath = async () => {
+			throw new TypeError('Cannot read properties of undefined');
+		};
+		const document = new ParsedDocument(workspace, URI.file(path.join(directory, 'app', 'terragrunt.hcl')).toString(), content);
+
+		expect(await rejectionMessage(document.getLinks())).to.equal('Cannot read properties of undefined');
+	});
+
 	it('links the dependency paths that resolve and skips one that does not', async () => {
 		await fs.mkdir(path.join(directory, 'app'), { recursive: true });
 		await fs.mkdir(path.join(directory, 'network'), { recursive: true });
