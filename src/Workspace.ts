@@ -2,6 +2,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import type { Range } from 'vscode-languageserver';
 import { URI } from 'vscode-uri';
 
 import type { FunctionContext, FunctionDefinition, TerragruntConfig, Token } from './model';
@@ -81,6 +82,28 @@ export type ModuleSourceResolution =
  */
 class UnresolvableReadPath extends Error {}
 
+/**
+ * A workspace failure caused by one expression in a configuration, so it can be reported where that expression is:
+ * the path of a `dependency` or an `include` that cannot be resolved, or that names nothing that can be read.
+ *
+ * The configuration is the one the expression is written in. For a unit that inherits the expression through an
+ * include, that is the included file and not the unit.
+ */
+export class LocatedWorkspaceError extends Error {
+	/**
+	 * Creates the error.
+	 *
+	 * @param message what went wrong.
+	 * @param uri the configuration holding the expression.
+	 * @param range where the expression is in that configuration.
+	 * @param options the underlying error, if any.
+	 */
+	constructor(message: string, public readonly uri: string, public readonly range: Range, options?: { cause?: unknown }) {
+		super(message, options);
+		this.name = 'LocatedWorkspaceError';
+	}
+}
+
 interface ConfigRelationships {
 	includes: string[];
 	dependencies: string[];
@@ -141,6 +164,8 @@ export class Workspace {
 	/** Units whose state last came from the remote store, by URI, so clearing the cache can fetch them again. */
 	private remoteUnits = new Map<string, PendingUnit>();
 	private moduleListeners = new Set<(uri: string) => void>();
+	/** The last queued change to the graph; each change waits for it, so one never prunes another's unfinished unit. */
+	private graphUpdates: Promise<unknown> = Promise.resolve();
 
 	public constructor() {
 		this.documents = new Map();
@@ -186,9 +211,16 @@ export class Workspace {
 		// Process includes
 		const includes = doc.findIncludeBlocks(ast);
 		const includePaths = await Promise.all(includes.map(async inc => {
-			const resolvedPath = await this.resolveIncludePath(inc.path, uri, resolveFrom);
+			const pathRange = { start: inc.path.startPosition, end: inc.path.endPosition };
+			let resolvedPath: string;
+			try {
+				resolvedPath = await this.resolveIncludePath(inc.path, uri, resolveFrom);
+			} catch (error) {
+				if (error instanceof Error) throw new LocatedWorkspaceError(error.message, uri, pathRange, { cause: error });
+				throw error;
+			}
 			if (!await this.fileExists(URI.parse(resolvedPath).fsPath)) {
-				throw new Error(`Included configuration not found: ${URI.parse(resolvedPath).fsPath}`);
+				throw new LocatedWorkspaceError(`Included configuration not found: ${URI.parse(resolvedPath).fsPath}`, uri, pathRange);
 			}
 
 			// Create or update the included config
@@ -267,12 +299,14 @@ export class Workspace {
 		const dependencyPaths: string[] = [];
 		const ownedDependencies = new Map<string, string[]>();
 		for (const dep of dependencyEntries) {
+			const pathRange = { start: dep.path.startPosition, end: dep.path.endPosition };
 			let resolvedPath: string;
 			try {
 				resolvedPath = await this.resolveDependencyPath(dep.path, uri, resolveFrom);
 			} catch (error) {
 				// A config_path built from a value this file cannot see costs one graph edge, not the whole document's lineage.
 				if (error instanceof UnresolvableReadPath) continue;
+				if (error instanceof Error) throw new LocatedWorkspaceError(error.message, uri, pathRange, { cause: error });
 				throw error;
 			}
 			const exists = await this.fileExists(URI.parse(resolvedPath).fsPath);
@@ -282,10 +316,10 @@ export class Workspace {
 			if (exists) {
 				content = await fs.readFile(URI.parse(resolvedPath).fsPath, 'utf-8');
 				const dependencyDocument = await this.getParsedDocument(resolvedPath);
-				if (!dependencyDocument) throw new Error(`Unable to parse dependency configuration: ${URI.parse(resolvedPath).fsPath}`);
+				if (!dependencyDocument) throw new LocatedWorkspaceError(`Unable to parse dependency configuration: ${URI.parse(resolvedPath).fsPath}`, uri, pathRange);
 				outputs = await dependencyDocument.getAllOutputs();
 			} else if (!depConfig) {
-				throw new Error(`Dependency configuration not found: ${URI.parse(resolvedPath).fsPath}`);
+				throw new LocatedWorkspaceError(`Dependency configuration not found: ${URI.parse(resolvedPath).fsPath}`, uri, pathRange);
 			}
 
 			if (!depConfig) {
@@ -1556,9 +1590,22 @@ export class Workspace {
 		return this.workspaceRoot;
 	}
 
-	async addDocument(document: ParsedDocument) {
+	/** Runs a change to the graph once every change queued before it has settled, whether or not they failed. */
+	private serializeGraphUpdate<T>(update: () => Promise<T>): Promise<T> {
+		const result = this.graphUpdates.then(update, update);
+		this.graphUpdates = result.catch(() => undefined);
+		return result;
+	}
+
+	addDocument(document: ParsedDocument): Promise<void> {
+		// The document is registered now and not when its turn comes: it is what the workspace reads for this URI
+		// from here on, and a document closed while its change waits must not be registered again after it.
+		this.documents.set(document.getUri(), document);
+		return this.serializeGraphUpdate(() => this.applyDocument(document));
+	}
+
+	private async applyDocument(document: ParsedDocument): Promise<void> {
 		const uri = document.getUri();
-		this.documents.set(uri, document);
 
 		// Re-resolve every unit whose context contains this file. An included
 		// configuration can produce different paths for each unit, so updating a
@@ -1589,12 +1636,14 @@ export class Workspace {
 		}
 	}
 
-	async refreshDependencyTree(): Promise<TreeNode<TerragruntConfig> | undefined> {
-		this.configTreeRoot = undefined;
-		this.configMap.clear();
-		this.configContexts.clear();
-		await this.buildDependencyTree();
-		return this.configTreeRoot;
+	refreshDependencyTree(): Promise<TreeNode<TerragruntConfig> | undefined> {
+		return this.serializeGraphUpdate(async () => {
+			this.configTreeRoot = undefined;
+			this.configMap.clear();
+			this.configContexts.clear();
+			await this.buildDependencyTree();
+			return this.configTreeRoot;
+		});
 	}
 
 	private getDependencyName(block: Token): string | undefined {

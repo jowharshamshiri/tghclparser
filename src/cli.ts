@@ -24,7 +24,7 @@ import { unifiedDiff } from './unified-diff';
 import { createRegistryResolver } from './registry';
 import { RemoteModuleStore } from './remote-modules';
 import { parseHclSyntax } from './syntax';
-import { Workspace } from './Workspace';
+import { LocatedWorkspaceError, Workspace } from './Workspace';
 
 export interface CLIOptions {
 	json: boolean;
@@ -243,6 +243,10 @@ function inspectUsage(): string {
 		'described by what it contributes and how it is included, and each file read while evaluating described',
 		'by its locals and inputs keys.',
 		'',
+		'When the configuration cannot be added to the workspace, "error" says why and the command exits 2. For a',
+		'dependency or include path that cannot be resolved, "errorLocation" holds the URI of the configuration the',
+		'path is written in and the range of the path, counted from zero.',
+		'',
 		'Options:',
 		'  --json                  Print the state as JSON',
 		'  --format=json          Equivalent to --json (also accepts --format json)',
@@ -340,11 +344,14 @@ async function inspectDocument(argv: string[]): Promise<number> {
 	);
 	const document = new ParsedDocument(workspace, uri, await fs.readFile(realConfig, 'utf8'));
 	let workspaceError: string | undefined;
+	// Where the expression that caused the error is, when the workspace can say.
+	let errorLocation: {uri: string; range: LocatedWorkspaceError['range']} | undefined;
 	try {
 		await workspace.addDocument(document);
 		await workspace.remoteModulesSettled();
 	} catch (error) {
 		workspaceError = error instanceof Error ? error.message : String(error);
+		if (error instanceof LocatedWorkspaceError) errorLocation = {uri: error.uri, range: error.range};
 	}
 
 	const state = document.getModuleVariables();
@@ -387,10 +394,15 @@ async function inspectDocument(argv: string[]): Promise<number> {
 				reads: await inspectReads(workspace, relationships.reads)
 			}
 			: null,
-		...(workspaceError !== undefined ? {error: workspaceError} : {})
+		...(workspaceError !== undefined ? {error: workspaceError} : {}),
+		...(errorLocation !== undefined ? {errorLocation} : {})
 	};
 	process.stdout.write(`${JSON.stringify(view)}\n`);
-	if (workspaceError !== undefined) process.stderr.write(`${workspaceError}\n`);
+	if (workspaceError !== undefined) {
+		// Lines and columns are printed from one, as editors and compilers show them; the JSON keeps the range from zero.
+		const where = errorLocation ? `${fileURLToPath(errorLocation.uri)}:${errorLocation.range.start.line + 1}:${errorLocation.range.start.character + 1}: ` : '';
+		process.stderr.write(`${where}${workspaceError}\n`);
+	}
 	return workspaceError !== undefined ? 2 : 0;
 }
 
@@ -1107,17 +1119,26 @@ function formatSource(original: string, name: string, options: FormatOptions): {
 }
 
 /**
- * Prints the version of this tool.
+ * Prints the version of this tool, which is the version of the package this file is in.
  *
- * @throws when the version cannot be read.
+ * The package's manifest sits one directory above this file, in a checkout and in an installed copy alike. The
+ * program is found through the path it was started by with links resolved, because an installed copy is started
+ * through the link npm makes in a `bin` directory, and the manifest is not beside that.
+ *
+ * @throws when the manifest cannot be read or holds no version.
  */
 async function printVersion(): Promise<void> {
-	const versionFile = path.resolve(path.dirname(process.argv[1] ?? process.cwd()), '../version.txt');
+	const entry = process.argv[1];
+	if (!entry) throw new Error('Unable to determine tghclp version: the program was started without a path');
+	const manifestFile = path.resolve(path.dirname(await fs.realpath(entry)), '../package.json');
+	let version: unknown;
 	try {
-		process.stdout.write(`${(await fs.readFile(versionFile, 'utf8')).trim()}\n`);
-	} catch {
-		throw new Error('Unable to determine tghclp version');
+		version = (JSON.parse(await fs.readFile(manifestFile, 'utf8')) as {version?: unknown}).version;
+	} catch (error) {
+		throw new Error(`Unable to determine tghclp version: cannot read ${manifestFile}: ${error instanceof Error ? error.message : String(error)}`);
 	}
+	if (typeof version !== 'string' || version === '') throw new Error(`Unable to determine tghclp version: ${manifestFile} holds no version`);
+	process.stdout.write(`${version}\n`);
 }
 
 /**
@@ -2559,12 +2580,12 @@ const invokedAsCLI = ((): boolean => {
 	const entry = process.argv[1];
 	if (!entry) return false;
 	// The built file, whatever it is called on disk.
-	if (/[/\\]cli\.(?:js|cjs|ts)$/u.test(entry)) return true;
+	if (/[/\\]cli\.(?:js|cjs|mjs|ts)$/u.test(entry)) return true;
 	// A bin link npm made. Resolving it lands back on this file; comparing the
 	// resolved paths is what makes the check independent of the name.
 	try {
 		const resolved = fsSync.realpathSync(entry);
-		return /[/\\]cli\.(?:js|cjs|ts)$/u.test(resolved);
+		return /[/\\]cli\.(?:js|cjs|mjs|ts)$/u.test(resolved);
 	} catch {
 		return false;
 	}
