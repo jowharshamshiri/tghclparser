@@ -474,6 +474,36 @@ dependency "other" {
 			expect(graph?.children.map(node => node.name)).to.include.members(names.map(name => path.join(name, 'terragrunt.hcl')));
 		});
 
+		it('registers a document when it is added, not when its turn comes', async () => {
+			const [first, second] = await writeUnits(['app0', 'app1']);
+			const workspace = new Workspace();
+			workspace.setWorkspaceRoot(URI.file(directory).toString());
+			const edited = `${unitContent}\ninputs = { edited = true }`;
+
+			const queued = workspace.addDocument(new ParsedDocument(workspace, first, unitContent));
+			const added = workspace.addDocument(new ParsedDocument(workspace, second, edited));
+			// The open document is what the workspace reads from the moment it is added, though its change to the
+			// graph waits behind the first.
+			expect((await workspace.getParsedDocument(second))?.getContent()).to.equal(edited);
+			await Promise.all([queued, added]);
+		});
+
+		it('does not bring back a document closed while its change was waiting', async () => {
+			const [first, second] = await writeUnits(['app0', 'app1']);
+			const workspace = new Workspace();
+			workspace.setWorkspaceRoot(URI.file(directory).toString());
+			const edited = `${unitContent}\ninputs = { edited = true }`;
+
+			const queued = workspace.addDocument(new ParsedDocument(workspace, first, unitContent));
+			const added = workspace.addDocument(new ParsedDocument(workspace, second, edited));
+			// Closed without saving, before the queued change ran.
+			workspace.removeDocument(second);
+			await Promise.all([queued, added]);
+
+			// With the editor's copy gone, the workspace reads the file, which was never edited.
+			expect((await workspace.getParsedDocument(second))?.getContent()).to.equal(unitContent);
+		});
+
 		it('still applies a change queued behind one that failed', async () => {
 			const [uri] = await writeUnits(['app']);
 			const workspace = new Workspace();

@@ -1566,12 +1566,14 @@ export class Workspace {
 	}
 
 	addDocument(document: ParsedDocument): Promise<void> {
+		// The document is registered now and not when its turn comes: it is what the workspace reads for this URI
+		// from here on, and a document closed while its change waits must not be registered again after it.
+		this.documents.set(document.getUri(), document);
 		return this.serializeGraphUpdate(() => this.applyDocument(document));
 	}
 
 	private async applyDocument(document: ParsedDocument): Promise<void> {
 		const uri = document.getUri();
-		this.documents.set(uri, document);
 
 		// Re-resolve every unit whose context contains this file. An included
 		// configuration can produce different paths for each unit, so updating a
