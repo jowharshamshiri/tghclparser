@@ -2,6 +2,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import type { Range } from 'vscode-languageserver';
 import { URI } from 'vscode-uri';
 
 import type { FunctionContext, FunctionDefinition, TerragruntConfig, Token } from './model';
@@ -80,6 +81,28 @@ export type ModuleSourceResolution =
  * comes from another file. The lineage graph drops that single edge rather than failing the whole document.
  */
 class UnresolvableReadPath extends Error {}
+
+/**
+ * A workspace failure caused by one expression in a configuration, so it can be reported where that expression is:
+ * the path of a `dependency` or an `include` that cannot be resolved, or that names nothing that can be read.
+ *
+ * The configuration is the one the expression is written in. For a unit that inherits the expression through an
+ * include, that is the included file and not the unit.
+ */
+export class LocatedWorkspaceError extends Error {
+	/**
+	 * Creates the error.
+	 *
+	 * @param message what went wrong.
+	 * @param uri the configuration holding the expression.
+	 * @param range where the expression is in that configuration.
+	 * @param options the underlying error, if any.
+	 */
+	constructor(message: string, public readonly uri: string, public readonly range: Range, options?: { cause?: unknown }) {
+		super(message, options);
+		this.name = 'LocatedWorkspaceError';
+	}
+}
 
 interface ConfigRelationships {
 	includes: string[];
@@ -188,9 +211,16 @@ export class Workspace {
 		// Process includes
 		const includes = doc.findIncludeBlocks(ast);
 		const includePaths = await Promise.all(includes.map(async inc => {
-			const resolvedPath = await this.resolveIncludePath(inc.path, uri, resolveFrom);
+			const pathRange = { start: inc.path.startPosition, end: inc.path.endPosition };
+			let resolvedPath: string;
+			try {
+				resolvedPath = await this.resolveIncludePath(inc.path, uri, resolveFrom);
+			} catch (error) {
+				if (error instanceof Error) throw new LocatedWorkspaceError(error.message, uri, pathRange, { cause: error });
+				throw error;
+			}
 			if (!await this.fileExists(URI.parse(resolvedPath).fsPath)) {
-				throw new Error(`Included configuration not found: ${URI.parse(resolvedPath).fsPath}`);
+				throw new LocatedWorkspaceError(`Included configuration not found: ${URI.parse(resolvedPath).fsPath}`, uri, pathRange);
 			}
 
 			// Create or update the included config
@@ -269,12 +299,14 @@ export class Workspace {
 		const dependencyPaths: string[] = [];
 		const ownedDependencies = new Map<string, string[]>();
 		for (const dep of dependencyEntries) {
+			const pathRange = { start: dep.path.startPosition, end: dep.path.endPosition };
 			let resolvedPath: string;
 			try {
 				resolvedPath = await this.resolveDependencyPath(dep.path, uri, resolveFrom);
 			} catch (error) {
 				// A config_path built from a value this file cannot see costs one graph edge, not the whole document's lineage.
 				if (error instanceof UnresolvableReadPath) continue;
+				if (error instanceof Error) throw new LocatedWorkspaceError(error.message, uri, pathRange, { cause: error });
 				throw error;
 			}
 			const exists = await this.fileExists(URI.parse(resolvedPath).fsPath);
@@ -284,10 +316,10 @@ export class Workspace {
 			if (exists) {
 				content = await fs.readFile(URI.parse(resolvedPath).fsPath, 'utf-8');
 				const dependencyDocument = await this.getParsedDocument(resolvedPath);
-				if (!dependencyDocument) throw new Error(`Unable to parse dependency configuration: ${URI.parse(resolvedPath).fsPath}`);
+				if (!dependencyDocument) throw new LocatedWorkspaceError(`Unable to parse dependency configuration: ${URI.parse(resolvedPath).fsPath}`, uri, pathRange);
 				outputs = await dependencyDocument.getAllOutputs();
 			} else if (!depConfig) {
-				throw new Error(`Dependency configuration not found: ${URI.parse(resolvedPath).fsPath}`);
+				throw new LocatedWorkspaceError(`Dependency configuration not found: ${URI.parse(resolvedPath).fsPath}`, uri, pathRange);
 			}
 
 			if (!depConfig) {

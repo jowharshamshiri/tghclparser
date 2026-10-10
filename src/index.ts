@@ -12,7 +12,7 @@ export {assertHclSyntax, findHclSyntaxProblem, HclSyntaxError} from './hcl-synta
 export {HoverProvider} from './providers/HoverProvider';
 export {LinkProvider} from './providers/LinkProvider';
 export {Schema} from './Schema';
-export {Workspace} from './Workspace';
+export {LocatedWorkspaceError, Workspace} from './Workspace';
 export type {ModuleSourceResolution, RemoteModulePolicy} from './Workspace';
 export type {ModuleSourceClass, ClassifyOptions} from './module-source';
 export {canonicalHost, classifyModuleSource, isArchiveSource, isCommitSha, redactSource, registerSecret, requestKey, stripUserinfo} from './module-source';
