@@ -77,7 +77,7 @@
 		"test": "mocha",
 		"test:package": "mocha --config tests/package/.mocharc.json",
 		"tghclp": "tsx src/cli.ts",
-		"typecheck": "tsc -p tsconfig.test.json"
+		"typecheck": "tsc"
 	},
 	"peerDependencies": {
 		"typescript": ">=4.7.0"

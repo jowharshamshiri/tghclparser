@@ -22,6 +22,10 @@
     "jsx": "preserve"
   },
   "include": [
-    "./src/**/*"
+    "./src/**/*",
+    "./tests/**/*"
+  ],
+  "exclude": [
+    "./tests/package/consumer/**"
   ]
 }
