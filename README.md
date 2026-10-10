@@ -200,7 +200,7 @@ Reading an output that only a disallowed mock would have supplied reports which 
 
 ## Development
 
-Install dependencies in this directory. The grammar source is `grammar.peggy`; `src/parser.js` is the checked-in generated parser used by consumers. The test suite contains behavior assertions for includes, completions, file-kind validation, stack references, autoincludes, and workspace graph construction.
+Install dependencies in this directory, with Node 22.18 or later in the 22 line, 24.11 or later in the 24 line, or 26 and up: the build tool needs it, and `npm install` says so and stops on any other. Using the published package has no such requirement. The grammar source is `grammar.peggy`; `src/parser.js` is the checked-in generated parser used by consumers. The test suite contains behavior assertions for includes, completions, file-kind validation, stack references, autoincludes, and workspace graph construction.
 
 Run the TypeScript CLI directly during development with `npm run tghclp -- render --help` (or pass any other CLI arguments). This uses the locally installed `tsx` and does not require rebuilding `dist` after source changes.
 

@@ -63,7 +63,7 @@ async function evaluateWithParent(rootHcl: string, unitHcl: string): Promise<unk
 }
 
 function diagnostics(content: string, uri = 'file:///repo/terragrunt.hcl'): string[] {
-	return new ParsedDocument(new Workspace(), uri, content).getDiagnostics().map(item => item.message);
+	return new ParsedDocument(new Workspace(), uri, content).getDiagnostics().map(item => typeof item.message === 'string' ? item.message : item.message.value);
 }
 
 describe('inline function declarations', () => {
