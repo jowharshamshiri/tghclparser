@@ -1,5 +1,9 @@
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+
 import type { CompletionItem, Position } from 'vscode-languageserver';
 import { CompletionItemKind, InsertTextFormat, MarkupKind } from 'vscode-languageserver';
+import { URI } from 'vscode-uri';
 
 import { escapeMarkdownText, markdownCode } from '../markdown';
 import type { AttributeDefinition, BlockDefinition, Token } from '../model';
@@ -43,6 +47,9 @@ export class CompletionsProvider {
 	): Promise<CompletionItem[]> {
 		const context = this.contextAt(documentText, position);
 		if (context.inComment) return [];
+
+		const dependencyPath = this.dependencyPathAt(context);
+		if (dependencyPath !== undefined) return this.dependencyPathItems(dependencyPath, position, document);
 
 		const reference = this.referenceAtCursor(context.beforeCursor);
 		if (reference) return this.referenceCompletions(reference, documentText);
@@ -138,6 +145,16 @@ export class CompletionsProvider {
 
 	isBlockAttributeContext(documentText: string, position: Position): boolean {
 		return this.isBlockAttributeNameContext(documentText, position);
+	}
+
+	/**
+	 * Whether the cursor is inside a dependency's literal `config_path` string, where directories are offered.
+	 * @param documentText the full text of the document.
+	 * @param position the cursor position.
+	 * @returns true when `getCompletions` would offer directories at the position.
+	 */
+	isDependencyPathContext(documentText: string, position: Position): boolean {
+		return this.dependencyPathAt(this.contextAt(documentText, position)) !== undefined;
 	}
 
 	private contextAt(text: string, position: Position): CursorContext {
@@ -525,6 +542,103 @@ export class CompletionsProvider {
 
 	private referenceItem(label: string): CompletionItem {
 		return { label, kind: CompletionItemKind.Reference, insertText: label, sortText: `0-${label}` };
+	}
+
+	/**
+	 * The path typed so far when the cursor is inside a dependency's literal `config_path` string.
+	 * @param context the cursor context.
+	 * @returns the text between the opening quote and the cursor, or undefined outside such a string or when the string
+	 * is interpolated.
+	 */
+	private dependencyPathAt(context: CursorContext): string | undefined {
+		if (!context.inString || context.blocks.at(-1)?.type !== 'dependency') return undefined;
+		return context.lineBeforeCursor.match(/^\s*config_path\s*=\s*"([^"$]*)$/)?.[1];
+	}
+
+	/**
+	 * The directories under the typed path, relative to the document. Unit and stack directories sort first and complete
+	 * as they are; any other directory completes with a trailing `/` and reopens the list to step into it.
+	 * @param typed the path typed so far, from {@link dependencyPathAt}.
+	 * @param position the cursor position, which ends the segment each item replaces.
+	 * @param document the document being edited, whose directory relative paths resolve against.
+	 * @returns one folder item per directory, plus `../`, or none when the document is not a file or the directory
+	 * cannot be read.
+	 */
+	private async dependencyPathItems(typed: string, position: Position, document: ParsedDocument): Promise<CompletionItem[]> {
+		const uri = URI.parse(document.getUri());
+		if (uri.scheme !== 'file') return [];
+
+		const separator = typed.lastIndexOf('/');
+		const dirPart = typed.slice(0, separator + 1);
+		const namePrefix = typed.slice(separator + 1);
+		const dir = path.resolve(path.dirname(uri.fsPath), dirPart || '.');
+		const range = {
+			start: { line: position.line, character: position.character - namePrefix.length },
+			end: position
+		};
+		const reopen = { title: 'Suggest', command: 'editor.action.triggerSuggest' };
+
+		const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => undefined);
+		if (!entries) return [];
+
+		const directories = await Promise.all(entries
+			.filter(entry => !entry.name.startsWith('.') && (entry.isDirectory() || entry.isSymbolicLink()))
+			.map(async entry => {
+				const entryPath = path.join(dir, entry.name);
+				if (entry.isSymbolicLink() && !(await this.isDirectory(entryPath))) return undefined;
+				const [hasUnit, hasStack] = await Promise.all([
+					this.isFile(path.join(entryPath, 'terragrunt.hcl')),
+					this.isFile(path.join(entryPath, 'terragrunt.stack.hcl'))
+				]);
+				return { name: entry.name, kind: hasUnit ? 'unit' : hasStack ? 'stack' : undefined };
+			}));
+
+		const items: CompletionItem[] = directories
+			.filter(directory => directory !== undefined)
+			.map(({ name, kind }) => kind ?
+				{
+					label: name,
+					kind: CompletionItemKind.Folder,
+					detail: `Terragrunt ${kind}`,
+					textEdit: { range, newText: name },
+					sortText: `0-${name}`
+				} :
+				{
+					label: `${name}/`,
+					kind: CompletionItemKind.Folder,
+					textEdit: { range, newText: `${name}/` },
+					sortText: `1-${name}`,
+					command: reopen
+				});
+
+		if ('..'.startsWith(namePrefix)) {
+			items.push({ label: '../', kind: CompletionItemKind.Folder, textEdit: { range, newText: '../' }, sortText: '2-..', command: reopen });
+		}
+		return items;
+	}
+
+	/**
+	 * @param filePath the path to check, following symlinks.
+	 * @returns true when it is a directory, false when it is anything else or cannot be read.
+	 */
+	private async isDirectory(filePath: string): Promise<boolean> {
+		try {
+			return (await fs.stat(filePath)).isDirectory();
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * @param filePath the path to check, following symlinks.
+	 * @returns true when it is a regular file, false when it is anything else or cannot be read.
+	 */
+	private async isFile(filePath: string): Promise<boolean> {
+		try {
+			return (await fs.stat(filePath)).isFile();
+		} catch {
+			return false;
+		}
 	}
 
 	private unique(items: CompletionItem[]): CompletionItem[] {
