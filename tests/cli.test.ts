@@ -246,8 +246,44 @@ describe('CLI configuration discovery', function () {
 		expect(result.status).to.equal(2);
 		const view = JSON.parse(result.stdout);
 		expect(view.error).to.include('Included configuration not found');
+		// The error is located at the include's path, quotes included.
+		const unit = pathToFileURL(path.join(await fs.realpath(root), 'terragrunt.hcl')).toString();
+		expect(view.errorLocation).to.deep.equal({uri: unit, range: {start: {line: 0, character: 24}, end: {line: 0, character: 37}}});
+		expect(result.stderr).to.equal(`${path.join(await fs.realpath(root), 'terragrunt.hcl')}:1:25: ${view.error}\n`);
 		expect(view.diagnostics.map((diagnostic: {message: string}) => diagnostic.message)).to.deep.equal(['Unknown function: unknown_function']);
 		expect(view.moduleVariables).to.equal(null);
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
+	it('inspect says where a dependency path that cannot be resolved is', async () => {
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-inspect-dependency-')));
+		await fs.mkdir(path.join(root, 'app'));
+		await fs.mkdir(path.join(root, 'empty'));
+		await fs.writeFile(path.join(root, 'app', 'terragrunt.hcl'), 'inputs = {}\n\ndependency "empty" {\n  config_path = "../empty"\n}\n');
+		const cli = path.resolve('dist/cli.cjs');
+		const result = spawnSync(process.execPath, [cli, 'inspect', '--json', '--working-dir', path.join(root, 'app')], {encoding: 'utf8'});
+		expect(result.status).to.equal(2);
+		const view = JSON.parse(result.stdout);
+		const message = `Dependency path ${path.join(root, 'empty')} contains neither terragrunt.hcl nor terragrunt.stack.hcl`;
+		expect(view.error).to.equal(message);
+		expect(view.errorLocation).to.deep.equal({
+			uri: pathToFileURL(path.join(root, 'app', 'terragrunt.hcl')).toString(),
+			range: {start: {line: 3, character: 16}, end: {line: 3, character: 26}}
+		});
+		expect(result.stderr).to.equal(`${path.join(root, 'app', 'terragrunt.hcl')}:4:17: ${message}\n`);
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
+	it('inspect gives no location for an error that no one expression causes', async () => {
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-inspect-unlocated-')));
+		await fs.writeFile(path.join(root, 'terragrunt.stack.hcl'), 'unit "app" {\n  path = "app"\n}\n');
+		const cli = path.resolve('dist/cli.cjs');
+		const result = spawnSync(process.execPath, [cli, 'inspect', '--json', '--working-dir', root, '--config', 'terragrunt.stack.hcl'], {encoding: 'utf8'});
+		expect(result.status).to.equal(2);
+		const view = JSON.parse(result.stdout);
+		expect(view.error).to.equal('unit "app" requires source');
+		expect(view).to.not.have.property('errorLocation');
+		expect(result.stderr).to.equal('unit "app" requires source\n');
 		await fs.rm(root, {recursive: true, force: true});
 	});
 
@@ -625,12 +661,12 @@ describe('CLI configuration discovery', function () {
 	});
 
 	it('runs when invoked under the name npm links it as', async () => {
-		// `npm install -g` links `bin/tghclp` at dist/cli.js, so argv[1] is that
-		// bin path rather than a filename ending in `/cli.js`. A check for the
+		// `npm install -g` links `bin/tghclp` at dist/cli.mjs, so argv[1] is that
+		// bin path rather than a filename ending in `/cli.mjs`. A check for the
 		// filename was false for every globally installed copy: the command
 		// exited 0, printed nothing and did nothing, which reads as a program
 		// with no output rather than one that never started.
-		const cli = path.resolve('dist/cli.cjs');
+		const cli = path.resolve('dist/cli.mjs');
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-bin-'));
 		const link = path.join(root, 'tghclp');
 		await fs.symlink(cli, link);

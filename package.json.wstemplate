@@ -39,22 +39,34 @@
 	],
 	"exports": {
 		".": {
-			"types": "./dist/index.d.ts",
-			"import": "./dist/index.js",
-			"require": "./dist/index.cjs"
+			"import": {
+				"types": "./dist/index.d.mts",
+				"default": "./dist/index.mjs"
+			},
+			"require": {
+				"types": "./dist/index.d.cts",
+				"default": "./dist/index.cjs"
+			}
 		}
 	},
 	"main": "./dist/index.cjs",
-	"module": "./dist/index.js",
-	"types": "./dist/index.d.ts",
+	"module": "./dist/index.mjs",
+	"types": "./dist/index.d.cts",
 	"bin": {
-		"tghclp": "dist/cli.js"
+		"tghclp": "dist/cli.mjs"
+	},
+	"devEngines": {
+		"runtime": {
+			"name": "node",
+			"version": "^22.18.0 || ^24.11.0 || >=26.0.0",
+			"onFail": "error"
+		}
 	},
 	"files": [
 		"dist"
 	],
 	"scripts": {
-		"build": "tsup --clean src/index.ts src/cli.ts --format cjs,esm --dts --external vscode-languageserver-types --external vscode-languageserver",
+		"build": "tsdown",
 		"format": "prettier --write \"src/**/*.ts\"",
 		"lint": "eslint --fix",
 		"lint:ci": "eslint",
@@ -62,7 +74,10 @@
 		"prepare": "npm run build",
 		"prepublishOnly": "npm test && npm run lint",
 		"pretest": "npm run build",
-		"test": "mocha"
+		"test": "mocha",
+		"test:package": "mocha --config tests/package/.mocharc.json",
+		"tghclp": "tsx src/cli.ts",
+		"typecheck": "tsc"
 	},
 	"peerDependencies": {
 		"typescript": ">=4.7.0"
@@ -99,8 +114,10 @@
 		"mocha": "^12.0.1",
 		"peggy": "^4.2.0",
 		"prettier": "^3.3.3",
+		"publint": "^0.3.25",
 		"simple-git-hooks": "2.11.1",
-		"tsup": "^8.5.0",
+		"tsdown": "^0.23.0",
+		"tsx": "^4.23.15",
 		"typescript": "^5.9.0",
 		"typescript-eslint": "^8.46.0"
 	},
@@ -116,9 +133,6 @@
 		"mocha": {
 			"diff": "8.0.3",
 			"serialize-javascript": "7.0.5"
-		},
-		"tsup": {
-			"esbuild": "0.28.1"
 		}
 	},
 	"source": "./src/index.ts"

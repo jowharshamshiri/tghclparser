@@ -1,5 +1,11 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+
 import { expect } from 'chai';
-import type { Position } from 'vscode-languageserver';
+import type { CompletionItem, Position, TextEdit } from 'vscode-languageserver';
+import { CompletionItemKind } from 'vscode-languageserver';
+import { URI } from 'vscode-uri';
 
 import type { ParsedDocument } from '../../src/ParsedDocument';
 import { CompletionsProvider } from '../../src/providers/CompletionsProvider';
@@ -205,6 +211,86 @@ locals { reference = REFERENCE }`;
 	it('does not offer completions inside comments', async () => {
 		const text = '# terr';
 		const items = await provider.getCompletions(text, positionAtEnd(text), null, documentFor('file:///repo/terragrunt.hcl'));
+		expect(items).to.deep.equal([]);
+	});
+});
+
+describe('dependency config_path completions', () => {
+	const provider = new CompletionsProvider(Schema.getInstance());
+	let directory: string;
+	let unitUri: string;
+
+	before(async () => {
+		directory = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-config-path-'));
+		const write = async (relative: string): Promise<void> => {
+			await fs.mkdir(path.dirname(path.join(directory, relative)), { recursive: true });
+			await fs.writeFile(path.join(directory, relative), '');
+		};
+		await write('live/app/terragrunt.hcl');
+		await write('live/network/terragrunt.hcl');
+		await write('live/platform/terragrunt.stack.hcl');
+		await write('live/modules/vpc/terragrunt.hcl');
+		await write('live/.terragrunt-cache/x/terragrunt.hcl');
+		await write('live/README.md');
+		unitUri = URI.file(path.join(directory, 'live/app/terragrunt.hcl')).toString();
+	});
+
+	after(async () => {
+		await fs.rm(directory, { recursive: true, force: true });
+	});
+
+	const complete = async (source: string): Promise<CompletionItem[]> => {
+		const { text, position } = sourceAtCursor(source);
+		return provider.getCompletions(text, position, null, documentFor(unitUri, { getInlineFunctions: () => new Map() }));
+	};
+	const newText = (item: CompletionItem | undefined): string | undefined => (item?.textEdit as TextEdit | undefined)?.newText;
+
+	it('lists sibling directories with units and stacks first', async () => {
+		const items = await complete('dependency "vpc" {\n  config_path = "../<|>"\n}');
+		const sorted = [...items].sort((a, b) => a.sortText!.localeCompare(b.sortText!));
+		expect(sorted.map(item => item.label)).to.deep.equal(['app', 'network', 'platform', 'modules/', '../']);
+		expect(items.every(item => item.kind === CompletionItemKind.Folder)).to.equal(true);
+		expect(items.find(item => item.label === 'network')?.detail).to.equal('Terragrunt unit');
+		expect(items.find(item => item.label === 'platform')?.detail).to.equal('Terragrunt stack');
+	});
+
+	it('replaces only the segment being typed', async () => {
+		const items = await complete('dependency "vpc" {\n  config_path = "../ne<|>"\n}');
+		const network = items.find(item => item.label === 'network');
+		expect(network?.textEdit).to.deep.equal({
+			range: { start: { line: 1, character: 20 }, end: { line: 1, character: 22 } },
+			newText: 'network'
+		});
+		expect(items.map(item => item.label)).not.to.include('../');
+	});
+
+	it('steps into a directory that holds no configuration', async () => {
+		const items = await complete('dependency "vpc" {\n  config_path = "../<|>"\n}');
+		const modules = items.find(item => item.label === 'modules/');
+		expect(newText(modules)).to.equal('modules/');
+		expect(modules?.command?.command).to.equal('editor.action.triggerSuggest');
+		expect(items.find(item => item.label === 'network')?.command).to.equal(undefined);
+
+		const nested = await complete('dependency "vpc" {\n  config_path = "../modules/<|>"\n}');
+		expect(nested.map(item => item.label)).to.include.members(['vpc', '../']);
+	});
+
+	it('offers nothing for a directory that does not exist', async () => {
+		const items = await complete('dependency "vpc" {\n  config_path = "../missing/<|>"\n}');
+		expect(items).to.deep.equal([]);
+	});
+
+	it('offers no paths outside a dependency block or in an interpolated string', async () => {
+		const outside = await complete('locals {\n  config_path = "../<|>"\n}');
+		const interpolated = await complete('dependency "vpc" {\n  config_path = "${get_terragrunt_dir()}/../<|>"\n}');
+		for (const items of [outside, interpolated]) {
+			expect(items.some(item => item.kind === CompletionItemKind.Folder)).to.equal(false);
+		}
+	});
+
+	it('offers no paths for a document that is not a file', async () => {
+		const { text, position } = sourceAtCursor('dependency "vpc" {\n  config_path = "../<|>"\n}');
+		const items = await provider.getCompletions(text, position, null, documentFor('untitled:Untitled-1'));
 		expect(items).to.deep.equal([]);
 	});
 });
