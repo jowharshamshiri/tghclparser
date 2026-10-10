@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { expect } from 'chai';
-import { DiagnosticSeverity } from 'vscode-languageserver';
+import { Diagnostic, DiagnosticSeverity } from 'vscode-languageserver';
 import { URI } from 'vscode-uri';
 
 import { ParsedDocument } from '../../src/ParsedDocument';
@@ -51,7 +51,7 @@ inputs = {
 ${inputs}
 }`;
 
-	const messages = (document: ParsedDocument) => document.getDiagnostics().map(diagnostic => diagnostic.message);
+	const messages = (document: ParsedDocument) => document.getDiagnostics().map(diagnostic => Diagnostic.getMessageString(diagnostic));
 	const moduleMessages = (document: ParsedDocument) => messages(document).filter(message => /module/i.test(message));
 
 	it('warns about keys the module does not declare and required variables left unset', async () => {

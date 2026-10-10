@@ -3,6 +3,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import { Diagnostic } from 'vscode-languageserver';
+
 import { ConfigEvaluator, runtimeValueToPlain } from '../src/Evaluator';
 import { ParsedDocument } from '../src/ParsedDocument';
 import { parse } from '../src/parser';
@@ -63,7 +65,7 @@ async function evaluateWithParent(rootHcl: string, unitHcl: string): Promise<unk
 }
 
 function diagnostics(content: string, uri = 'file:///repo/terragrunt.hcl'): string[] {
-	return new ParsedDocument(new Workspace(), uri, content).getDiagnostics().map(item => item.message);
+	return new ParsedDocument(new Workspace(), uri, content).getDiagnostics().map(item => Diagnostic.getMessageString(item));
 }
 
 describe('inline function declarations', () => {

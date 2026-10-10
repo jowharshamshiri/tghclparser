@@ -553,6 +553,7 @@ tghclp run --tf-path terraform --working-dir ./app -- apply</code></pre></div>
           <tr><td>LinkProvider</td><td>Resolves navigable links in a document.</td></tr>
           <tr><td>formatHcl</td><td>Formats source into the canonical layout, as <code>terragrunt hcl format</code> does. Throws <code>HclSyntaxError</code> for source that is not valid HCL, which is exactly the source Terragrunt refuses. Only whitespace changes; inline functions are kept as written.</td></tr>
           <tr><td>findHclSyntaxProblem</td><td>Checks source against the rules of the HCL parser Terragrunt uses and returns the first error that parser reports, with its summary, detail and range, or <code>undefined</code> for valid source. <code>assertHclSyntax</code> throws it as an <code>HclSyntaxError</code>.</td></tr>
+          <tr><td>LocatedWorkspaceError</td><td>What <code>Workspace.addDocument</code> and <code>refreshDependencyTree</code> reject with when the path of a <code>dependency</code> or an <code>include</code> cannot be resolved or names nothing that can be read. Its <code>uri</code> and <code>range</code> say which configuration the path is written in and where, so the problem can be shown on the path.</td></tr>
           <tr><td>formatHclTokens</td><td>The same layout computed from tokens alone, which never refuses source, as <code>hclwrite.Format</code> does not.</td></tr>
         </tbody></table>
 
