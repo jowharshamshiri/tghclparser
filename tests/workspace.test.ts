@@ -427,4 +427,97 @@ dependency "other" {
 		const message = await rejectionMessage(workspace.refreshDependencyTree());
 		expect(message).to.equal('Local path refers to itself in a read path');
 	});
+
+	describe('concurrent changes', () => {
+		const unitContent = 'dependency "network" {\n  config_path = "../network"\n}';
+
+		const writeUnits = async (names: string[]): Promise<string[]> => {
+			await fs.mkdir(path.join(directory, 'network'));
+			await fs.writeFile(path.join(directory, 'network', 'terragrunt.hcl'), 'inputs = {}');
+			return Promise.all(names.map(async name => {
+				await fs.mkdir(path.join(directory, name));
+				const unitPath = path.join(directory, name, 'terragrunt.hcl');
+				await fs.writeFile(unitPath, unitContent);
+				return URI.file(unitPath).toString();
+			}));
+		};
+
+		it('records every unit when units are added at the same time', async () => {
+			const uris = await writeUnits(Array.from({ length: 8 }, (_, index) => `app${index}`));
+			const workspace = new Workspace();
+			workspace.setWorkspaceRoot(URI.file(directory).toString());
+
+			await Promise.all(uris.map(uri => workspace.addDocument(new ParsedDocument(workspace, uri, unitContent))));
+
+			const networkUri = URI.file(path.join(directory, 'network', 'terragrunt.hcl')).toString();
+			for (const uri of uris) {
+				const dependencies = await workspace.getDependencies(uri);
+				expect(dependencies.map(config => config.uri), uri).to.deep.equal([networkUri]);
+			}
+		});
+
+		it('completes a refresh started while units are being added', async () => {
+			const names = Array.from({ length: 4 }, (_, index) => `app${index}`);
+			const uris = await writeUnits(names);
+			const workspace = new Workspace();
+			workspace.setWorkspaceRoot(URI.file(directory).toString());
+			const add = (uri: string) => workspace.addDocument(new ParsedDocument(workspace, uri, unitContent));
+
+			const [, , graph] = await Promise.all([
+				add(uris[0]),
+				add(uris[1]),
+				workspace.refreshDependencyTree(),
+				add(uris[2]),
+				add(uris[3])
+			]);
+
+			expect(graph?.children.map(node => node.name)).to.include.members(names.map(name => path.join(name, 'terragrunt.hcl')));
+		});
+
+		it('registers a document when it is added, not when its turn comes', async () => {
+			const [first, second] = await writeUnits(['app0', 'app1']);
+			const workspace = new Workspace();
+			workspace.setWorkspaceRoot(URI.file(directory).toString());
+			const edited = `${unitContent}\ninputs = { edited = true }`;
+
+			const queued = workspace.addDocument(new ParsedDocument(workspace, first, unitContent));
+			const added = workspace.addDocument(new ParsedDocument(workspace, second, edited));
+			// The open document is what the workspace reads from the moment it is added, though its change to the
+			// graph waits behind the first.
+			expect((await workspace.getParsedDocument(second))?.getContent()).to.equal(edited);
+			await Promise.all([queued, added]);
+		});
+
+		it('does not bring back a document closed while its change was waiting', async () => {
+			const [first, second] = await writeUnits(['app0', 'app1']);
+			const workspace = new Workspace();
+			workspace.setWorkspaceRoot(URI.file(directory).toString());
+			const edited = `${unitContent}\ninputs = { edited = true }`;
+
+			const queued = workspace.addDocument(new ParsedDocument(workspace, first, unitContent));
+			const added = workspace.addDocument(new ParsedDocument(workspace, second, edited));
+			// Closed without saving, before the queued change ran.
+			workspace.removeDocument(second);
+			await Promise.all([queued, added]);
+
+			// With the editor's copy gone, the workspace reads the file, which was never edited.
+			expect((await workspace.getParsedDocument(second))?.getContent()).to.equal(unitContent);
+		});
+
+		it('still applies a change queued behind one that failed', async () => {
+			const [uri] = await writeUnits(['app']);
+			const workspace = new Workspace();
+			workspace.setWorkspaceRoot(URI.file(directory).toString());
+			const brokenUri = URI.file(path.join(directory, 'broken', 'terragrunt.hcl')).toString();
+			const brokenContent = 'dependency "missing" {\n  config_path = "../missing"\n}';
+
+			const [message] = await Promise.all([
+				rejectionMessage(workspace.addDocument(new ParsedDocument(workspace, brokenUri, brokenContent))),
+				workspace.addDocument(new ParsedDocument(workspace, uri, unitContent))
+			]);
+
+			expect(message).to.match(/contains neither terragrunt\.hcl nor terragrunt\.stack\.hcl$/);
+			expect(await workspace.getDependencies(uri)).to.have.length(1);
+		});
+	});
 });
