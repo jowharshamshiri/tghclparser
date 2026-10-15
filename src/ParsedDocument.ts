@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-import type { CompletionItem, Diagnostic, DocumentLink, MarkupContent, Position } from 'vscode-languageserver';
+import type { CompletionItem, Diagnostic, DocumentLink, LocationLink, MarkupContent, Position } from 'vscode-languageserver';
 import { URI } from 'vscode-uri';
 
 import { readInlineFunction, synthesizeDefinition, tokenToNode } from './inline-functions';
@@ -13,6 +13,7 @@ import { parseHclSyntax } from './syntax';
 import type { RemoteSourceErrorCode } from './remote-errors';
 import type { ParserTracerEvent } from './parser';
 import { CompletionsProvider } from './providers/CompletionsProvider';
+import { DefinitionProvider } from './providers/DefinitionProvider';
 import { DiagnosticsProvider } from './providers/DiagnosticsProvider';
 import { HoverProvider } from './providers/HoverProvider';
 import { LinkProvider } from './providers/LinkProvider';
@@ -92,6 +93,11 @@ export type ModuleVariablesState =
 		reason: string;
 		/** The failure's code, for callers that act on it. */
 		code: RemoteSourceErrorCode;
+		/**
+		 * The host the failure is about when the user can act on it: the registry that refused for want of a token,
+		 * or the host whose approval was not given.
+		 */
+		host?: string;
 		/** The remote source that could not be fetched, credentials removed. */
 		sourceText: string;
 		/** True when the `terraform { source }` is in this document rather than in an included configuration. */
@@ -125,6 +131,7 @@ export class ParsedDocument {
 	private hoverProvider: HoverProvider;
 	private diagnosticsProvider: DiagnosticsProvider;
 	private linkProvider: LinkProvider;
+	private definitionProvider: DefinitionProvider;
 	private stateManager: StateManager;
 	/** Inline functions inherited through includes; see setInheritedInlineFunctions. */
 	private inheritedInlineFunctions: Map<string, FunctionDefinition> = new Map();
@@ -157,6 +164,7 @@ export class ParsedDocument {
 		this.hoverProvider = new HoverProvider(this.schema);
 		this.diagnosticsProvider = new DiagnosticsProvider(this.schema);
 		this.linkProvider = new LinkProvider(this);
+		this.definitionProvider = new DefinitionProvider(this);
 		this.stateManager = new StateManager();
 		this.parseContent();
 	}
@@ -1102,6 +1110,16 @@ export class ParsedDocument {
 		const token = this.findTokenAtPosition(position);
 		if (!token) return null;
 		return this.hoverProvider.getHoverInfo(token, this);
+	}
+
+	/**
+	 * Where the reference at a position is defined; see {@link DefinitionProvider.getDefinition}.
+	 *
+	 * @param position the position, anywhere in the reference.
+	 * @returns the definition, or none when there is no reference there or what it names is not set.
+	 */
+	public getDefinition(position: Position): Promise<LocationLink[]> {
+		return this.definitionProvider.getDefinition(position);
 	}
 
 	public async getLinks(): Promise<DocumentLink[]> {

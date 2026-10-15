@@ -39,12 +39,17 @@ export class RemoteSourceError extends Error {
 	 *
 	 * @param code what went wrong, for the caller to act on.
 	 * @param message the message, which may still carry credentials.
-	 * @param options the underlying error, if any.
+	 * @param options the underlying error, if any, and the host the failure is about when the user can act on that
+	 *   host: the registry that refused for want of a token, or the host whose approval was not given.
 	 */
-	constructor(public readonly code: RemoteSourceErrorCode, message: string, options?: { cause?: unknown }) {
-		super(redactSource(message), options);
+	constructor(public readonly code: RemoteSourceErrorCode, message: string, options?: { cause?: unknown; host?: string }) {
+		super(redactSource(message), options?.cause === undefined ? undefined : { cause: options.cause });
 		this.name = 'RemoteSourceError';
+		this.host = options?.host;
 	}
+
+	/** The host the failure is about, canonical and with any port, when the user can act on it. */
+	public readonly host: string | undefined;
 }
 
 /**

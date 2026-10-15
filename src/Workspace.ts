@@ -906,8 +906,16 @@ export class Workspace {
 		this.remoteUnits.set(unit.doc.getUri(), unit);
 		const request = requestKey(source);
 		const known = this.remoteModules.peek(request);
-		if (known && 'checkout' in known) return this.loadedFromCheckout(known.checkout, shown, sourceInThisFile, configurations, unit);
-		if (known) return { status: 'fetchFailed', reason: known.failed.message, code: known.failed.code, sourceText: shown, sourceInThisFile };
+		if (known && 'checkout' in known) {
+			const loaded = await this.loadedFromCheckout(known.checkout, shown, sourceInThisFile, configurations, unit);
+			if (loaded) return loaded;
+			// The cache is shared, and another process using it -- a second language server, or `tghclp cache clear`
+			// -- deleted the entry. What this session fetched is gone, so it is fetched again.
+			this.remoteModules.forget(request);
+		} else if (known) {
+			const { message, code, host } = known.failed;
+			return { status: 'fetchFailed', reason: message, code, ...(host === undefined ? {} : { host }), sourceText: shown, sourceInThisFile };
+		}
 
 		let pending = this.pendingRemote.get(request);
 		if (!pending) {
@@ -925,18 +933,25 @@ export class Workspace {
 		return { status: 'loading', sourceText: shown, sourceInThisFile };
 	}
 
+	/**
+	 * The state of a unit whose module this session has fetched, read from the cache entry.
+	 *
+	 * @returns the state, or undefined when the entry is no longer in the cache. Entries are written whole, by a
+	 *   rename, so a path missing from one means it has been deleted.
+	 */
 	private async loadedFromCheckout(
 		checkout: RemoteModuleCheckout,
 		sourceText: string,
 		sourceInThisFile: boolean,
 		configurations: ParsedDocument[],
 		unit: PendingUnit
-	): Promise<ModuleVariablesState> {
+	): Promise<ModuleVariablesState | undefined> {
 		let module: ModuleVariables;
 		try {
 			module = await this.moduleVariables.get(checkout.moduleDir);
 		} catch (error) {
 			if (!isFileSystemError(error)) throw error;
+			if (error.code === 'ENOENT') return undefined;
 			return { status: 'unavailable', reason: `fetched module ${checkout.label} could not be read: ${error.message}`, sourceInThisFile };
 		}
 		return {

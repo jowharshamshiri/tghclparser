@@ -372,6 +372,16 @@ export class RemoteModuleStore {
 		return root;
 	}
 
+	/**
+	 * Forgets the checkout memoised for a request, so the next request fetches it again. For an entry deleted from the
+	 * cache by another process sharing it; a fetch in flight is left to finish.
+	 *
+	 * @param request a request key from {@link requestKey}.
+	 */
+	forget(request: string): void {
+		this.resolved.delete(request);
+	}
+
 	/** Forgets memoised failures and host decisions, so the next request tries again. */
 	forgetFailures(): void {
 		this.failed.clear();
@@ -753,9 +763,11 @@ export class RemoteModuleStore {
 			approved = await decision;
 		} catch (error) {
 			if (this.approvals.get(host) === decision) this.approvals.delete(host);
-			throw asRemoteSourceError(error, 'HostNotApproved', `asking whether modules may be fetched from ${host} failed`);
+			if (error instanceof RemoteSourceError) throw error;
+			const detail = error instanceof Error ? error.message : String(error);
+			throw new RemoteSourceError('HostNotApproved', `asking whether modules may be fetched from ${host} failed: ${detail}`, { cause: error, host });
 		}
-		if (!approved) throw new RemoteSourceError('HostNotApproved', `fetching modules from ${host} has not been approved`);
+		if (!approved) throw new RemoteSourceError('HostNotApproved', `fetching modules from ${host} has not been approved`, { host });
 		await this.refuseLocalAddress(host);
 	}
 

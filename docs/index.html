@@ -357,6 +357,7 @@ const diagnostics = document.getDiagnostics();
 const completions = await document.getCompletionsAtPosition(position);
 const hover = await document.getHoverInfo(position);
 const links = await document.getLinks();
+const definitions = await document.getDefinition(position);
 const token = document.findTokenAtPosition(position);</code></pre></div>
 
         <h2>Handle edits</h2>
@@ -495,6 +496,7 @@ tghclp run --tf-path terraform --working-dir ./app -- apply</code></pre></div>
           <tr><td>getCompletionsAtPosition(position)</td><td>A promise of LSP <code>CompletionItem[]</code>.</td></tr>
           <tr><td>getHoverInfo(position)</td><td>A promise of LSP markup, or <code>null</code>.</td></tr>
           <tr><td>getLinks()</td><td>A promise of LSP <code>DocumentLink[]</code>.</td></tr>
+          <tr><td>getDefinition(position)</td><td>A promise of LSP <code>LocationLink[]</code>: where <code>local.*</code>, <code>include.&lt;label&gt;.*</code> or <code>dependency.&lt;name&gt;.*</code> is set, a dependency looked for in the configurations Terragrunt merges into the unit. Empty when there is no such reference at the position, or what it names is not set.</td></tr>
           <tr><td>findTokenAtPosition(position)</td><td>The narrowest token at an LSP position, or <code>null</code>.</td></tr>
           <tr><td>getAllLocals()</td><td>A map of evaluated local values.</td></tr>
           <tr><td>getAllOutputs()</td><td>A map of outputs discovered from Terraform state.</td></tr>
@@ -516,7 +518,7 @@ tghclp run --tf-path terraform --working-dir ./app -- apply</code></pre></div>
           <tr><td>configureRemoteModules(policy, options)</td><td>Sets whether registry module sources (<code>tfr://</code>) are fetched, and how: credentials, the host approval callback, the cache directory. Until it is called, a unit naming a remote source has no module state.</td></tr>
           <tr><td>onModuleVariablesChanged(listener)</td><td>Calls the listener with a unit's URI when a background fetch has landed and its diagnostics should be published again.</td></tr>
           <tr><td>remoteModulesSettled()</td><td>Resolves once no fetch is in flight and every waiting unit has been updated.</td></tr>
-          <tr><td>clearRemoteModuleCache()</td><td>Deletes the fetched modules and fetches again for open units.</td></tr>
+          <tr><td>clearRemoteModuleCache()</td><td>Deletes the fetched modules and fetches again for open units. A module another process sharing the cache has deleted is fetched again the next time a unit naming it is added.</td></tr>
         </tbody></table>
 
         <div class="signature"><h3>new ConfigEvaluator(options)</h3><p>Evaluates Terragrunt configuration values with explicit environment and trust settings.</p></div>

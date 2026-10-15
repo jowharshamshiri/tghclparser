@@ -17,27 +17,30 @@
     return heredocMarkerStack[heredocMarkerStack.length - 1];
   }
 
-  function consolidateStringChars(chars) {
-	const result = [];
-	let currentString = '';
-		
-	for (const char of chars) {
-	  if (typeof char === 'string') {
-	  	currentString += char;
-	  } else {
-		if (currentString) {
-		  result.push(currentString);
-		  currentString = '';
-		}
-		result.push(char);
-	  }
-	}
-	
-	if (currentString) {
-	  result.push(currentString);
-	}
-	
-  	return result;
+  // Joins the literal characters of a string, each a `{ literal, location }`, into runs that keep the source range
+  // they were written in; an interpolation ends a run. A literal part of an interpolated string is a token of its
+  // own, so it must cover only its own text, or it would hide the interpolations after it.
+  function consolidateLiteralParts(parts) {
+    const result = [];
+    for (const part of parts) {
+      const last = result[result.length - 1];
+      if (part.literal !== undefined && last !== undefined && last.literal !== undefined) {
+        result[result.length - 1] = { literal: last.literal + part.literal, location: { ...last.location, end: part.location.end } };
+      } else {
+        result.push(part);
+      }
+    }
+    return result;
+  }
+
+  // The node for a string's parts: one string literal when there is no interpolation, else an interpolated string
+  // whose literal parts each cover their own text.
+  function stringNode(parts, location) {
+    if (parts.every(part => part.literal !== undefined)) {
+      return makeNode('string_lit', parts.map(part => part.literal).join(''), location);
+    }
+    return makeNode('interpolated_string', null, location,
+      parts.map(part => part.literal !== undefined ? makeNode('string_lit', part.literal, part.location) : part));
   }
 
   function getNextId() {
@@ -280,7 +283,12 @@ BlockIdentifier = name:$([a-zA-Z_\u0080-\uFFFF][a-zA-Z0-9_\-.*\u0080-\uFFFF]*) {
   return makeNode('block_identifier', name, location());
 }
 
-BlockParameter = [ \t]+ ([ \t] / MultiLineComment)* param:(StringLiteral / Identifier) {
+BlockParameter = [ \t]+ ([ \t] / MultiLineComment)* param:BlockLabel {
+	return param;
+}
+
+// A label covers its own text only, not the space before it.
+BlockLabel = param:(StringLiteral / Identifier) {
 	if (typeof param !== 'string' && param.type !== 'string_lit') throw new Error('Interpolated block labels are not valid');
 	return makeNode('parameter', typeof param === 'string' ? param : param.value, location(), typeof param === 'string' ? [] : [param]);
 }
@@ -506,65 +514,23 @@ Object = "{" _ pairs:(Pair (_ ","? _ Pair)* (_ ",")?)? _ "}" {
 StringLiteral = QuotedString / Heredoc
 Heredoc = "<<" trim:"-"? marker:beginMarker newline content:heredocContent endMarkerLine {
   popHeredocMarker();
-  
-  // Handle trimming if specified
-  if (trim === "-" && Array.isArray(content)) {
-    content = content.map(part => {
-      if (typeof part === 'string') {
-        return part.split('\n').map(line => line.trim()).join('\n');
-      }
-      return part;
-    });
-  } else if (trim === "-" && typeof content === 'string') {
-    content = content.split('\n').map(line => line.trim()).join('\n');
-  }
-
-  const fullLocation = location();
-
-  // If content is a string, create a string literal node
-  if (typeof content === 'string') {
-    return makeNode('string_lit', content, fullLocation);
-  }
-
-  // For content with interpolations, create an interpolated string node
-  return makeNode('interpolated_string', null, fullLocation,
-    content.map(part => {
-      if (typeof part === 'string') {
-        return makeNode('string_lit', part, fullLocation);
-      }
-      // Preserve interpolation nodes as they are
-      return part;
-    })
-  );
+  // `<<-` trims every line of the literal text.
+  const parts = trim === "-"
+    ? content.map(part => part.literal !== undefined ? { ...part, literal: part.literal.split('\n').map(line => line.trim()).join('\n') } : part)
+    : content;
+  return stringNode(parts, location());
 }
 
 heredocContent = parts:(
-    (!endMarkerLine (
+    !endMarkerLine part:(
       InterpolatedExpr /
       "$$" "{" { return "\x24" + String.fromCharCode(123); } /
       "%%" "{" { return "%" + String.fromCharCode(123); } /
           "\r" { return text(); } /
       [^\r] { return text(); }
-    ))
+    ) { return typeof part === 'string' ? { literal: part, location: location() } : part; }
 )* {
-  // Extract actual content from the parts array structure
-  let content = parts.map(([_, part]) => {
-    if (typeof part === 'string') {
-      return part;
-    }
-    // Handle interpolation nodes by preserving their structure
-    return part;
-  });
-  
-  // Consolidate consecutive string characters
-  content = consolidateStringChars(content);
-  
-  // If all parts are strings, join them
-  if (content.every(part => typeof part === 'string')) {
-    return content.join('');
-  }
-  
-  return content;
+  return consolidateLiteralParts(parts);
 }
 
 beginMarker = marker:$([A-Z][A-Z0-9_]*) {
@@ -588,29 +554,13 @@ endMarkerLine =
   &newline
 
 
-QuotedString = '"' chars:DoubleStringChar* '"' {
-  // Group consecutive string characters together
-  const consolidated = consolidateStringChars(chars);
-  
-  // If there's only one part and it's a string, return as string_lit
-  if (consolidated.length === 1 && typeof consolidated[0] === 'string') {
-    return makeNode('string_lit', consolidated[0], location());
-  }
-  
-  // If all parts are strings (no interpolation), join them
-  if (consolidated.every(c => typeof c === 'string')) {
-    return makeNode('string_lit', consolidated.join(''), location());
-  }
-  
-  // Create interpolated string with proper string chunks
-  return makeNode('interpolated_string', null, location(), 
-    consolidated.map(c => {
-      if (typeof c === 'string') {
-        return makeNode('string_lit', c, location());
-      }
-      return c;
-    })
-  );
+QuotedString = '"' parts:QuotedStringPart* '"' {
+  return stringNode(consolidateLiteralParts(parts), location());
+}
+
+// A character of a quoted string, with the source it was written as, or an interpolation.
+QuotedStringPart = char:DoubleStringChar {
+  return typeof char === 'string' ? { literal: char, location: location() } : char;
 }
 
 DoubleStringChar =
