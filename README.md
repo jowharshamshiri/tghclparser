@@ -70,6 +70,7 @@ Declarations are inherited through `include`, so shared helpers live in `root.hc
 - Workspace graphs for includes, dependencies, explicit stacks, and generated component targets
 - Dependency output discovery from state
 - Hover and document-link providers
+- Go to definition for `local.*`, `include.<label>.*` and `dependency.<name>.*`, a dependency found in the configurations Terragrunt merges into the unit
 - Inline function signatures in completion, hover, and call diagnostics
 - Formatting into Terragrunt's canonical layout, with no external formatter
 - Completion, hover and checking of `inputs` against the variables of the module `terraform { source }` names

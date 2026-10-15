@@ -357,6 +357,7 @@ const diagnostics = document.getDiagnostics();
 const completions = await document.getCompletionsAtPosition(position);
 const hover = await document.getHoverInfo(position);
 const links = await document.getLinks();
+const definitions = await document.getDefinition(position);
 const token = document.findTokenAtPosition(position);</code></pre></div>
 
         <h2>Handle edits</h2>
@@ -495,6 +496,7 @@ tghclp run --tf-path terraform --working-dir ./app -- apply</code></pre></div>
           <tr><td>getCompletionsAtPosition(position)</td><td>A promise of LSP <code>CompletionItem[]</code>.</td></tr>
           <tr><td>getHoverInfo(position)</td><td>A promise of LSP markup, or <code>null</code>.</td></tr>
           <tr><td>getLinks()</td><td>A promise of LSP <code>DocumentLink[]</code>.</td></tr>
+          <tr><td>getDefinition(position)</td><td>A promise of LSP <code>LocationLink[]</code>: where <code>local.*</code>, <code>include.&lt;label&gt;.*</code> or <code>dependency.&lt;name&gt;.*</code> is set, a dependency looked for in the configurations Terragrunt merges into the unit. Empty when there is no such reference at the position, or what it names is not set.</td></tr>
           <tr><td>findTokenAtPosition(position)</td><td>The narrowest token at an LSP position, or <code>null</code>.</td></tr>
           <tr><td>getAllLocals()</td><td>A map of evaluated local values.</td></tr>
           <tr><td>getAllOutputs()</td><td>A map of outputs discovered from Terraform state.</td></tr>

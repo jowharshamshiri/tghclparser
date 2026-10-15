@@ -54,6 +54,7 @@ export type TokenType =
 
 	// Reference types
 	| 'dependency_reference'
+	| 'dependency_name'
 	| 'local_reference'
 	| 'module_reference'
 	| 'terraform_reference'

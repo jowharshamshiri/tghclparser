@@ -5,6 +5,7 @@ export {runtimeValueToPlain} from './Evaluator';
 export type {ConfigEvaluationResult, DependencyRequest, EvaluatedSpan} from './Evaluator';
 export {ParsedDocument} from './ParsedDocument';
 export {CompletionsProvider} from './providers/CompletionsProvider';
+export {DefinitionProvider} from './providers/DefinitionProvider';
 export {DiagnosticsProvider} from './providers/DiagnosticsProvider';
 export {formatHcl, formatHclTokens} from './hcl-format';
 export type {HclPosition, HclSyntaxProblem} from './hcl-syntax';
