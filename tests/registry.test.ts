@@ -452,7 +452,11 @@ describe('registry module sources', function () {
 			if (state?.status !== 'fetchFailed') continue;
 			expect(state.code, testCase.name).to.equal(testCase.code);
 			expect(state.reason, testCase.name).to.include(testCase.reason);
-			expect(messages(document)[0][0], testCase.name).to.equal(`Module source could not be fetched: ${state.reason}`);
+			const [diagnostic] = document.getDiagnostics();
+			expect(diagnostic.message, testCase.name).to.equal(`Module source could not be fetched: ${state.reason}`);
+			expect(diagnostic.code, testCase.name).to.equal(testCase.code);
+			// Only a registry refusing for want of a token names a host the user can store a token for.
+			expect(diagnostic.data, testCase.name).to.deep.equal(testCase.code === 'RegistryAuth' ? { host } : undefined);
 		}
 		expect(await fs.stat(path.join(root, 'pwned')).catch(() => undefined)).to.equal(undefined);
 	});
@@ -574,8 +578,10 @@ describe('registry module sources', function () {
 		const named = workspaceFor({ allowedHosts: [], approveHost: async (requested, kind) => { asked.push([requested, kind]); return false; } });
 		const tofu = await openUnit(named, `terraform_binary = "tofu"\n${unit('tfr:///acme/vpc/aws')}`, 'tofu');
 		await named.remoteModulesSettled();
-		expect(tofu.getModuleVariables()).to.deep.include({ status: 'fetchFailed', code: 'HostNotApproved' });
+		expect(tofu.getModuleVariables()).to.deep.include({ status: 'fetchFailed', code: 'HostNotApproved', host: 'registry.opentofu.org' });
 		expect(asked).to.deep.equal([['registry.opentofu.org', 'registry']]);
+		// tfr:/// names no host, so the diagnostic says which one was refused.
+		expect(tofu.getDiagnostics()[0]).to.deep.include({ code: 'HostNotApproved', data: { host: 'registry.opentofu.org' } });
 	});
 
 	it('asks once about a host that several fetches reach at the same time', async () => {

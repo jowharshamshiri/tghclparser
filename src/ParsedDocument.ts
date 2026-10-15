@@ -92,6 +92,11 @@ export type ModuleVariablesState =
 		reason: string;
 		/** The failure's code, for callers that act on it. */
 		code: RemoteSourceErrorCode;
+		/**
+		 * The host the failure is about when the user can act on it: the registry that refused for want of a token,
+		 * or the host whose approval was not given.
+		 */
+		host?: string;
 		/** The remote source that could not be fetched, credentials removed. */
 		sourceText: string;
 		/** True when the `terraform { source }` is in this document rather than in an included configuration. */

@@ -74,7 +74,13 @@ export class DiagnosticsProvider {
 			return;
 		}
 		if (state.status === 'fetchFailed') {
-			diagnostics.push(this.diagnostic(anchor, `Module source could not be fetched: ${state.reason}`, DiagnosticSeverity.Warning));
+			// The code, and the host when there is one to act on, let an editor offer a fix: a token for the registry,
+			// or asking again about the host.
+			diagnostics.push({
+				...this.diagnostic(anchor, `Module source could not be fetched: ${state.reason}`, DiagnosticSeverity.Warning),
+				code: state.code,
+				...(state.host === undefined ? {} : { data: { host: state.host } })
+			});
 			return;
 		}
 

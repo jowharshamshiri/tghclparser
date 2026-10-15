@@ -440,7 +440,7 @@ function serverError(what: string, status: number): RemoteSourceError {
  * @returns the `RegistryAuth` error.
  */
 function authError(host: string, status: number): RemoteSourceError {
-	return new RemoteSourceError('RegistryAuth', `${host} rejected the request with ${status}; set ${tokenEnvName(host.replace(/:\d+$/, ''))} or TG_TF_REGISTRY_TOKEN to a registry API token, or store one for the host`);
+	return new RemoteSourceError('RegistryAuth', `${host} rejected the request with ${status}; set ${tokenEnvName(host.replace(/:\d+$/, ''))} or TG_TF_REGISTRY_TOKEN to a registry API token, or store one for the host`, { host });
 }
 
 /**

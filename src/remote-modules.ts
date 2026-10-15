@@ -763,9 +763,11 @@ export class RemoteModuleStore {
 			approved = await decision;
 		} catch (error) {
 			if (this.approvals.get(host) === decision) this.approvals.delete(host);
-			throw asRemoteSourceError(error, 'HostNotApproved', `asking whether modules may be fetched from ${host} failed`);
+			if (error instanceof RemoteSourceError) throw error;
+			const detail = error instanceof Error ? error.message : String(error);
+			throw new RemoteSourceError('HostNotApproved', `asking whether modules may be fetched from ${host} failed: ${detail}`, { cause: error, host });
 		}
-		if (!approved) throw new RemoteSourceError('HostNotApproved', `fetching modules from ${host} has not been approved`);
+		if (!approved) throw new RemoteSourceError('HostNotApproved', `fetching modules from ${host} has not been approved`, { host });
 		await this.refuseLocalAddress(host);
 	}
 

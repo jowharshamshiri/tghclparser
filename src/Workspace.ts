@@ -913,7 +913,8 @@ export class Workspace {
 			// -- deleted the entry. What this session fetched is gone, so it is fetched again.
 			this.remoteModules.forget(request);
 		} else if (known) {
-			return { status: 'fetchFailed', reason: known.failed.message, code: known.failed.code, sourceText: shown, sourceInThisFile };
+			const { message, code, host } = known.failed;
+			return { status: 'fetchFailed', reason: message, code, ...(host === undefined ? {} : { host }), sourceText: shown, sourceInThisFile };
 		}
 
 		let pending = this.pendingRemote.get(request);
