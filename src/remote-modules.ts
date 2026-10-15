@@ -372,6 +372,16 @@ export class RemoteModuleStore {
 		return root;
 	}
 
+	/**
+	 * Forgets the checkout memoised for a request, so the next request fetches it again. For an entry deleted from the
+	 * cache by another process sharing it; a fetch in flight is left to finish.
+	 *
+	 * @param request a request key from {@link requestKey}.
+	 */
+	forget(request: string): void {
+		this.resolved.delete(request);
+	}
+
 	/** Forgets memoised failures and host decisions, so the next request tries again. */
 	forgetFailures(): void {
 		this.failed.clear();

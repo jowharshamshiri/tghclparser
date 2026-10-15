@@ -393,6 +393,26 @@ describe('registry module sources', function () {
 		expect(requests.map(request => request.path)).to.include.members(['/v1/modules/acme/vpc/aws/1.1.0/download', '/archives/vpc.tgz?signature=2']);
 	});
 
+	it('fetches again a module another workspace sharing the cache has cleared from it', async () => {
+		const workspace = workspaceFor();
+		const content = unit(`tfr://${host}/acme/vpc/aws?version=1.1.0`);
+		await openUnit(workspace, content);
+		await workspace.remoteModulesSettled();
+		const fetched = (await gitCalls()).filter(call => call.startsWith('fetch ')).length;
+
+		await workspaceFor().clearRemoteModuleCache();
+		const notified: string[] = [];
+		workspace.onModuleVariablesChanged(uri => notified.push(uri));
+		const edited = await openUnit(workspace, content);
+		expect(edited.getModuleVariables()?.status).to.equal('loading');
+
+		await workspace.remoteModulesSettled();
+		expect(notified).to.deep.equal([edited.getUri()]);
+		expect(edited.getModuleVariables()).to.deep.nested.include({ status: 'loaded', 'remote.resolved.version': '1.1.0' });
+		expect(messages(edited)).to.deep.equal([[`Input "nam" is not declared by module tfr://${host}/acme/vpc/aws@1.1.0`, DiagnosticSeverity.Warning]]);
+		expect((await gitCalls()).filter(call => call.startsWith('fetch ')).length).to.equal(fetched + 1);
+	});
+
 	it('reports each registry failure by what the user can do about it', async () => {
 		const cases: { name: string; behaviour: RegistryBehaviour; code: string; reason: string }[] = [
 			{ name: 's3', behaviour: { download: (_, response) => { response.writeHead(204, { 'x-terraform-get': 's3::https://s3.example/bucket/vpc.zip' }); response.end(); } }, code: 'UnsupportedDownloadForm', reason: 'as s3' },
