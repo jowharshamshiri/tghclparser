@@ -77,12 +77,8 @@ export type ModuleVariablesState =
 		sourceInThisFile: boolean;
 	}
 	| {
-		status: 'disabled';
-		/** `setting` when remote fetching is switched off, `untrusted` when the workspace is not trusted. */
-		reason: 'setting' | 'untrusted';
-		/** How to enable fetching, worded by the host of the language service. */
-		message: string;
-		/** The remote source that was not fetched, credentials removed. */
+		status: 'untrusted';
+		/** The remote source that is not fetched while the workspace is untrusted, credentials removed. */
 		sourceText: string;
 		/** True when the `terraform { source }` is in this document rather than in an included configuration. */
 		sourceInThisFile: boolean;

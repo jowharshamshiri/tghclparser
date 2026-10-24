@@ -333,7 +333,7 @@ async function inspectDocument(argv: string[]): Promise<number> {
 	workspace.setWorkspaceRoot(pathToFileURL(workspaceRoot).toString());
 	const insecureHosts = (process.env.TGHCLP_INSECURE_REGISTRY_HOSTS ?? '').split(',').map(host => host.trim()).filter(Boolean);
 	workspace.configureRemoteModules(
-		{ enabled: true, trusted: true },
+		{ trusted: true },
 		{
 			env: process.env,
 			credentials: ambientCredentials({ env: process.env, homeDir: os.homedir() }),

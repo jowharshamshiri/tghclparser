@@ -7,6 +7,7 @@ import { URI } from 'vscode-uri';
 import { readTypeConstraint, tokenToNode } from '../inline-functions';
 import type { AttributeDefinition, BlockDefinition, FunctionDefinition, Token, ValueType } from '../model';
 import type { ModuleType } from '../module-variables';
+import { untrustedReason } from '../module-variables';
 import type { ParsedDocument } from '../ParsedDocument';
 import type { Schema } from '../Schema';
 
@@ -65,8 +66,8 @@ export class DiagnosticsProvider {
 			return;
 		}
 		if (state.status === 'loading') return;
-		if (state.status === 'disabled') {
-			diagnostics.push(this.diagnostic(anchor, `Remote module source is not fetched: ${state.message}`, DiagnosticSeverity.Hint));
+		if (state.status === 'untrusted') {
+			diagnostics.push(this.diagnostic(anchor, `Remote module source is not fetched: ${untrustedReason}`, DiagnosticSeverity.Hint));
 			return;
 		}
 		if (state.status === 'unsupported') {
