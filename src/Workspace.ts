@@ -111,21 +111,13 @@ interface ConfigRelationships {
 }
 
 /**
- * Whether, and how, the workspace fetches remote module sources. A workspace that was never given a policy does
+ * Whether the workspace fetches remote module sources. It fetches only in a trusted workspace, and asks before the
+ * first contact with each host (see `RemoteModuleOptions.approveHost`). A workspace that was never given a policy does
  * not look at remote sources at all: a unit naming one has no module state and no diagnostics about it.
  */
 export interface RemoteModulePolicy {
-	/** True when the user has switched remote fetching on. */
-	enabled: boolean;
-	/** True when the workspace is trusted; nothing is fetched otherwise, whatever `enabled` says. */
+	/** True when the workspace is trusted; nothing is fetched otherwise. */
 	trusted: boolean;
-	/** How the host of the language service tells the user to switch fetching on, shown while it is off. */
-	disabledMessage?: string;
-	/**
-	 * The host `tfr:///` means, in place of the registry of the binary Terragrunt would run;
-	 * `TG_TF_DEFAULT_REGISTRY_HOST` in the environment wins.
-	 */
-	defaultRegistryHost?: string;
 }
 
 /** What recomputing a unit's module state needs, kept so it can be recomputed when a fetch lands. */
@@ -139,8 +131,6 @@ interface PendingUnit {
 	/** The directory the unit's paths resolve against. */
 	unitDir: string;
 }
-
-const defaultDisabledMessage = 'remote module sources are not fetched unless remote module support is enabled';
 
 export class Workspace {
 	private documents: Map<string, ParsedDocument>;
@@ -793,7 +783,7 @@ export class Workspace {
 	 * names the module, and the literal `inputs` keys of the others count towards its required variables.
 	 *
 	 * Every outcome is explicit: a remote source yields no state until {@link configureRemoteModules} has been
-	 * called; after that it is fetched in the background and reported as `loading` until it lands, `disabled` while
+	 * called; after that it is fetched in the background and reported as `loading` until it lands, `untrusted` while
 	 * fetching is off, `fetchFailed` when it fails and `unsupported` when its form is not fetched; a configuration
 	 * or source that cannot be determined, or a module that cannot be read, yields `unavailable` with the reason.
 	 * Anything else that goes wrong is a defect and propagates.
@@ -884,7 +874,7 @@ export class Workspace {
 	/**
 	 * The state of a unit whose module comes from a remote source. A source already fetched this session is read
 	 * from the cache at once; otherwise the fetch starts in the background, the unit is registered to be updated
-	 * when it lands, and the state is `loading` meanwhile. Fetching only happens when the policy allows it.
+	 * when it lands, and the state is `loading` meanwhile. Fetching only happens in a trusted workspace.
 	 */
 	private async remoteModuleVariablesFor(
 		policy: RemoteModulePolicy,
@@ -894,15 +884,10 @@ export class Workspace {
 		unit: PendingUnit
 	): Promise<ModuleVariablesState> {
 		const shown = redactSource(sourceText);
-		const source = classifyModuleSource(sourceText, { defaultRegistryHost: await this.registryHostFor(policy, configurations), origin: 'authored' });
+		const source = classifyModuleSource(sourceText, { defaultRegistryHost: await this.registryHostFor(configurations), origin: 'authored' });
 		if (source.kind === 'other') return { status: 'unsupported', reason: source.reason, sourceText: shown, sourceInThisFile };
 		if (source.kind === 'local') return { status: 'unsupported', reason: `${shown} is not a form the language service recognises`, sourceText: shown, sourceInThisFile };
-		if (!policy.trusted) {
-			return { status: 'disabled', reason: 'untrusted', message: 'fetching remote modules needs a trusted workspace', sourceText: shown, sourceInThisFile };
-		}
-		if (!policy.enabled) {
-			return { status: 'disabled', reason: 'setting', message: policy.disabledMessage ?? defaultDisabledMessage, sourceText: shown, sourceInThisFile };
-		}
+		if (!policy.trusted) return { status: 'untrusted', sourceText: shown, sourceInThisFile };
 		this.remoteUnits.set(unit.doc.getUri(), unit);
 		const request = requestKey(source);
 		const known = this.remoteModules.peek(request);
@@ -1031,20 +1016,17 @@ export class Workspace {
 
 	/**
 	 * The registry `tfr:///` names, chosen as Terragrunt chooses it: the environment's
-	 * `TG_TF_DEFAULT_REGISTRY_HOST`, else the policy's default, else the registry of the binary Terragrunt would
-	 * run. That binary is `TG_TF_PATH`, else the literal `terraform_binary` of the merged configurations, else
+	 * `TG_TF_DEFAULT_REGISTRY_HOST`, else the registry of the binary Terragrunt would run. That binary is `TG_TF_PATH`, else the literal `terraform_binary` of the merged configurations, else
 	 * `tofu` when it is on `PATH` and `terraform` when it is not. Terragrunt uses the Terraform registry only for
 	 * Terraform and OpenTofu's for anything else; it learns which a binary is by running it, where this goes by its
 	 * name, so that opening a file runs nothing.
 	 *
-	 * @param policy the policy in force.
 	 * @param configurations the configurations merged into the unit, highest priority first.
 	 * @returns the registry host.
 	 */
-	private async registryHostFor(policy: RemoteModulePolicy, configurations: ParsedDocument[]): Promise<string> {
+	private async registryHostFor(configurations: ParsedDocument[]): Promise<string> {
 		const environment = this.remoteEnvironment;
 		if (environment.TG_TF_DEFAULT_REGISTRY_HOST) return environment.TG_TF_DEFAULT_REGISTRY_HOST;
-		if (policy.defaultRegistryHost) return policy.defaultRegistryHost;
 		const configured = configurations.map(configuration => configuration.getRootAttributeLiteral('terraform_binary')).find(Boolean);
 		this.defaultBinary ??= isOnPath('tofu', environment).then(found => found ? 'tofu' : 'terraform');
 		const binary = environment.TG_TF_PATH || environment.TERRAGRUNT_TFPATH || configured || await this.defaultBinary;

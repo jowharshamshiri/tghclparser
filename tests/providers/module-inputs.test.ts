@@ -206,10 +206,10 @@ variable "ipam" {
 		}
 	});
 
-	it('reports a remote source as not fetched in an untrusted workspace, whatever the setting', async () => {
-		workspace.configureRemoteModules({ enabled: true, trusted: false });
+	it('reports a remote source as not fetched in an untrusted workspace', async () => {
+		workspace.configureRemoteModules({ trusted: false });
 		const document = await openUnit(unit('"tfr:///terraform-aws-modules/vpc/aws?version=5.0.0"', '  anything = true'));
-		expect(document.getModuleVariables()).to.deep.include({ status: 'disabled', reason: 'untrusted', sourceText: 'tfr:///terraform-aws-modules/vpc/aws?version=5.0.0', sourceInThisFile: true });
+		expect(document.getModuleVariables()).to.deep.include({ status: 'untrusted', sourceText: 'tfr:///terraform-aws-modules/vpc/aws?version=5.0.0', sourceInThisFile: true });
 		const diagnostics = document.getDiagnostics();
 		expect(diagnostics.map(diagnostic => [diagnostic.message, diagnostic.severity])).to.deep.equal([
 			['Remote module source is not fetched: fetching remote modules needs a trusted workspace', DiagnosticSeverity.Hint]
@@ -219,15 +219,8 @@ variable "ipam" {
 		expect(hover?.value).to.include('is not fetched: fetching remote modules needs a trusted workspace');
 	});
 
-	it('names the setting when the workspace is trusted but remote modules are off', async () => {
-		workspace.configureRemoteModules({ enabled: false, trusted: true, disabledMessage: 'turn remote modules on in settings' });
-		const document = await openUnit(unit('"tfr:///terraform-aws-modules/vpc/aws"', '  anything = true'));
-		expect(document.getModuleVariables()).to.deep.include({ status: 'disabled', reason: 'setting', message: 'turn remote modules on in settings' });
-		expect(moduleMessages(document)).to.deep.equal(['Remote module source is not fetched: turn remote modules on in settings']);
-	});
-
 	it('names the form of a source it does not fetch', async () => {
-		workspace.configureRemoteModules({ enabled: true, trusted: true });
+		workspace.configureRemoteModules({ trusted: true });
 		const document = await openUnit(unit('"hg::https://host.example/repo"', '  anything = true'));
 		expect(document.getModuleVariables()).to.deep.include({ status: 'unsupported' });
 		expect(document.getDiagnostics().map(diagnostic => [diagnostic.message, diagnostic.severity])).to.deep.equal([
@@ -236,7 +229,7 @@ variable "ipam" {
 	});
 
 	it('does not show a credential written into a source', async () => {
-		workspace.configureRemoteModules({ enabled: false, trusted: false });
+		workspace.configureRemoteModules({ trusted: false });
 		const document = await openUnit(unit('"git::https://user:s3cr3t@host.example/repo.git"', '  anything = true'));
 		const serialised = JSON.stringify([document.getModuleVariables(), document.getDiagnostics(), (await document.getHoverInfo({ line: 4, character: 2 }))?.value]);
 		expect(serialised).not.to.include('s3cr3t');

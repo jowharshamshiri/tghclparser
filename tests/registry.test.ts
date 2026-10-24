@@ -141,7 +141,7 @@ describe('registry module sources', function () {
 	const workspaceFor = (extra: Partial<RemoteModuleOptions> = {}) => {
 		const workspace = new Workspace();
 		workspace.setWorkspaceRoot(URI.file(root).toString());
-		workspace.configureRemoteModules({ enabled: true, trusted: true }, options(extra));
+		workspace.configureRemoteModules({ trusted: true }, options(extra));
 		return workspace;
 	};
 

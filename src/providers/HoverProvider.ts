@@ -8,7 +8,7 @@ import type { AttributeDefinition, BlockDefinition, FunctionDefinition, TokenTyp
 import { Token } from '../model';
 import { escapeMarkdownText, markdownCode, markdownFence } from '../markdown';
 import type { ModuleType } from '../module-variables';
-import { anyType, formatModuleType, summarizeModuleType } from '../module-variables';
+import { anyType, formatModuleType, summarizeModuleType, untrustedReason } from '../module-variables';
 import type { ModuleVariablesState, ParsedDocument } from '../ParsedDocument';
 import type { Schema } from '../Schema';
 
@@ -784,8 +784,8 @@ export class HoverProvider {
 			contents.push(`Fetching ${markdownCode(state.sourceText)}…`);
 			return contents;
 		}
-		if (state.status === 'disabled') {
-			contents.push(`Remote module source ${markdownCode(state.sourceText)} is not fetched: ${escapeMarkdownText(state.message)}`);
+		if (state.status === 'untrusted') {
+			contents.push(`Remote module source ${markdownCode(state.sourceText)} is not fetched: ${escapeMarkdownText(untrustedReason)}`);
 			return contents;
 		}
 		if (state.status === 'unsupported') {

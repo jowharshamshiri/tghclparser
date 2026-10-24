@@ -7,6 +7,9 @@ import { SyntaxError } from './parser';
 import { parseHclSyntax } from './syntax';
 
 /** The flat shape of a type constraint, enough to choose a value snippet by. */
+/** Why a remote module source is not fetched in an untrusted workspace, as the diagnostic and hover say it. */
+export const untrustedReason = 'fetching remote modules needs a trusted workspace';
+
 export type ModuleVariableTypeKind = 'string' | 'number' | 'bool' | 'list' | 'set' | 'map' | 'object' | 'tuple' | 'any';
 
 /** A Terraform type constraint, with the authored text of each node kept for display. */
