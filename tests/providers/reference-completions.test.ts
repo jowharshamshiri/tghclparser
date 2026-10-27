@@ -103,6 +103,21 @@ inputs = {
 			expect(await document.getHoverInfo({ line: 6, character: 23 })).to.equal(null);
 		});
 
+		it('finds definitions after the edit, with ranges moved onto the current text, and none inside it', async () => {
+			const later = 'inputs = {\n  name = local.name\n}\n\nlocals {\n  name = "app"\n}';
+			const document = await openUnit(later);
+
+			document.setContent(later.replace('inputs = {\n', 'inputs = {\n  extra = local.\n'));
+
+			expect(document.getAST()).to.equal(null);
+			const [link, ...others] = await document.getDefinition({ line: 2, character: 12 });
+			expect(others).to.deep.equal([]);
+			expect(link.targetUri).to.equal(document.getUri());
+			expect(link.originSelectionRange).to.deep.equal({ start: { line: 2, character: 9 }, end: { line: 2, character: 19 } });
+			expect(link.targetSelectionRange).to.deep.equal({ start: { line: 6, character: 2 }, end: { line: 6, character: 6 } });
+			expect(await document.getDefinition({ line: 1, character: 12 })).to.deep.equal([]);
+		});
+
 		it('keeps links, moved onto the current text, and drops one inside the edit', async () => {
 			await write(path.join('live', 'vpc', 'terragrunt.hcl'), '');
 			const linked = `${valid}\n\ndependency "vpc" {\n  config_path = "../vpc"\n}`;

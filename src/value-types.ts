@@ -4,7 +4,7 @@ import type { ModuleType, ModuleTypeAttribute } from './module-variables';
 /** The type of every expression whose shape cannot be read from its syntax. */
 const unknownType: ModuleType = { kind: 'primitive', name: 'any', text: 'any' };
 
-/** Characters of an evaluated string kept as its type's text before it is cut with an ellipsis. */
+/** Characters of an evaluated string kept in its summary before it is cut with an ellipsis. */
 const maximumValueLength = 60;
 
 /**
@@ -120,35 +120,44 @@ export class ValueTypeReader {
 }
 
 /**
- * The type of an evaluated value. A string, number or boolean keeps the value itself as its text, so it can be shown
- * where a type would be; a long string is cut with an ellipsis.
+ * Follows attribute names down an evaluated value.
+ *
+ * @param value the value to start from.
+ * @param path the attribute names to follow, outermost first.
+ * @returns the value at the end of the path, or undefined when a step is not an object or has no such attribute.
+ */
+export function valueAt(value: RuntimeValue<ValueType> | undefined, path: string[]): RuntimeValue<ValueType> | undefined {
+	let current = value;
+	for (const name of path) {
+		if (current?.type !== 'object' && current?.type !== 'block') return undefined;
+		current = (current.value as Map<string, RuntimeValue<ValueType>>).get(name);
+	}
+	return current;
+}
+
+/**
+ * An evaluated value in a few characters: a string, number or boolean as itself, a long string cut with an ellipsis,
+ * and anything else by its kind.
  *
  * @param value the evaluated value.
- * @returns its type: an object for an object or block, a tuple for an array, else a primitive.
+ * @returns the summary.
  */
-export function typeOfValue(value: RuntimeValue<ValueType>): ModuleType {
+export function valueSummary(value: RuntimeValue<ValueType>): string {
 	switch (value.type) {
 		case 'string': {
 			const text = JSON.stringify(value.value);
-			return { kind: 'primitive', name: 'string', text: text.length > maximumValueLength ? `${text.slice(0, maximumValueLength)}…` : text };
+			return text.length > maximumValueLength ? `${text.slice(0, maximumValueLength)}…` : text;
 		}
 		case 'number':
-			return { kind: 'primitive', name: 'number', text: String(value.value) };
 		case 'boolean':
-			return { kind: 'primitive', name: 'bool', text: String(value.value) };
-		case 'null':
-			return { kind: 'primitive', name: 'any', text: 'null' };
+			return String(value.value);
 		case 'array':
-			return { kind: 'tuple', elements: (value.value as RuntimeValue<ValueType>[]).map(typeOfValue), text: 'tuple' };
+			return 'tuple';
 		case 'object':
 		case 'block':
-			return {
-				kind: 'object',
-				text: 'object',
-				attributes: [...(value.value as Map<string, RuntimeValue<ValueType>>).entries()].map(([name, entry]) => ({ name, type: typeOfValue(entry), optional: false }))
-			};
+			return 'object';
 		default:
-			return unknownType;
+			return value.type;
 	}
 }
 

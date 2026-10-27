@@ -8,7 +8,7 @@ import type { FunctionContext, FunctionDefinition, ResolvedReference, RuntimeVal
 import { Token } from './model';
 import type { ModuleFileError, ModuleType, ModuleVariable } from './module-variables';
 import { TextChange } from './text-change';
-import { mergeObjectTypes, typeOfValue, ValueTypeReader } from './value-types';
+import { mergeObjectTypes, ValueTypeReader } from './value-types';
 import type { EvaluatedSpan } from './Evaluator';
 import { SyntaxError } from './parser';
 import { HclSyntaxError } from './hcl-syntax';
@@ -335,17 +335,24 @@ export class ParsedDocument {
 		return locals;
 	}
 	/**
-	 * The shape of a local value: from its evaluated value when {@link setEvaluatedSpans} supplied one, else as its
-	 * syntax gives it, read from the editor's tree without evaluating anything.
+	 * The shape of a local value as its syntax gives it, read from the editor's tree without evaluating anything.
 	 *
 	 * @param name the local's name.
 	 * @returns its type, or undefined when this document assigns no such local.
 	 */
 	public getLocalType(name: string): ModuleType | undefined {
-		const evaluated = this.evaluatedLocals.get(name);
-		if (evaluated) return typeOfValue(evaluated);
 		const ast = this.getEditorAST();
 		return ast ? new ValueTypeReader([ast]).localType(name) : undefined;
+	}
+
+	/**
+	 * The value of a local as last evaluated; see {@link setEvaluatedSpans}.
+	 *
+	 * @param name the local's name.
+	 * @returns the value, or undefined when no evaluation has supplied one.
+	 */
+	public getEvaluatedLocal(name: string): RuntimeValue<ValueType> | undefined {
+		return this.evaluatedLocals.get(name);
 	}
 
 	/**
@@ -1259,13 +1266,26 @@ export class ParsedDocument {
 	}
 
 	/**
-	 * Where the reference at a position is defined; see {@link DefinitionProvider.getDefinition}.
+	 * Where the reference at a position is defined; see {@link DefinitionProvider.getDefinition}. While the current
+	 * text does not parse, the reference and a definition in this document come from the last text that did, moved
+	 * onto the current text; one inside the stretch being edited is left out.
 	 *
 	 * @param position the position, anywhere in the reference.
-	 * @returns the definition, or none when there is no reference there or what it names is not set.
+	 * @returns the definition, with ranges in this document in the current text, or none when there is no reference
+	 *   there or what it names is not set.
 	 */
-	public getDefinition(position: Position): Promise<LocationLink[]> {
-		return this.definitionProvider.getDefinition(position);
+	public async getDefinition(position: Position): Promise<LocationLink[]> {
+		const links = await this.definitionProvider.getDefinition(position);
+		const change = this.changeSinceParse();
+		if (!change) return links;
+		return links.flatMap(link => {
+			const origin = link.originSelectionRange && change.rangeToAfter(link.originSelectionRange);
+			if (!origin) return [];
+			if (link.targetUri !== this.uri) return [{ ...link, originSelectionRange: origin }];
+			const targetRange = change.rangeToAfter(link.targetRange);
+			const targetSelectionRange = change.rangeToAfter(link.targetSelectionRange);
+			return targetRange && targetSelectionRange ? [{ ...link, originSelectionRange: origin, targetRange, targetSelectionRange }] : [];
+		});
 	}
 
 	/**

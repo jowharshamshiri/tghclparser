@@ -6,12 +6,12 @@ import { CompletionItemKind, InsertTextFormat, MarkupKind } from 'vscode-languag
 import { URI } from 'vscode-uri';
 
 import { escapeMarkdownText, markdownCode } from '../markdown';
-import type { AttributeDefinition, BlockDefinition, Token } from '../model';
+import type { AttributeDefinition, BlockDefinition, RuntimeValue, Token, ValueType } from '../model';
 import type { ModuleType, ModuleVariableTypeKind } from '../module-variables';
 import { anyType, moduleTypeKind } from '../module-variables';
 import type { ParsedDocument } from '../ParsedDocument';
 import type { Schema } from '../Schema';
-import { typeAt } from '../value-types';
+import { typeAt, valueAt, valueSummary } from '../value-types';
 
 /**
  * A construct the cursor sits inside. `<inputs>` is the root `inputs = {` object, `<expression>` any other brace
@@ -515,11 +515,14 @@ export class CompletionsProvider {
 	 */
 	private async referenceCompletions(reference: { namespace: string; parts: string[]; partial: string }, text: string, document: ParsedDocument): Promise<CompletionItem[]> {
 		if (reference.namespace === 'local' && reference.parts.length > 0) {
-			return this.typeAttributeItems(typeAt(document.getLocalType?.(reference.parts[0]), reference.parts.slice(1)), reference.partial);
+			const [name, ...attributes] = reference.parts;
+			const evaluated = document.getEvaluatedLocal(name);
+			if (evaluated) return this.valueAttributeItems(valueAt(evaluated, attributes), reference.partial);
+			return this.typeAttributeItems(typeAt(document.getLocalType(name), attributes), reference.partial);
 		}
 		if (reference.namespace === 'dependency' && reference.parts.length >= 2) {
 			if (reference.parts[1] !== 'outputs') return [];
-			return this.typeAttributeItems(typeAt(await document.getDependencyOutputsType?.(reference.parts[0]), reference.parts.slice(2)), reference.partial);
+			return this.typeAttributeItems(typeAt(await document.getDependencyOutputsType(reference.parts[0]), reference.parts.slice(2)), reference.partial);
 		}
 		if (reference.namespace === 'dependency' && reference.parts.length === 1) {
 			return ['outputs'].filter(value => value.startsWith(reference.partial)).map(value => this.referenceItem(value));
@@ -572,13 +575,26 @@ export class CompletionsProvider {
 		if (type?.kind !== 'object') return [];
 		return type.attributes
 			.filter(attribute => attribute.name.startsWith(partial))
-			.map(attribute => ({
-				label: attribute.name,
-				kind: CompletionItemKind.Field,
-				detail: attribute.type.text,
-				insertText: attribute.name,
-				sortText: `0-${attribute.name}`
-			}));
+			.map(attribute => this.attributeItem(attribute.name, attribute.type.text));
+	}
+
+	/**
+	 * The attributes of an evaluated object, offered after a dot in a reference.
+	 *
+	 * @param value the value at the reference's path.
+	 * @param partial the name typed so far, which attribute names must start with.
+	 * @returns one item per matching attribute, with its value summarised as the detail; empty when the value is not
+	 *   an object.
+	 */
+	private valueAttributeItems(value: RuntimeValue<ValueType> | undefined, partial: string): CompletionItem[] {
+		if (value?.type !== 'object' && value?.type !== 'block') return [];
+		return [...(value.value as Map<string, RuntimeValue<ValueType>>).entries()]
+			.filter(([name]) => name.startsWith(partial))
+			.map(([name, entry]) => this.attributeItem(name, valueSummary(entry)));
+	}
+
+	private attributeItem(name: string, detail: string): CompletionItem {
+		return { label: name, kind: CompletionItemKind.Field, detail, insertText: name, sortText: `0-${name}` };
 	}
 
 	/**

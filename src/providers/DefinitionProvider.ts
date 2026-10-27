@@ -2,6 +2,7 @@ import type { LocationLink, Position, Range } from 'vscode-languageserver';
 
 import type { Token } from '../model';
 import type { ParsedDocument } from '../ParsedDocument';
+import { unlessUnresolved } from '../unresolved';
 
 /** The start of a file, for a definition that is a whole configuration rather than something in it. */
 const fileStart: Range = { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } };
@@ -61,8 +62,14 @@ export class DefinitionProvider {
 			.map(child => child.getDisplayText()) ?? [];
 	}
 
+	/**
+	 * The root blocks and attributes of a configuration. Those of the document being navigated come from its last
+	 * parse, as the reference does, while an edit does not parse; {@link ParsedDocument.getDefinition} moves their
+	 * ranges onto the current text.
+	 */
 	private rootChildren(document: ParsedDocument): Token[] {
-		return document.getTokens()[0]?.children ?? [];
+		const tokens = document === this.document ? document.getEditorTokens() : document.getTokens();
+		return tokens[0]?.children ?? [];
 	}
 
 	private blocks(document: ParsedDocument, type: string): Token[] {
@@ -87,9 +94,9 @@ export class DefinitionProvider {
 			?.children.find(child => child.type !== 'attribute_identifier');
 		if (!pathValue) return [];
 		const workspace = this.document.getWorkspace();
-		const target = await this.resolved(() => workspace.resolveIncludePath(pathValue, this.document.getUri()));
+		const target = await unlessUnresolved(() => workspace.resolveIncludePath(pathValue, this.document.getUri()));
 		// A path that resolves to a file that is not there reads as a path that does not resolve.
-		const included = target === undefined ? undefined : await this.resolved(() => workspace.getParsedDocument(target));
+		const included = target === undefined ? undefined : await unlessUnresolved(() => workspace.getParsedDocument(target));
 		if (!included) return [];
 
 		if (section === undefined) return [this.link(reference, included.getUri(), fileStart, fileStart)];
@@ -115,7 +122,7 @@ export class DefinitionProvider {
 
 	private async dependency(reference: Token, name: string): Promise<LocationLink[]> {
 		const workspace = this.document.getWorkspace();
-		const merged = await this.resolved(() => workspace.getMergedConfigurations(this.document));
+		const merged = await unlessUnresolved(() => workspace.getMergedConfigurations(this.document));
 		// When what is merged cannot be determined -- an include path still being written, say -- only this
 		// configuration's own blocks are known. The workspace reports why when the document is added.
 		const uris = merged === undefined || 'reason' in merged ? [this.document.getUri()] : merged.configurations;
@@ -126,21 +133,6 @@ export class DefinitionProvider {
 			if (block) return [this.link(reference, configuration.getUri(), this.range(block), this.range(this.label(block) ?? block))];
 		}
 		return [];
-	}
-
-	/**
-	 * Runs a resolution that rejects with a plain Error when a path does not resolve, such as one still being typed.
-	 *
-	 * @returns what it resolved to, or undefined when the path does not resolve.
-	 * @throws what it rejected with when that is a defect and not a path that does not resolve.
-	 */
-	private async resolved<T>(resolve: () => Promise<T>): Promise<T | undefined> {
-		try {
-			return await resolve();
-		} catch (error) {
-			if (!(error instanceof Error) || error instanceof TypeError || error instanceof RangeError || error instanceof ReferenceError) throw error;
-			return undefined;
-		}
 	}
 
 	/** A link to an attribute, block or assignment, selecting its name. */
