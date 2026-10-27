@@ -9,12 +9,14 @@ import type { FunctionContext, FunctionDefinition, TerragruntConfig, Token } fro
 import { createDependencyConfig, createIncludeConfig, TreeNode } from './model';
 import { classifyModuleSource, redactSource, requestKey } from './module-source';
 import { isLocalSource, ModuleVariableCache, splitModuleSource } from './module-variables';
-import type { ModuleVariables } from './module-variables';
+import type { ModuleOutput, ModuleVariables } from './module-variables';
 import type { ModuleVariablesState } from './ParsedDocument';
+import { RemoteSourceError } from './remote-errors';
 import type { RemoteModuleCheckout, RemoteModuleOptions } from './remote-modules';
 import { RemoteModuleStore } from './remote-modules';
 import { ParsedDocument } from './ParsedDocument';
 import { Schema } from './Schema';
+import { unlessUnresolved } from './unresolved';
 import { expandTerragruntGlob } from './functions/terragrunt_glob';
 
 /** @returns true for an error from the filesystem, such as a directory that cannot be listed or a file that cannot be read. */
@@ -719,6 +721,52 @@ export class Workspace {
 	}
 
 	/**
+	 * The outputs the module of a dependency's unit declares, the module being found as the unit's own is (see
+	 * {@link moduleOwner}). A remote module is fetched, after the host is approved, and waited for in a trusted
+	 * workspace; a fetch that already failed is not repeated.
+	 *
+	 * @param sourceUri the configuration that declares the dependency.
+	 * @param pathToken the dependency's `config_path` value.
+	 * @returns the module's outputs, or undefined when they cannot be known: the path does not resolve to a unit, the
+	 *   unit or a configuration merged into it does not parse, it names no module or one that cannot be resolved,
+	 *   read or fetched, or a remote module cannot be fetched in this workspace.
+	 * @throws anything else, which is a defect.
+	 */
+	public async dependencyModuleOutputs(sourceUri: string, pathToken: Token): Promise<ModuleOutput[] | undefined> {
+		const unit = await unlessUnresolved(async () => this.getParsedDocument(await this.resolveDependencyPath(pathToken, sourceUri)));
+		const ast = unit?.getAST();
+		if (!unit || !ast) return undefined;
+		const unitDir = path.dirname(URI.parse(unit.getUri()).fsPath);
+		const includes = unit.findIncludeBlocks(ast);
+		const includePaths = await unlessUnresolved(() => Promise.all(includes.map(include => this.resolveIncludePath(include.path, unit.getUri(), unitDir))));
+		if (!includePaths) return undefined;
+		const found = await this.moduleOwner(unit, includes, includePaths, unitDir);
+		if (found === undefined || 'reason' in found) return undefined;
+
+		const resolution = await this.resolveModuleSource(this.findTerraformSourceToken(found.owner)!, found.owner.getUri(), unitDir);
+		let moduleDir: string;
+		if (resolution.kind === 'local') moduleDir = resolution.moduleDir;
+		else if (resolution.kind === 'remote') {
+			if (!this.remotePolicy?.trusted) return undefined;
+			const source = classifyModuleSource(resolution.sourceText, { defaultRegistryHost: await this.registryHostFor(found.configurations), origin: 'authored' });
+			if (source.kind !== 'registry' && source.kind !== 'git') return undefined;
+			try {
+				moduleDir = (await this.remoteModules.resolve(source)).moduleDir;
+			} catch (error) {
+				if (error instanceof RemoteSourceError) return undefined;
+				throw error;
+			}
+		} else return undefined;
+
+		try {
+			return (await this.moduleVariables.get(moduleDir)).outputs;
+		} catch (error) {
+			if (isFileSystemError(error)) return undefined;
+			throw error;
+		}
+	}
+
+	/**
 	 * Supplies a unit with the variables of the module it sources. Included configurations that are not
 	 * `terragrunt.hcl` get no state when opened on their own: their sources resolve against the unit that includes
 	 * them, not against themselves.
@@ -794,30 +842,16 @@ export class Workspace {
 		includePaths: string[],
 		unitDir: string
 	): Promise<ModuleVariablesState | undefined> {
-		const merged = await this.mergedConfigurations(doc, includes, includePaths, unitDir);
-		if ('reason' in merged) return { status: 'unavailable', reason: merged.reason, sourceInThisFile: false };
-
-		let owner: ParsedDocument | undefined;
-		for (const configuration of merged.configurations) {
-			if (configuration.getAST() === null) {
-				return {
-					status: 'unavailable',
-					reason: `${this.displayPath(configuration.getUri(), unitDir)} does not parse, so the module source it may set is unknown`,
-					sourceInThisFile: false
-				};
-			}
-			if (this.findTerraformSourceToken(configuration) !== undefined) {
-				owner = configuration;
-				break;
-			}
-		}
-		if (!owner) return undefined;
+		const found = await this.moduleOwner(doc, includes, includePaths, unitDir);
+		if (found === undefined) return undefined;
+		if ('reason' in found) return { status: 'unavailable', reason: found.reason, sourceInThisFile: false };
+		const { configurations, owner } = found;
 		const sourceInThisFile = owner === doc;
 
 		const resolution = await this.resolveModuleSource(this.findTerraformSourceToken(owner)!, owner.getUri(), unitDir);
 		if (resolution.kind === 'remote') {
 			if (this.remotePolicy === undefined) return undefined;
-			return this.remoteModuleVariablesFor(this.remotePolicy, resolution.sourceText, sourceInThisFile, merged.configurations, { doc, includes, includePaths, unitDir });
+			return this.remoteModuleVariablesFor(this.remotePolicy, resolution.sourceText, sourceInThisFile, configurations, { doc, includes, includePaths, unitDir });
 		}
 		if (resolution.kind === 'unresolvable') {
 			return { status: 'unavailable', reason: `the module source could not be resolved: ${resolution.reason}`, sourceInThisFile };
@@ -841,8 +875,36 @@ export class Workspace {
 			variables: module.variables,
 			files: module.files,
 			unparsed: module.unparsed,
-			...this.inheritedInputs(doc, merged.configurations, unitDir)
+			...this.inheritedInputs(doc, configurations, unitDir)
 		};
+	}
+
+	/**
+	 * The configuration that names a unit's module: the first of the configurations merged into the unit (see
+	 * {@link mergedConfigurations}), in merge priority, that sets `terraform { source }`.
+	 *
+	 * @param doc the unit.
+	 * @param includes the unit's include blocks whose paths resolved, in the order written.
+	 * @param includePaths URIs of those includes' configurations, index for index with `includes`.
+	 * @param unitDir directory of the unit.
+	 * @returns the merged configurations and the one that sets the source; `reason` when the configurations, or
+	 *   whether one of them sets a source, cannot be determined; undefined when none of them sets one.
+	 */
+	private async moduleOwner(
+		doc: ParsedDocument,
+		includes: { path: Token; block: Token }[],
+		includePaths: string[],
+		unitDir: string
+	): Promise<{ configurations: ParsedDocument[]; owner: ParsedDocument } | { reason: string } | undefined> {
+		const merged = await this.mergedConfigurations(doc, includes, includePaths, unitDir);
+		if ('reason' in merged) return merged;
+		for (const configuration of merged.configurations) {
+			if (configuration.getAST() === null) {
+				return { reason: `${this.displayPath(configuration.getUri(), unitDir)} does not parse, so the module source it may set is unknown` };
+			}
+			if (this.findTerraformSourceToken(configuration) !== undefined) return { configurations: merged.configurations, owner: configuration };
+		}
+		return undefined;
 	}
 
 	/**

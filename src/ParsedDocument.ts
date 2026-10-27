@@ -6,7 +6,10 @@ import { URI } from 'vscode-uri';
 import { readInlineFunction, synthesizeDefinition, tokenToNode } from './inline-functions';
 import type { FunctionContext, FunctionDefinition, ResolvedReference, RuntimeValue, TerragruntConfig, TokenType, ValueType } from './model';
 import { Token } from './model';
-import type { ModuleFileError, ModuleVariable } from './module-variables';
+import type { ModuleFileError, ModuleType, ModuleVariable } from './module-variables';
+import { TextChange } from './text-change';
+import { mergeObjectTypes, ValueTypeReader } from './value-types';
+import type { EvaluatedSpan } from './Evaluator';
 import { SyntaxError } from './parser';
 import { HclSyntaxError } from './hcl-syntax';
 import { parseHclSyntax } from './syntax';
@@ -119,8 +122,18 @@ export type ModuleVariablesState =
 	};
 
 export class ParsedDocument {
+	/** The syntax tree of the last text that parsed, kept while a later edit does not parse. */
 	private ast: any | null = null;
+	/** True when the current text parses, so {@link ast} and {@link tokens} describe it. */
+	private parsed = false;
+	/** The text {@link ast} and {@link tokens} were parsed from. */
+	private parsedContent = '';
+	/** How the current text differs from {@link parsedContent}, worked out when first needed after a failed parse. */
+	private editorChange: TextChange | undefined;
+	/** The values of this document's locals as last evaluated; see {@link setEvaluatedSpans}. */
+	private evaluatedLocals = new Map<string, RuntimeValue<ValueType>>();
 	private diagnostics: Diagnostic[] = [];
+	/** The tokens of the last text that parsed, kept while a later edit does not parse. */
 	private tokens: Token[] = [];
 	private schema: Schema;
 	private completionsProvider: CompletionsProvider;
@@ -150,10 +163,21 @@ export class ParsedDocument {
 		};
 	}
 
+	/**
+	 * Parses a document.
+	 *
+	 * @param workspace the workspace the document belongs to.
+	 * @param uri the document's URI.
+	 * @param content the document's text.
+	 * @param previous the document this one replaces after an edit. When the new text does not parse, editor features
+	 *   fall back on the last text the previous document parsed, as {@link setContent} does for one document. Its
+	 *   module state is carried over too, since the workspace only works that out for text that parses.
+	 */
 	constructor(
 		private workspace: Workspace,
 		private uri: string,
-		private content: string
+		private content: string,
+		previous?: ParsedDocument
 	) {
 		this.schema = Schema.getInstance();
 		this.completionsProvider = new CompletionsProvider(this.schema);
@@ -162,6 +186,13 @@ export class ParsedDocument {
 		this.linkProvider = new LinkProvider(this);
 		this.definitionProvider = new DefinitionProvider(this);
 		this.stateManager = new StateManager();
+		if (previous) {
+			this.ast = previous.ast;
+			this.tokens = previous.tokens;
+			this.parsedContent = previous.parsedContent;
+			this.evaluatedLocals = previous.evaluatedLocals;
+			this.moduleVariables = previous.moduleVariables;
+		}
 		this.parseContent();
 	}
 	public findIncludeBlocks(ast: any): { path: Token, block: Token }[] {
@@ -275,7 +306,7 @@ export class ParsedDocument {
 	}
 	public async getAllLocals(): Promise<Map<string, RuntimeValue<ValueType>>> {
 		const locals = new Map<string, RuntimeValue<ValueType>>();
-		const ast = this.getAST();
+		const ast = this.getEditorAST();
 		if (!ast) return locals;
 
 		const localsBlock = this.findBlock(ast, 'locals');
@@ -303,6 +334,93 @@ export class ParsedDocument {
 
 		return locals;
 	}
+	/**
+	 * The shape of a local value as its syntax gives it, read from the editor's tree without evaluating anything.
+	 *
+	 * @param name the local's name.
+	 * @returns its type, or undefined when this document assigns no such local.
+	 */
+	public getLocalType(name: string): ModuleType | undefined {
+		const ast = this.getEditorAST();
+		return ast ? new ValueTypeReader([ast]).localType(name) : undefined;
+	}
+
+	/**
+	 * The value of a local as last evaluated; see {@link setEvaluatedSpans}.
+	 *
+	 * @param name the local's name.
+	 * @returns the value, or undefined when no evaluation has supplied one.
+	 */
+	public getEvaluatedLocal(name: string): RuntimeValue<ValueType> | undefined {
+		return this.evaluatedLocals.get(name);
+	}
+
+	/**
+	 * Takes the values an evaluator found for this document's text and keeps those bound to the names of its locals,
+	 * so completion can offer the keys of a local whose value comes from another file, such as one read through an
+	 * include. The values carry over to a document built from this one, so they stay while an edit does not parse.
+	 * Spans are ignored unless the current text parses, since their offsets are in it.
+	 *
+	 * @param spans the evaluated spans of the current text, as `ConfigEvaluator.evaluatedSpans` returns them.
+	 */
+	public setEvaluatedSpans(spans: EvaluatedSpan[]): void {
+		if (!this.parsed) return;
+		const names = new Map(spans.filter(span => span.kind === 'name').map(span => [`${span.start}:${span.end}`, span.value]));
+		const locals = new Map<string, RuntimeValue<ValueType>>();
+		for (const block of this.ast?.children ?? []) {
+			if (block.type !== 'block' || block.value !== 'locals') continue;
+			for (const attribute of block.children ?? []) {
+				const identifier = attribute.type === 'attribute' ? attribute.children?.find((child: any) => child.type === 'attribute_identifier') : undefined;
+				const value = identifier?.location && names.get(`${identifier.location.start.offset}:${identifier.location.end.offset}`);
+				if (value && !locals.has(String(identifier.value))) locals.set(String(identifier.value), value);
+			}
+		}
+		this.evaluatedLocals = locals;
+	}
+
+	/**
+	 * The shape of `dependency.<name>.outputs`: an object with the outputs the dependency's module declares,
+	 * combined with the dependency's `mock_outputs`, which add the outputs and nested keys the module's syntax does
+	 * not show. Nothing is evaluated and no state is read.
+	 *
+	 * @param name the dependency block's label.
+	 * @returns an object type, or undefined when this document declares no such dependency or neither source gives
+	 *   any outputs.
+	 */
+	public async getDependencyOutputsType(name: string): Promise<ModuleType | undefined> {
+		const ast = this.getEditorAST();
+		const block = ast?.children?.find((child: any) =>
+			child.type === 'block' && child.value === 'dependency' &&
+			child.children?.some((parameter: any) => parameter.type === 'parameter' && parameter.value === name)
+		);
+		if (!block) return undefined;
+
+		const configPath = this.blockAttributeValue(block, 'config_path');
+		const outputs = configPath ? await this.workspace.dependencyModuleOutputs(this.uri, this.createToken(configPath)) : undefined;
+		const declared: ModuleType | undefined = outputs && {
+			kind: 'object',
+			text: 'outputs',
+			attributes: outputs.map(output => ({ name: output.name, type: output.type, optional: false }))
+		};
+		const mockOutputs = this.blockAttributeValue(block, 'mock_outputs');
+		const mocked = mockOutputs ? new ValueTypeReader([ast]).typeOf(mockOutputs) : undefined;
+		if (mocked?.kind !== 'object') return declared;
+		return declared ? mergeObjectTypes(declared, mocked, true) : mocked;
+	}
+
+	/**
+	 * The value expression of one attribute of a block in the syntax tree.
+	 *
+	 * @param block the parser node of the block.
+	 * @param key the attribute's name.
+	 * @returns the expression's node, or undefined when the block does not set the attribute.
+	 */
+	private blockAttributeValue(block: any, key: string): any {
+		return block.children
+			?.find((child: any) => child.type === 'attribute' && child.value === key)
+			?.children?.find((child: any) => child.type !== 'attribute_identifier');
+	}
+
 	/**
 	 * Gets all outputs from terraform.tfstate
 	 */
@@ -876,7 +994,7 @@ export class ParsedDocument {
 	/** Inline functions declared by this document itself, keyed by name. */
 	public getOwnInlineFunctions(): Map<string, FunctionDefinition> {
 		const definitions = new Map<string, FunctionDefinition>();
-		const root = this.tokens[0];
+		const root = this.getTokens()[0];
 		if (!root) return definitions;
 		for (const token of root.children) {
 			if (token.type !== 'inline_function') continue;
@@ -902,7 +1020,7 @@ export class ParsedDocument {
 	 */
 	public setInheritedInlineFunctions(definitions: Map<string, FunctionDefinition>): void {
 		this.inheritedInlineFunctions = new Map(definitions);
-		if (this.ast !== null) {
+		if (this.parsed) {
 			this.diagnostics = this.diagnosticsProvider.getDiagnostics(this);
 		}
 	}
@@ -916,7 +1034,7 @@ export class ParsedDocument {
 	 */
 	public setModuleVariables(state: ModuleVariablesState | undefined): void {
 		this.moduleVariables = state;
-		if (this.ast !== null) {
+		if (this.parsed) {
 			this.diagnostics = this.diagnosticsProvider.getDiagnostics(this);
 		}
 	}
@@ -934,7 +1052,7 @@ export class ParsedDocument {
 	 * @returns the value token, or undefined when the document sets no `source`.
 	 */
 	public getTerraformSourceToken(): Token | undefined {
-		const root = this.tokens[0];
+		const root = this.getTokens()[0];
 		const block = root?.children.find(child => child.type === 'block' && child.value === 'terraform');
 		const attribute = block?.children.find(child => child.type === 'attribute' && child.value === 'source');
 		return attribute?.children.find(child => child.type !== 'attribute_identifier');
@@ -942,7 +1060,7 @@ export class ParsedDocument {
 
 	/** @returns the root `include` block tokens of this document, in the order they are written. */
 	public getIncludeBlockTokens(): Token[] {
-		const root = this.tokens[0];
+		const root = this.getTokens()[0];
 		return root?.children.filter(child => child.type === 'block' && child.value === 'include') ?? [];
 	}
 
@@ -951,7 +1069,7 @@ export class ParsedDocument {
 	 * @returns its value when this document assigns it a string literal, else undefined.
 	 */
 	public getRootAttributeLiteral(name: string): string | undefined {
-		const root = this.tokens[0];
+		const root = this.getTokens()[0];
 		const assignment = root?.children.find(token => token.type === 'assignment' && token.getDisplayText() === name);
 		const value = assignment?.children.find(child => child.type !== 'root_assignment_identifier');
 		return value?.type === 'string_lit' ? String(value.value) : undefined;
@@ -959,7 +1077,7 @@ export class ParsedDocument {
 
 	/** @returns the root `inputs = …` assignment token of this document, or undefined when there is none. */
 	public getInputsAssignment(): Token | undefined {
-		const root = this.tokens[0];
+		const root = this.getTokens()[0];
 		if (!root) return undefined;
 		return root.children.find(token => token.type === 'assignment' && token.getDisplayText() === 'inputs');
 	}
@@ -973,7 +1091,7 @@ export class ParsedDocument {
 	 *   keys cannot be known.
 	 */
 	public getOwnInputKeys(): string[] | undefined {
-		if (this.ast === null) return undefined;
+		if (!this.parsed) return undefined;
 		const assignment = this.getInputsAssignment();
 		if (!assignment) return [];
 		const value = assignment.children.find(child => child.type !== 'root_assignment_identifier');
@@ -986,7 +1104,7 @@ export class ParsedDocument {
 
 	/** True when this document includes another configuration. */
 	public hasIncludes(): boolean {
-		const root = this.tokens[0];
+		const root = this.getTokens()[0];
 		if (!root) return false;
 		return root.children.some(token => token.type === 'block' && token.getDisplayText() === 'include');
 	}
@@ -1001,14 +1119,14 @@ export class ParsedDocument {
 
 	/** The `inline_function` token declaring `name` in this document. */
 	public getInlineFunctionToken(name: string): Token | undefined {
-		const root = this.tokens[0];
+		const root = this.getTokens()[0];
 		if (!root) return undefined;
 		return root.children.find(token => token.type === 'inline_function' && token.getDisplayText() === name);
 	}
 
 	private parseContent() {
-		this.ast = null;
-		this.tokens = [];
+		this.parsed = false;
+		this.editorChange = undefined;
 		this.diagnostics = [];
 		try {
 			const filePath = URI.parse(this.uri).fsPath;
@@ -1016,14 +1134,19 @@ export class ParsedDocument {
 				JSON.parse(this.content);
 				this.ast = { id: 0, type: 'root', location: { start: { line: 1, column: 1, offset: 0 }, end: { line: 1, column: 1, offset: this.content.length } } };
 				this.tokens = [this.parseNode(this.ast)];
+				this.parsedContent = this.content;
+				this.parsed = true;
 				return;
 			}
-			this.ast = parseHclSyntax(this.content, this.uri, filePath, this.parserTracer());
-			this.tokens = [this.parseNode(this.ast)];
+			const ast = parseHclSyntax(this.content, this.uri, filePath, this.parserTracer());
+			const tokens = [this.parseNode(ast)];
+			this.ast = ast;
+			this.tokens = tokens;
+			this.parsedContent = this.content;
+			this.parsed = true;
 			this.diagnostics = this.diagnosticsProvider.getDiagnostics(this);
 		} catch (error) {
-			this.ast = null;
-			this.tokens = [];
+			this.parsed = false;
 			if (error instanceof HclSyntaxError) {
 				// The problem's own line and column are the HCL library's, counted its way. An editor counts from the
 				// offsets.
@@ -1085,12 +1208,46 @@ export class ParsedDocument {
 		this.parseContent();
 	}
 
+	/** @returns the syntax tree of the current text, or null when it does not parse. */
 	public getAST(): any | null {
+		return this.parsed ? this.ast : null;
+	}
+
+	/**
+	 * The syntax tree editor features such as hover and completion read. While the current text does not parse, as it
+	 * often does halfway through typing an expression, this is the tree of the last text that did, so those features
+	 * keep working; positions after the edit may be off until the text parses again.
+	 *
+	 * @returns the current tree, else the last one that parsed, or null when no text of this document has parsed.
+	 */
+	public getEditorAST(): any | null {
 		return this.ast;
 	}
 
+	/** @returns the tokens of the current text, or an empty list when it does not parse. */
 	public getTokens(): Token[] {
+		return this.parsed ? this.tokens : [];
+	}
+
+	/**
+	 * The tokens editor features such as links read: those of the current text, else of the last text that parsed.
+	 * Their positions are in the text they were parsed from; {@link getLinks} maps them onto the current text.
+	 *
+	 * @returns the tokens, or an empty list when no text of this document has parsed.
+	 */
+	public getEditorTokens(): Token[] {
 		return this.tokens;
+	}
+
+	/**
+	 * How the current text differs from the text the editor's tree was parsed from.
+	 *
+	 * @returns the change, or undefined while the current text parses.
+	 */
+	private changeSinceParse(): TextChange | undefined {
+		if (this.parsed) return undefined;
+		this.editorChange ??= new TextChange(this.parsedContent, this.content);
+		return this.editorChange;
 	}
 
 	public getDiagnostics(): Diagnostic[] {
@@ -1109,21 +1266,58 @@ export class ParsedDocument {
 	}
 
 	/**
-	 * Where the reference at a position is defined; see {@link DefinitionProvider.getDefinition}.
+	 * Where the reference at a position is defined; see {@link DefinitionProvider.getDefinition}. While the current
+	 * text does not parse, the reference and a definition in this document come from the last text that did, moved
+	 * onto the current text; one inside the stretch being edited is left out.
 	 *
 	 * @param position the position, anywhere in the reference.
-	 * @returns the definition, or none when there is no reference there or what it names is not set.
+	 * @returns the definition, with ranges in this document in the current text, or none when there is no reference
+	 *   there or what it names is not set.
 	 */
-	public getDefinition(position: Position): Promise<LocationLink[]> {
-		return this.definitionProvider.getDefinition(position);
+	public async getDefinition(position: Position): Promise<LocationLink[]> {
+		const links = await this.definitionProvider.getDefinition(position);
+		const change = this.changeSinceParse();
+		if (!change) return links;
+		return links.flatMap(link => {
+			const origin = link.originSelectionRange && change.rangeToAfter(link.originSelectionRange);
+			if (!origin) return [];
+			if (link.targetUri !== this.uri) return [{ ...link, originSelectionRange: origin }];
+			const targetRange = change.rangeToAfter(link.targetRange);
+			const targetSelectionRange = change.rangeToAfter(link.targetSelectionRange);
+			return targetRange && targetSelectionRange ? [{ ...link, originSelectionRange: origin, targetRange, targetSelectionRange }] : [];
+		});
 	}
 
+	/**
+	 * The document's links. While the current text does not parse they come from the last text that did, moved onto
+	 * the current text; a link inside the stretch being edited is left out.
+	 *
+	 * @returns the links, with ranges in the current text.
+	 */
 	public async getLinks(): Promise<DocumentLink[]> {
-		// Let the link provider's output pass through directly
-		return this.linkProvider.getLinks();
+		const links = await this.linkProvider.getLinks();
+		const change = this.changeSinceParse();
+		if (!change) return links;
+		return links.flatMap(link => {
+			const range = change.rangeToAfter(link.range);
+			return range ? [{ ...link, range }] : [];
+		});
 	}
 
+	/**
+	 * The innermost token at a position. While the current text does not parse, the position is mapped onto the last
+	 * text that did and looked up in its tokens.
+	 *
+	 * @param position a position in the current text.
+	 * @returns the token, or null when there is none or the position is inside the stretch being edited.
+	 */
 	public findTokenAtPosition(position: Position): Token | null {
+		const change = this.changeSinceParse();
+		if (change) {
+			const mapped = change.positionToBefore(position);
+			if (!mapped) return null;
+			position = mapped;
+		}
 		const findToken = (tokens: Token[]): Token | null => {
 			for (const token of tokens) {
 				if (this.isPositionInRange(position, token)) {

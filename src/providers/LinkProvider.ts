@@ -11,7 +11,7 @@ export class LinkProvider {
 
 	async getLinks(): Promise<DocumentLink[]> {
 		const links: DocumentLink[] = [];
-		for (const token of this.document.getTokens()) await this.collect(token, links);
+		for (const token of this.document.getEditorTokens()) await this.collect(token, links);
 		return links;
 	}
 
