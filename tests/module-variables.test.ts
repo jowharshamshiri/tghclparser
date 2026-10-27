@@ -153,6 +153,64 @@ variable "region" {
 		expect(path.basename(result.variables[0].file)).to.equal('a.tf');
 	});
 
+	it('reads output shapes from literals, module locals and typed variables', async () => {
+		await write('variables.tf', 'variable "network" {\n  type = object({ cidr = string })\n}');
+		await write('outputs.tf', `locals {
+  endpoints = { public = "a", private = "b" }
+}
+
+output "summary" {
+  description = "What was built"
+  value       = { id = aws_vpc.this.id, zones = ["a"] }
+}
+
+output "endpoints" {
+  value = merge(local.endpoints, { internal = "c" })
+}
+
+output "network" {
+  value = var.network
+}
+
+output "id" {
+  value = aws_vpc.this.id
+}
+
+output "id" {
+  value = "repeated"
+}`);
+
+		const { outputs } = await readModuleVariables(moduleDir);
+
+		const string = { kind: 'primitive', name: 'string', text: 'string' };
+		const any = { kind: 'primitive', name: 'any', text: 'any' };
+		expect(outputs.map(output => [output.name, output.description, path.basename(output.file)])).to.deep.equal([
+			['summary', 'What was built', 'outputs.tf'],
+			['endpoints', undefined, 'outputs.tf'],
+			['network', undefined, 'outputs.tf'],
+			['id', undefined, 'outputs.tf']
+		]);
+		expect(outputs[0].type).to.deep.equal({
+			kind: 'object',
+			text: 'object',
+			attributes: [
+				{ name: 'id', type: any, optional: false },
+				{ name: 'zones', type: { kind: 'tuple', elements: [string], text: 'tuple' }, optional: false }
+			]
+		});
+		expect(outputs[1].type).to.deep.equal({
+			kind: 'object',
+			text: 'object',
+			attributes: [
+				{ name: 'public', type: string, optional: false },
+				{ name: 'private', type: string, optional: false },
+				{ name: 'internal', type: string, optional: false }
+			]
+		});
+		expect(outputs[2].type).to.deep.equal({ kind: 'object', text: 'object({ cidr = string })', attributes: [{ name: 'cidr', type: string, optional: false }] });
+		expect(outputs[3].type).to.deep.equal(any);
+	});
+
 	it('serves the cached result until a file changes or is added', async () => {
 		await write('variables.tf', 'variable "first" {}');
 		const cache = new ModuleVariableCache();

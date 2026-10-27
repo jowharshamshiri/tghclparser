@@ -120,7 +120,7 @@ export class HoverProvider {
 		if (!refId?.value) return [];
 
 		// Get the locals block and find our target attribute
-		const ast = doc.getAST();
+		const ast = doc.getEditorAST();
 		const localsBlock = this.findBlock(ast, 'locals');
 		if (!localsBlock) return [];
 
@@ -321,7 +321,7 @@ export class HoverProvider {
 	}
 
 	private getAllLocalsInfo(doc: ParsedDocument): string[] {
-		const localsBlock = this.findBlock(doc.getAST(), 'locals');
+		const localsBlock = this.findBlock(doc.getEditorAST(), 'locals');
 		const names = localsBlock?.children
 			.filter((child: any) => child.type === 'attribute' && typeof child.value === 'string')
 			.map((child: any) => String(child.value)) ?? [];

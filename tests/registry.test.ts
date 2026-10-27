@@ -354,6 +354,43 @@ describe('registry module sources', function () {
 		expect(requests.map(request => request.path)).to.deep.equal(['/.well-known/terraform.json', '/v1/modules/acme/vpc/aws/versions']);
 	});
 
+	it('keeps the link to a fetched module while an edit does not parse', async () => {
+		const workspace = workspaceFor();
+		const document = await openUnit(workspace, unit(`tfr://${host}/acme/vpc/aws?version=1.1.0`));
+		await workspace.remoteModulesSettled();
+		const [link] = await document.getLinks();
+
+		const edited = new ParsedDocument(workspace, document.getUri(), unit(`tfr://${host}/acme/vpc/aws?version=1.1.0`, '  name = local.'), document);
+		await workspace.addDocument(edited);
+
+		expect(edited.getAST()).to.equal(null);
+		expect(link.target).to.contain('variables.tf');
+		expect(await edited.getLinks()).to.deep.equal([link]);
+	});
+
+	it('fetches the module of a dependency to complete its outputs', async () => {
+		const outputs = await tarGz([{ name: 'outputs.tf', content: 'output "vpc_id" {\n  value = "x"\n}\noutput "subnets" {\n  value = { private = [] }\n}\n' }]);
+		behaviour.download = (version, response) => {
+			response.writeHead(204, { 'x-terraform-get': `/archives/${version}/outputs.tgz` });
+			response.end();
+		};
+		behaviour.archive = (_, response) => {
+			response.writeHead(200, { 'content-type': 'application/octet-stream' });
+			response.end(outputs);
+		};
+		const workspace = workspaceFor();
+		await fs.mkdir(path.join(root, 'live', 'network'), { recursive: true });
+		await fs.writeFile(path.join(root, 'live', 'network', 'terragrunt.hcl'), unit(`tfr://${host}/acme/vpc/aws?version=1.1.0`, ''));
+		const content = 'dependency "network" {\n  config_path = "../network"\n}\n\ninputs = {\n  vpc_id = dependency.network.outputs.vpc_id\n}';
+		const document = await openUnit(workspace, content, 'consumer');
+
+		document.setContent(content.replace('outputs.vpc_id', 'outputs.'));
+		const items = await document.getCompletionsAtPosition({ line: 5, character: '  vpc_id = dependency.network.outputs.'.length });
+
+		expect(items.map(item => item.label)).to.deep.equal(['vpc_id', 'subnets']);
+		expect(requests.map(request => request.path)).to.include('/archives/1.1.0/outputs.tgz');
+	});
+
 	it('clears the cache, keeps its root, and fetches open units again from a fresh download location', async () => {
 		let signature = 0;
 		behaviour.download = (_, response) => {

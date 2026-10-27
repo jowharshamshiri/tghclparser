@@ -5,6 +5,7 @@ import type { Position } from 'vscode-languageserver-types';
 
 import { SyntaxError } from './parser';
 import { parseHclSyntax } from './syntax';
+import { ValueTypeReader } from './value-types';
 
 /** The flat shape of a type constraint, enough to choose a value snippet by. */
 /** Why a remote module source is not fetched in an untrusted workspace, as the diagnostic and hover say it. */
@@ -84,6 +85,18 @@ export interface ModuleVariable {
 	range: { start: Position; end: Position };
 }
 
+/** An `output` block of a Terraform module, as declared rather than as evaluated. */
+export interface ModuleOutput {
+	/** The block's label, which is the name a dependency reads it by. */
+	name: string;
+	/** The `description` attribute when it is a string literal. */
+	description?: string;
+	/** The shape of the `value` expression as its syntax gives it; `any` where it cannot be read without evaluating. */
+	type: ModuleType;
+	/** Absolute path of the `.tf` file declaring the output. */
+	file: string;
+}
+
 /** The variables of one module directory, as {@link readModuleVariables} returns them. */
 export interface ModuleVariables {
 	/** Absolute path of the module directory. */
@@ -92,6 +105,8 @@ export interface ModuleVariables {
 	files: string[];
 	/** The variables declared, in file then declaration order, with the first declaration of a repeated name. */
 	variables: ModuleVariable[];
+	/** The outputs declared, in file then declaration order, with the first declaration of a repeated name. */
+	outputs: ModuleOutput[];
 	/**
 	 * The `.tf` files that did not parse, with the parser's message. Whatever they declare is unknown, so
 	 * `variables` is complete only when this is empty.
@@ -174,18 +189,19 @@ export async function listModuleFiles(moduleDir: string): Promise<string[]> {
 }
 
 /**
- * Reads the `variable` blocks of a module. A file that does not parse is recorded in `unparsed` with the parser's
- * message rather than dropped unnoticed, and the first declaration of a repeated name wins.
+ * Reads the `variable` and `output` blocks of a module. A file that does not parse is recorded in `unparsed` with the
+ * parser's message rather than dropped unnoticed, and the first declaration of a repeated name wins.
  *
  * @param moduleDir absolute path of the module directory.
- * @returns the files read, the variables they declare in file then declaration order, and the files that did not
- *   parse.
+ * @returns the files read, the variables and outputs they declare in file then declaration order, and the files that
+ *   did not parse.
  * @throws when the directory or one of its files cannot be read.
  */
 export async function readModuleVariables(moduleDir: string): Promise<ModuleVariables> {
 	const files = await listModuleFiles(moduleDir);
 	const variables: ModuleVariable[] = [];
 	const unparsed: ModuleFileError[] = [];
+	const parsed: { file: string; ast: any }[] = [];
 	const seen = new Set<string>();
 	for (const file of files) {
 		const content = await fs.readFile(file, 'utf8');
@@ -201,6 +217,7 @@ export async function readModuleVariables(moduleDir: string): Promise<ModuleVari
 			unparsed.push({ file, message: parseFailureMessage(error) });
 			continue;
 		}
+		parsed.push({ file, ast });
 		for (const block of ast.children ?? []) {
 			if (block.type !== 'block' || block.value !== 'variable') continue;
 			const label = block.children?.find((child: any) => child.type === 'parameter');
@@ -211,7 +228,52 @@ export async function readModuleVariables(moduleDir: string): Promise<ModuleVari
 			variables.push(readVariable(block, name, file, content));
 		}
 	}
-	return { moduleDir, files, variables, unparsed };
+	return { moduleDir, files, variables, outputs: readOutputs(parsed, variables), unparsed };
+}
+
+/**
+ * Reads the `output` blocks of a module's parsed files. The shape of each `value` follows the module's own locals
+ * and the declared types of its variables.
+ *
+ * @param parsed each file that parsed, with its syntax tree.
+ * @param variables the module's variables.
+ * @returns the outputs in file then declaration order, the first declaration of a repeated name winning.
+ */
+function readOutputs(parsed: { file: string; ast: any }[], variables: ModuleVariable[]): ModuleOutput[] {
+	const reader = new ValueTypeReader(parsed.map(entry => entry.ast), new Map(variables.map(variable => [variable.name, variable.type ?? anyType])));
+	const outputs: ModuleOutput[] = [];
+	const seen = new Set<string>();
+	for (const { file, ast } of parsed) {
+		for (const block of ast.children ?? []) {
+			if (block.type !== 'block' || block.value !== 'output') continue;
+			const label = block.children?.find((child: any) => child.type === 'parameter');
+			if (!label || seen.has(String(label.value))) continue;
+			const name = String(label.value);
+			seen.add(name);
+			const description = blockAttributeValue(block, 'description');
+			const value = blockAttributeValue(block, 'value');
+			outputs.push({
+				name,
+				description: description?.type === 'string_lit' ? String(description.value) : undefined,
+				type: value ? reader.typeOf(value) : anyType,
+				file
+			});
+		}
+	}
+	return outputs;
+}
+
+/**
+ * The value expression of one attribute of a block.
+ *
+ * @param block the parser node of the block.
+ * @param key the attribute's name.
+ * @returns the expression's node, or undefined when the block does not set the attribute.
+ */
+function blockAttributeValue(block: any, key: string): any {
+	return block.children
+		?.find((child: any) => child.type === 'attribute' && child.value === key)
+		?.children?.find((child: any) => child.type !== 'attribute_identifier');
 }
 
 /**

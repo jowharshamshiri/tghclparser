@@ -9,7 +9,7 @@ import type { FunctionContext, FunctionDefinition, TerragruntConfig, Token } fro
 import { createDependencyConfig, createIncludeConfig, TreeNode } from './model';
 import { classifyModuleSource, redactSource, requestKey } from './module-source';
 import { isLocalSource, ModuleVariableCache, splitModuleSource } from './module-variables';
-import type { ModuleVariables } from './module-variables';
+import type { ModuleOutput, ModuleVariables } from './module-variables';
 import type { ModuleVariablesState } from './ParsedDocument';
 import type { RemoteModuleCheckout, RemoteModuleOptions } from './remote-modules';
 import { RemoteModuleStore } from './remote-modules';
@@ -716,6 +716,53 @@ export class Workspace {
 			if (match) return match;
 		}
 		return files[0];
+	}
+
+	/**
+	 * The outputs the module of a dependency's unit declares, found the way the unit's own module is: the first of
+	 * the configurations merged into the unit that sets `terraform { source }` names it. A remote module is fetched
+	 * and waited for when {@link configureRemoteModules} says the workspace is trusted, unless a fetch of it already
+	 * failed.
+	 *
+	 * @param sourceUri the configuration that declares the dependency.
+	 * @param pathToken the dependency's `config_path` value.
+	 * @returns the module's outputs, or undefined when the unit, its module or the module's files cannot be
+	 *   determined or read.
+	 */
+	public async dependencyModuleOutputs(sourceUri: string, pathToken: Token): Promise<ModuleOutput[] | undefined> {
+		try {
+			const unit = await this.getParsedDocument(await this.resolveDependencyPath(pathToken, sourceUri));
+			const ast = unit?.getAST();
+			if (!unit || !ast) return undefined;
+			const unitDir = path.dirname(URI.parse(unit.getUri()).fsPath);
+			const includes = unit.findIncludeBlocks(ast);
+			const includePaths = await Promise.all(includes.map(include => this.resolveIncludePath(include.path, unit.getUri(), unitDir)));
+			const merged = await this.mergedConfigurations(unit, includes, includePaths, unitDir);
+			if ('reason' in merged) return undefined;
+			let owner: ParsedDocument | undefined;
+			for (const configuration of merged.configurations) {
+				if (configuration.getAST() === null) return undefined;
+				if (this.findTerraformSourceToken(configuration) !== undefined) {
+					owner = configuration;
+					break;
+				}
+			}
+			if (!owner) return undefined;
+			const resolution = await this.resolveModuleSource(this.findTerraformSourceToken(owner)!, owner.getUri(), unitDir);
+			let moduleDir: string | undefined;
+			if (resolution.kind === 'local') moduleDir = resolution.moduleDir;
+			else if (resolution.kind === 'remote' && this.remotePolicy) {
+				const source = classifyModuleSource(resolution.sourceText, { defaultRegistryHost: await this.registryHostFor(merged.configurations), origin: 'authored' });
+				if (source.kind === 'registry' || source.kind === 'git') {
+					const known = this.remoteModules.peek(requestKey(source));
+					if (known && 'checkout' in known) moduleDir = known.checkout.moduleDir;
+					else if (!known && this.remotePolicy.trusted) moduleDir = (await this.remoteModules.resolve(source)).moduleDir;
+				}
+			}
+			return moduleDir === undefined ? undefined : (await this.moduleVariables.get(moduleDir)).outputs;
+		} catch {
+			return undefined;
+		}
 	}
 
 	/**

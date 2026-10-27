@@ -11,6 +11,7 @@ import type { ModuleType, ModuleVariableTypeKind } from '../module-variables';
 import { anyType, moduleTypeKind } from '../module-variables';
 import type { ParsedDocument } from '../ParsedDocument';
 import type { Schema } from '../Schema';
+import { typeAt } from '../value-types';
 
 /**
  * A construct the cursor sits inside. `<inputs>` is the root `inputs = {` object, `<expression>` any other brace
@@ -52,7 +53,7 @@ export class CompletionsProvider {
 		if (dependencyPath !== undefined) return this.dependencyPathItems(dependencyPath, position, document);
 
 		const reference = this.referenceAtCursor(context.beforeCursor);
-		if (reference) return this.referenceCompletions(reference, documentText);
+		if (reference) return this.referenceCompletions(reference, documentText, document);
 
 		const expression = this.isExpressionPosition(context);
 		const structural = context.lineBeforeCursor.trim().match(/^([\w-]*)$/)?.[1];
@@ -503,7 +504,23 @@ export class CompletionsProvider {
 		return { namespace: match[1], parts: segments.slice(0, -1), partial: segments.at(-1) ?? '' };
 	}
 
-	private referenceCompletions(reference: { namespace: string; parts: string[]; partial: string }, text: string): CompletionItem[] {
+	/**
+	 * The names that can follow a partly typed reference such as `local.`, `local.config.` or
+	 * `dependency.vpc.outputs.subnets.`.
+	 *
+	 * @param reference the namespace, the names already typed after it and the partial name at the cursor.
+	 * @param text the full text of the document, which top-level names are read from.
+	 * @param document the document being completed, which gives the shapes of locals and dependency outputs.
+	 * @returns one item per name that starts with the partial name, empty when the shape at the path is unknown.
+	 */
+	private async referenceCompletions(reference: { namespace: string; parts: string[]; partial: string }, text: string, document: ParsedDocument): Promise<CompletionItem[]> {
+		if (reference.namespace === 'local' && reference.parts.length > 0) {
+			return this.typeAttributeItems(typeAt(document.getLocalType?.(reference.parts[0]), reference.parts.slice(1)), reference.partial);
+		}
+		if (reference.namespace === 'dependency' && reference.parts.length >= 2) {
+			if (reference.parts[1] !== 'outputs') return [];
+			return this.typeAttributeItems(typeAt(await document.getDependencyOutputsType?.(reference.parts[0]), reference.parts.slice(2)), reference.partial);
+		}
 		if (reference.namespace === 'dependency' && reference.parts.length === 1) {
 			return ['outputs'].filter(value => value.startsWith(reference.partial)).map(value => this.referenceItem(value));
 		}
@@ -542,6 +559,26 @@ export class CompletionsProvider {
 
 	private referenceItem(label: string): CompletionItem {
 		return { label, kind: CompletionItemKind.Reference, insertText: label, sortText: `0-${label}` };
+	}
+
+	/**
+	 * The attributes of an object type, offered after a dot in a reference.
+	 *
+	 * @param type the type at the reference's path.
+	 * @param partial the name typed so far, which attribute names must start with.
+	 * @returns one item per matching attribute, with its type as the detail; empty when the type is not an object.
+	 */
+	private typeAttributeItems(type: ModuleType | undefined, partial: string): CompletionItem[] {
+		if (type?.kind !== 'object') return [];
+		return type.attributes
+			.filter(attribute => attribute.name.startsWith(partial))
+			.map(attribute => ({
+				label: attribute.name,
+				kind: CompletionItemKind.Field,
+				detail: attribute.type.text,
+				insertText: attribute.name,
+				sortText: `0-${attribute.name}`
+			}));
 	}
 
 	/**
