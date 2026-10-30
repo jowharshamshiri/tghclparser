@@ -23,6 +23,7 @@ import {
 	unwrapSensitive
 } from './functions/utils';
 import { isWrittenOut } from './writtenOut';
+import type { Range } from 'vscode-languageserver';
 
 interface TNode {
 	type: string;
@@ -92,6 +93,45 @@ export interface DependencyRequest {
 
 /** A value a render cannot resolve: the field that reads it is omitted and reported rather than failing the render. */
 export class UnresolvedRenderValueError extends Error {}
+
+/**
+ * A fault in one expression of a configuration, so it can be reported where that expression is written: a local
+ * that does not exist, an attribute a value does not have.
+ *
+ * The file is the one the expression is written in. For a unit that inherits the expression through an include, that
+ * is the included file and not the unit.
+ */
+export class LocatedEvaluationError extends Error {
+	/** Faults found after this one in the same evaluation, where evaluation could carry on past it. */
+	readonly further: LocatedEvaluationError[] = [];
+
+	/**
+	 * Creates the error.
+	 *
+	 * @param message what went wrong.
+	 * @param filePath the configuration holding the expression.
+	 * @param range where the expression is in that configuration.
+	 * @param options the underlying error, if any.
+	 */
+	constructor(message: string, public readonly filePath: string, public readonly range: Range, options?: { cause?: unknown }) {
+		super(message, options);
+		this.name = 'LocatedEvaluationError';
+	}
+}
+
+/**
+ * Where a node is in its file, or undefined for a node the parser gave no location.
+ *
+ * @param node the syntax node.
+ * @returns the node's range, zero-based as an editor expects.
+ */
+function nodeRange(node: TNode): Range | undefined {
+	if (!node.location) return undefined;
+	return {
+		start: { line: node.location.start.line - 1, character: node.location.start.column - 1 },
+		end: { line: node.location.end.line - 1, character: node.location.end.column - 1 }
+	};
+}
 
 export class UnreadableSopsFileError extends UnresolvedRenderValueError {
 	constructor(file: string, reason: string) {
@@ -165,12 +205,25 @@ const EXPRESSION_SPAN_TYPES = new Set([
 	'function_call'
 ]);
 
+/** A fault in one expression, and where that expression is written. */
+export interface EvaluationProblem {
+	message: string;
+	/** The configuration the expression is written in: an included file when the unit inherits the expression. */
+	filePath: string;
+	range: Range;
+}
+
 export interface ConfigEvaluationResult {
 	valid: boolean;
 	inputs: RuntimeValue<ValueType> | null;
 	error?: string;
 	/** The error is a value that cannot be known yet, such as a dependency never applied, not a fault in the configuration. */
 	unresolved?: boolean;
+	/**
+	 * Every fault evaluation could place, where each is written. `error` is the first one's message. Absent when the
+	 * error has no place in the configuration, such as a file that cannot be read.
+	 */
+	problems?: EvaluationProblem[];
 }
 
 interface IncludeRef {
@@ -549,7 +602,10 @@ export class ConfigEvaluator {
 				valid: false,
 				inputs: null,
 				error: error instanceof Error ? error.message : String(error),
-				...(error instanceof UnresolvedRenderValueError ? { unresolved: true } : {})
+				...(error instanceof UnresolvedRenderValueError ? { unresolved: true } : {}),
+				...(error instanceof LocatedEvaluationError
+					? { problems: [error, ...error.further].map(fault => ({ message: fault.message, filePath: fault.filePath, range: fault.range })) }
+					: {})
 			};
 		}
 	}
@@ -988,9 +1044,12 @@ export class ConfigEvaluator {
 		if (inputsAssignment && !skipInputs) {
 			const inputNode = requiredValueNode(inputsAssignment, 'root_assignment_identifier');
 			let value: RuntimeValue<ValueType>;
-			if (this.options.partialRender && inputNode.type === 'object'
-				&& !(inputNode.children ?? []).some(child => child.type !== 'attribute')) {
+			if (inputNode.type === 'object' && !(inputNode.children ?? []).some(child => child.type !== 'attribute')) {
+				// Attribute by attribute, so a fault in one does not hide a fault in the next: every input at fault is
+				// reported, where it is written, before the first is fixed.
 				const entries = new Map<string, RuntimeValue<ValueType>>();
+				const faults = new Map<string, LocatedEvaluationError>();
+				let unresolved: UnresolvedRenderValueError | undefined;
 				for (const child of inputNode.children ?? []) {
 					const keyNode = child.children?.find(part => part.type === 'object_key');
 					const key = keyNode
@@ -1001,11 +1060,27 @@ export class ConfigEvaluator {
 						entries.set(key, await this.evalNode(valueNode, scope));
 						unresolvedInputs.delete(key);
 					} catch (error) {
+						if (error instanceof LocatedEvaluationError) {
+							// Two inputs reading one broken local are one fault.
+							const where = `${error.filePath}:${error.range.start.line}:${error.range.start.character}:${error.message}`;
+							if (!faults.has(where)) faults.set(where, error);
+							continue;
+						}
 						if (!(error instanceof UnresolvedRenderValueError)) throw error;
+						if (!this.options.partialRender) {
+							unresolved ??= error;
+							continue;
+						}
 						entries.delete(key);
 						unresolvedInputs.set(key, {file: filePath, reason: error.message});
 					}
 				}
+				if (faults.size > 0) {
+					const [first, ...rest] = faults.values();
+					first.further.push(...rest);
+					throw first;
+				}
+				if (unresolved) throw unresolved;
 				value = makeObjectValue(entries);
 			} else {
 				value = await this.evalNode(inputNode, scope);
@@ -1715,10 +1790,11 @@ export class ConfigEvaluator {
 			}
 			case 'member_access': {
 				const member = String(node.children?.[1]?.value ?? '');
-				return this.traverse(await this.evalNode(node.children?.[0], scope), member.split('.'), member);
+				return this.locate(node, scope, async () => this.traverse(await this.evalNode(node.children?.[0], scope), member.split('.'), member));
 			}
 			case 'index_expression':
-				return this.indexValue(await this.evalNode(node.children?.[0], scope), await this.evalNode(node.children?.[1], scope));
+				return this.locate(node, scope, async () =>
+					this.indexValue(await this.evalNode(node.children?.[0], scope), await this.evalNode(node.children?.[1], scope)));
 			case 'range_expression': {
 				const start = await this.evalNode(node.children?.[0], scope);
 				const end = await this.evalNode(node.children?.[1], scope);
@@ -1743,9 +1819,9 @@ export class ConfigEvaluator {
 			case 'module_reference':
 			case 'dependency_reference':
 			case 'path_reference':
-				return this.resolveReference(this.referenceParts(node), scope);
+				return this.locate(node, scope, () => this.resolveReference(this.referenceParts(node), scope));
 			case 'traversal_reference':
-				return this.resolveReference([String(node.value ?? '')], scope);
+				return this.locate(node, scope, () => this.resolveReference([String(node.value ?? '')], scope));
 			case 'for_expression': {
 				const [identifier, collection, body] = node.children ?? [];
 				const items = await this.evalNode(collection, scope);
@@ -1764,6 +1840,27 @@ export class ConfigEvaluator {
 			}
 			default:
 				throw new Error(`Cannot evaluate expression of type ${node.type}`);
+		}
+	}
+
+	/**
+	 * Evaluates a reference so that a fault in it is reported where the reference is written. An error that already
+	 * says where it is passes through, so the innermost reference at fault is the one reported. A value that cannot be
+	 * known yet is not a fault and passes through as it is.
+	 *
+	 * @param node the reference being evaluated.
+	 * @param scope the scope of the file it is written in.
+	 * @param evaluate the evaluation.
+	 * @returns the reference's value.
+	 */
+	private async locate(node: TNode, scope: Scope, evaluate: () => Promise<RuntimeValue<ValueType>>): Promise<RuntimeValue<ValueType>> {
+		try {
+			return await evaluate();
+		} catch (error) {
+			if (!(error instanceof Error) || error instanceof LocatedEvaluationError || error instanceof UnresolvedRenderValueError) throw error;
+			const range = nodeRange(node);
+			if (!range) throw error;
+			throw new LocatedEvaluationError(error.message, scope.filePath, range, { cause: error });
 		}
 	}
 
