@@ -9,6 +9,7 @@ import {
 	convertToRuntimeValue,
 	makeNullValue,
 	makeSensitiveValue,
+	markEncrypted,
 	runtimeToPlain,
 	unwrapSensitive
 } from './utils';
@@ -479,7 +480,8 @@ export const builtinFunctionGroup = {
 			} catch (error) {
 				throw new Error(`Invalid JSON: ${error instanceof Error ? error.message : error}`);
 			}
-			return convertToRuntimeValue(parsed);
+			const decoded = convertToRuntimeValue(parsed);
+			return args[0].encrypted ? markEncrypted(decoded) : decoded;
 		},
 		jsonencode: async (args: RuntimeValue<ValueType>[]) => stringValue(JSON.stringify(runtimeToPlain(requireArgument(args, 0, 'jsonencode')))),
 		keys: async (args: RuntimeValue<ValueType>[]) => arrayValue([...objectArgument(args, 0, 'keys').keys()].sort().map(stringValue)),

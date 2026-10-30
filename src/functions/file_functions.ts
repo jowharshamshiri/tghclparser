@@ -9,7 +9,8 @@ import { renderTemplate } from './template';
 import {
 	convertToRuntimeValue,
 	makeBooleanValue,
-	makeStringValue
+	makeStringValue,
+	markEncrypted
 } from './utils';
 
 export const fileFunctionGroup = {
@@ -117,7 +118,8 @@ export const fileFunctionGroup = {
 			const filePath = resolveFilePath(source, context);
 			await assertPathAllowed(context, filePath);
 			if (!context.decryptSopsFile) throw new Error('sops_decrypt_file requires a sops runner');
-			return makeStringValue(await context.decryptSopsFile(filePath));
+			const read = await context.decryptSopsFile(filePath);
+			return read.encrypted ? { ...makeStringValue(read.content), encrypted: true } : makeStringValue(read.content);
 		},
 		templatefile: async (
             args: RuntimeValue<ValueType>[],
@@ -146,7 +148,8 @@ export const fileFunctionGroup = {
 
             try {
                 const parsed = yaml.load(yamlContent);
-                return convertToRuntimeValue(parsed);
+                const decoded = convertToRuntimeValue(parsed);
+                return args[0].encrypted ? markEncrypted(decoded) : decoded;
 			} catch (error) {
                 throw new Error(`Error parsing YAML: ${error instanceof Error ? error.message : error}`);
             }

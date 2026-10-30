@@ -4,6 +4,7 @@ import { gunzipSync } from 'node:zlib';
 import path from 'node:path';
 
 import { ConfigEvaluator, runtimeValueToPlain } from '../src/Evaluator';
+import { ENCRYPTED_SOPS_JSON, ENCRYPTED_SOPS_YAML, withoutSopsKey } from './sops-fixture';
 
 describe('semantic configuration evaluation', () => {
 	const evaluator = new ConfigEvaluator({
@@ -686,6 +687,70 @@ describe('semantic configuration evaluation', () => {
 
 			const hovered = await evaluator.evaluateAtPosition(unitPath, unit, root, { line: 5, character: 13 });
 			assert.deepEqual(hovered, { type: 'string', value: 'eu-west-2' });
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
+	const sopsUnit = [
+		'locals {',
+		'  yaml = yamldecode(sops_decrypt_file("${get_terragrunt_dir()}/secrets.sops.yaml"))',
+		'  json = jsondecode(sops_decrypt_file("${get_terragrunt_dir()}/secrets.sops.json"))',
+		'}',
+		'',
+		'inputs = {',
+		'  yaml  = local.yaml',
+		'  json  = local.json',
+		'  token = local.yaml.token',
+		'}'
+	].join('\n');
+
+	async function sopsWorkspace(): Promise<string> {
+		const os = await import('node:os');
+		const fs = await import('node:fs/promises');
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-sops-')));
+		await fs.mkdir(path.join(root, '.git'));
+		await fs.writeFile(path.join(root, 'secrets.sops.yaml'), ENCRYPTED_SOPS_YAML);
+		await fs.writeFile(path.join(root, 'secrets.sops.json'), ENCRYPTED_SOPS_JSON);
+		await fs.writeFile(path.join(root, 'terragrunt.hcl'), sopsUnit);
+		return root;
+	}
+
+	it('reads the keys of a sops file it cannot decrypt when asked to, and never shows an encrypted value', async () => {
+		const fs = await import('node:fs/promises');
+		const root = await sopsWorkspace();
+		try {
+			const reader = new ConfigEvaluator({
+				environmentVariables: {},
+				terraformCommand: '',
+				terraformCliArgs: [],
+				workspaceTrusted: true,
+				readEncryptedSops: true
+			});
+			const unitPath = path.join(root, 'terragrunt.hcl');
+			const result = await withoutSopsKey(root, () => reader.evaluateUnit(unitPath, sopsUnit, root));
+			assert.equal(result.valid, true, result.error);
+			const masked = { token: '(encrypted)', db: { password: '(encrypted)' } };
+			assert.deepEqual(runtimeValueToPlain(result.inputs!), { yaml: masked, json: masked, token: '(encrypted)' });
+			const inputs = result.inputs!.value as Map<string, unknown>;
+			assert.deepEqual(inputs.get('token'), { type: 'string', value: 'ENC[AES256_GCM,data:nq2Z7w==,iv:A1B2,tag:C3D4,type:str]', encrypted: true });
+
+			const spans = await withoutSopsKey(root, () => reader.evaluatedSpans(unitPath, sopsUnit, root));
+			const shown = spans.map(span => sopsUnit.slice(span.start, span.end));
+			assert.ok(shown.includes('yaml') && shown.includes('local.yaml'), shown.join(', '));
+			assert.ok(!shown.includes('token') && !shown.includes('local.yaml.token'), shown.join(', '));
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it('still fails on a sops file it cannot decrypt unless asked to read its keys', async () => {
+		const fs = await import('node:fs/promises');
+		const root = await sopsWorkspace();
+		try {
+			const result = await withoutSopsKey(root, () => evaluator.evaluateUnit(path.join(root, 'terragrunt.hcl'), sopsUnit, root));
+			assert.equal(result.valid, false);
+			assert.match(result.error ?? '', /Failed to get the data key/);
 		} finally {
 			await fs.rm(root, { recursive: true, force: true });
 		}
