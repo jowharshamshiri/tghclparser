@@ -46,6 +46,83 @@ describe('semantic configuration evaluation', () => {
 		assert.equal(result.unresolved, undefined);
 	});
 
+	it('places a missing local and a missing attribute where they are written, and reports both', async () => {
+		const content = [
+			'locals {',
+			'  a = { b = 1 }',
+			'}',
+			'inputs = {',
+			'  x = local.missing',
+			'  y = local.a.z',
+			'}'
+		].join('\n');
+
+		const result = await evaluator.evaluateUnit(configPath, content, process.cwd());
+		assert.equal(result.valid, false);
+		assert.equal(result.error, 'Undefined local value "missing"');
+		assert.equal(result.unresolved, undefined);
+		assert.deepEqual(result.problems, [
+			{
+				message: 'Undefined local value "missing"',
+				filePath: configPath,
+				range: { start: { line: 4, character: 6 }, end: { line: 4, character: 19 } }
+			},
+			{
+				message: 'Missing attribute "z" on "a"',
+				filePath: configPath,
+				range: { start: { line: 5, character: 6 }, end: { line: 5, character: 15 } }
+			}
+		]);
+	});
+
+	it('reports a broken local once, where it is written, however many inputs read it', async () => {
+		const content = [
+			'locals {',
+			'  a = { b = 1 }',
+			'  c = local.a.z',
+			'}',
+			'inputs = {',
+			'  x = local.c',
+			'  y = local.c',
+			'}'
+		].join('\n');
+
+		const result = await evaluator.evaluateUnit(configPath, content, process.cwd());
+		assert.deepEqual(result.problems, [
+			{
+				message: 'Missing attribute "z" on "a"',
+				filePath: configPath,
+				range: { start: { line: 2, character: 6 }, end: { line: 2, character: 15 } }
+			}
+		]);
+	});
+
+	it('places a fault inherited through an include in the included configuration', async () => {
+		const os = await import('node:os');
+		const fs = await import('node:fs/promises');
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-located-')));
+		try {
+			const rootPath = path.join(root, 'root.hcl');
+			await fs.writeFile(rootPath, 'inputs = {\n  x = local.missing\n}\n');
+			const unitDir = path.join(root, 'app');
+			await fs.mkdir(unitDir);
+			const unitPath = path.join(unitDir, 'terragrunt.hcl');
+			const content = 'include "root" {\n  path = find_in_parent_folders("root.hcl")\n}\n';
+			await fs.writeFile(unitPath, content);
+
+			const result = await evaluator.evaluateUnit(unitPath, content, unitDir);
+			assert.deepEqual(result.problems, [
+				{
+					message: 'Undefined local value "missing"',
+					filePath: rootPath,
+					range: { start: { line: 1, character: 6 }, end: { line: 1, character: 19 } }
+				}
+			]);
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
 	it('denies semantic evaluation until the caller establishes workspace trust', async () => {
 		const evaluator = new ConfigEvaluator({
 			environmentVariables: { SECRET_VALUE: 'must-not-be-exposed' },
