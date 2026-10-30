@@ -5,6 +5,8 @@ import type { CompletionItem, Position } from 'vscode-languageserver';
 import { CompletionItemKind, InsertTextFormat, MarkupKind } from 'vscode-languageserver';
 import { URI } from 'vscode-uri';
 
+import type { HclToken } from '../hcl-scanner';
+import { scanHclTokens } from '../hcl-scanner';
 import { escapeMarkdownText, markdownCode } from '../markdown';
 import type { AttributeDefinition, BlockDefinition, RuntimeValue, Token, ValueType } from '../model';
 import type { ModuleType, ModuleVariableTypeKind } from '../module-variables';
@@ -486,8 +488,9 @@ export class CompletionsProvider {
 	}
 
 	private namespaceItems(partial: string, text: string): CompletionItem[] {
+		const tokens = scanHclTokens(text);
 		return ['local', 'dependency', 'include', 'feature', 'values', 'unit', 'stack']
-			.filter(namespace => namespace.startsWith(partial) && this.symbols(namespace, text).length > 0)
+			.filter(namespace => namespace.startsWith(partial) && this.symbols(namespace, text, tokens).length > 0)
 			.map(namespace => ({
 				label: namespace,
 				kind: CompletionItemKind.Module,
@@ -539,25 +542,65 @@ export class CompletionsProvider {
 			.map(value => this.referenceItem(value));
 	}
 
-	private symbols(namespace: string, text: string): string[] {
-		const patterns: Record<string, RegExp> = {
-			local: /locals\s*\{([\s\S]*?)\}/g,
-			dependency: /dependency\s+"([^"]+)"\s*\{/g,
-			include: /include\s+"([^"]+)"\s*\{/g,
-			feature: /feature\s+"([^"]+)"\s*\{/g,
-			unit: /unit\s+"([^"]+)"\s*\{/g,
-			stack: /stack\s+"([^"]+)"\s*\{/g,
-			values: /^\s*([\w-]+)\s*=/gm
-		};
-		const pattern = patterns[namespace];
-		if (!pattern) return [];
-		const values: string[] = [];
-		for (const match of text.matchAll(pattern)) {
-			if (namespace === 'local') {
-				for (const assignment of match[1].matchAll(/^\s*([\w-]+)\s*=/gm)) values.push(assignment[1]);
-			} else values.push(match[1]);
+	/**
+	 * The names a namespace offers: the attributes assigned directly in a `locals` block for `local`, the labels of
+	 * the blocks of that type for `dependency`, `include`, `feature`, `unit` and `stack`, and every assigned key for
+	 * `values`. They are read from the current text, not the syntax tree, so a name typed since the text last parsed
+	 * is offered too.
+	 *
+	 * @param namespace the namespace before the dot.
+	 * @param text the full text of the document.
+	 * @param tokens the text's tokens, passed in when the caller has already scanned it.
+	 * @returns the names in the order they are assigned or declared, each once.
+	 */
+	private symbols(namespace: string, text: string, tokens = scanHclTokens(text)): string[] {
+		if (namespace === 'values') return [...new Set([...text.matchAll(/^\s*([\w-]+)\s*=/gm)].map(match => match[1]))];
+		const blockType = namespace === 'local' ? 'locals' : namespace;
+		if (!['locals', 'dependency', 'include', 'feature', 'unit', 'stack'].includes(blockType)) return [];
+		const names: string[] = [];
+		let depth = 0;
+		let localsDepth: number | undefined;
+		for (let index = 0; index < tokens.length; index++) {
+			const token = tokens[index];
+			if (token.type === 'OBrace') {
+				depth++;
+				const header = this.blockHeaderBefore(tokens, index);
+				if (header?.type !== blockType) continue;
+				if (blockType === 'locals') localsDepth = depth;
+				else if (header.label !== undefined) names.push(header.label);
+			} else if (token.type === 'CBrace') {
+				depth--;
+				if (localsDepth !== undefined && depth < localsDepth) localsDepth = undefined;
+			} else if (token.type === 'Ident' && depth === localsDepth && tokens[index + 1]?.type === 'Equal') {
+				names.push(token.text);
+			}
 		}
-		return [...new Set(values)];
+		return [...new Set(names)];
+	}
+
+	/**
+	 * The block header that ends at an opening brace: its type, and its label when it has one in quotes.
+	 *
+	 * @param tokens the tokens of the text.
+	 * @param brace the index of the `{` token.
+	 * @returns the header, or undefined when the brace opens an object or a template rather than a block.
+	 */
+	private blockHeaderBefore(tokens: HclToken[], brace: number): { type: string; label?: string } | undefined {
+		const previous = tokens[brace - 1];
+		if (previous?.type === 'Ident' && this.startsStatement(tokens[brace - 2])) return { type: previous.text };
+		if (previous?.type !== 'CQuote' || tokens[brace - 2]?.type !== 'QuotedLit' || tokens[brace - 3]?.type !== 'OQuote') return undefined;
+		const type = tokens[brace - 4];
+		if (type?.type !== 'Ident' || !this.startsStatement(tokens[brace - 5])) return undefined;
+		return { type: type.text, label: tokens[brace - 2].text };
+	}
+
+	/**
+	 * @param token the token before a block type.
+	 * @returns true when a statement can begin after it: at the start of the text, after a line break, or after the
+	 *   brace that closes the previous block.
+	 */
+	private startsStatement(token: HclToken | undefined): boolean {
+		return token === undefined || token.type === 'Newline' || token.type === 'CBrace' || token.type === 'Comment';
 	}
 
 	private referenceItem(label: string): CompletionItem {

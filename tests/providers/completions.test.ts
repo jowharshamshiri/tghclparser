@@ -122,6 +122,22 @@ locals { reference = REFERENCE }`;
 		}
 	});
 
+	it('lists every local past a brace inside a string, and none of a nested object', async () => {
+		const source = `locals {
+  root_vars    = include.root.locals.root_vars.locals
+  shared_vars  = read_terragrunt_config("\${get_path_to_repo_root()}/live/shared.hcl").locals
+  env_vars     = read_terragrunt_config(find_in_parent_folders("env.hcl")).locals
+  secret_vars  = yamldecode(sops_decrypt_file("\${get_terragrunt_dir()}/secrets.yaml"))
+  config       = { region = "eu-west-1", tags = { team = "platform" } }
+  target       = local.<|>
+  # closing = "}"
+  log_level    = "info"
+}`;
+		const { text, position } = sourceAtCursor(source);
+		const items = await provider.getCompletions(text, position, null, documentFor('file:///repo/terragrunt.hcl'));
+		expect(items.map(item => item.label)).to.deep.equal(['root_vars', 'shared_vars', 'env_vars', 'secret_vars', 'config', 'target', 'log_level']);
+	});
+
 	it('completes dependency outputs after a declared dependency name', async () => {
 		const { text, position } = sourceAtCursor('dependency "network" { config_path = "../network" }\ninputs = { id = dependency.network.<|>outputs.id }');
 		const items = await provider.getCompletions(text, position, null, documentFor('file:///repo/terragrunt.hcl'));
