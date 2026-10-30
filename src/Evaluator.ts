@@ -8,6 +8,7 @@ import type { InlineFunctionDefinition } from './inline-functions';
 import { checkTypeConstraint, readInlineFunction, readTypeConstraint, synthesizeDefinition } from './inline-functions';
 import { parseHclSyntax } from './syntax';
 import { Schema } from './Schema';
+import { encryptedSopsDocument } from './sops';
 import type { FunctionContext, FunctionDefinition, RuntimeValue, ValueType } from './model';
 import {
 	coerceToBool,
@@ -67,6 +68,13 @@ export interface ConfigEvaluatorOptions {
 	resolveDependency?: (request: DependencyRequest) => Promise<RuntimeValue<ValueType> | undefined>;
 	/** Omit fields that read unresolvable values, and expose them through unresolvedRenderFields(). */
 	partialRender?: boolean;
+	/**
+	 * When sops cannot decrypt a file, read its keys from the encrypted file itself, with the values left as sops
+	 * wrote them. For an editor, whose completion and hover can then name a secret's keys on a machine that has no
+	 * key to it. Leave unset for anything that runs or generates, which must not take an encrypted value for a real
+	 * one.
+	 */
+	readEncryptedSops?: boolean;
 }
 
 /**
@@ -768,7 +776,7 @@ export class ConfigEvaluator {
 			} catch {
 				return;
 			}
-			if (isWrittenOut(node, value, content)) return;
+			if (value.encrypted || isWrittenOut(node, value, content)) return;
 			spans.set(key, { start: span.start.offset, end: span.end.offset, kind, value });
 		};
 		const visit = async (node: TNode, parent: TNode | undefined): Promise<void> => {
@@ -1128,8 +1136,12 @@ export class ConfigEvaluator {
 			},
 			decryptSopsFile: async (filePath: string) => {
 				try {
-					return this.runCommand(scope, 'sops', ['--decrypt', filePath]);
+					return { content: this.runCommand(scope, 'sops', ['--decrypt', filePath]), encrypted: false };
 				} catch (error) {
+					if (this.options.readEncryptedSops) {
+						const encrypted = await encryptedSopsDocument(filePath);
+						if (encrypted !== undefined) return { content: encrypted, encrypted: true };
+					}
 					if (!this.options.partialRender) throw error;
 					const stderr = (error as {stderr?: unknown}).stderr;
 					const reason = typeof stderr === 'string' && stderr.trim() !== ''
@@ -2405,9 +2417,13 @@ function isObjectValue(value: RuntimeValue<ValueType>): boolean {
 	return value.type === 'object' || value.type === 'block';
 }
 
+/** What stands in for a value sops stored encrypted wherever a plain form of it is shown. */
+export const ENCRYPTED_VALUE = '(encrypted)';
+
 export function runtimeValueToPlain(value: RuntimeValue<ValueType>): unknown {
 	switch (value.type) {
 		case 'string':
+			return value.encrypted ? ENCRYPTED_VALUE : value.value;
 		case 'number':
 		case 'boolean':
 			return value.value;
