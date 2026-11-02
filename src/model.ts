@@ -337,6 +337,14 @@ export interface ResolvedReference {
 export interface RuntimeValue<T extends ValueType> {
 	type: T;
 	value: RuntimeValueType<T>;
+	/** Set on a value sops stored encrypted, read from a file that could not be decrypted: there, but not to be shown. */
+	encrypted?: true;
+}
+
+/** What a sops read gives back: the decrypted document, or the encrypted one when the decrypt failed and the caller asked for it. */
+export interface SopsRead {
+	content: string;
+	encrypted: boolean;
 }
 
 export type RuntimeValueType<T extends ValueType> =
@@ -403,7 +411,7 @@ export interface FunctionContext {
 	readTerragruntConfig?: (relativePath: string) => Promise<RuntimeValue<ValueType> | undefined>;
 	readTFVarsFile?: (relativePath: string) => Promise<RuntimeValue<ValueType> | undefined>;
 	runCommand?: (program: string, args: string[]) => Promise<string>;
-	decryptSopsFile?: (filePath: string) => Promise<string>;
+	decryptSopsFile?: (filePath: string) => Promise<SopsRead>;
 	evaluateFunction?: (name: string, args: RuntimeValue<ValueType>[]) => Promise<RuntimeValue<ValueType>>;
 }
 

@@ -9,6 +9,7 @@ import { URI } from 'vscode-uri';
 import { ConfigEvaluator } from '../../src/Evaluator';
 import { ParsedDocument } from '../../src/ParsedDocument';
 import { Workspace } from '../../src/Workspace';
+import { ENCRYPTED_SOPS_YAML, withoutSopsKey } from '../sops-fixture';
 
 const cursorIn = (source: string): { text: string; position: Position } => {
 	const offset = source.indexOf('<|>');
@@ -183,6 +184,26 @@ inputs = {
 
 			expect((await complete('local.account_vars.<|>')).map(item => [item.label, item.detail])).to.deep.equal([['aws_account_id', '"123456789012"'], ['aws', 'object']]);
 			expect(labels(await complete('local.account_vars.aws.<|>'))).to.deep.equal(['region']);
+		});
+
+		it('offers the keys of a sops file the machine cannot decrypt, without the sops metadata', async () => {
+			await write(path.join('live', 'app', 'secrets.sops.yaml'), ENCRYPTED_SOPS_YAML);
+			const unit = (reference: string) => `locals {\n  secrets = yamldecode(sops_decrypt_file("\${get_terragrunt_dir()}/secrets.sops.yaml"))\n}\n\ninputs = {\n  token = ${reference}\n}`;
+			const previous = await openUnit(unit('local.secrets.token'));
+			const evaluator = new ConfigEvaluator({ environmentVariables: {}, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true, readEncryptedSops: true });
+			const spans = await withoutSopsKey(directory, () => evaluator.evaluatedSpans(URI.parse(previous.getUri()).fsPath, previous.getContent(), directory));
+			previous.setEvaluatedSpans(spans);
+
+			const complete = async (reference: string) => {
+				const { text, position } = cursorIn(unit(reference));
+				return new ParsedDocument(workspace, previous.getUri(), text, previous).getCompletionsAtPosition(position);
+			};
+
+			expect((await complete('local.secrets.<|>')).map(item => [item.label, item.detail])).to.deep.equal([
+				['token', 'encrypted'],
+				['db', 'object']
+			]);
+			expect(labels(await complete('local.secrets.db.<|>'))).to.deep.equal(['password']);
 		});
 
 		it('offers nothing where the shape is not an object or the local is unknown', async () => {
