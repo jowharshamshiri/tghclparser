@@ -42,6 +42,29 @@ export const unwrapSensitive = (value: RuntimeValue<ValueType>): RuntimeValue<Va
     return value;
 };
 
+/**
+ * Marks the values of a document read from a file sops could not decrypt: every string sops stored encrypted, which
+ * it writes as `ENC[...]`, so an editor can show that the value is there without showing it.
+ *
+ * @param value the decoded document.
+ * @returns the same document with its encrypted strings marked.
+ */
+export function markEncrypted(value: RuntimeValue<ValueType>): RuntimeValue<ValueType> {
+    switch (value.type) {
+        case 'string':
+            return typeof value.value === 'string' && value.value.startsWith('ENC[') ? { ...value, encrypted: true } : value;
+        case 'array':
+            return makeArrayValue((value.value as RuntimeValue<ValueType>[]).map(markEncrypted));
+        case 'object':
+        case 'block': {
+            const entries = [...(value.value as Map<string, RuntimeValue<ValueType>>)].map(([key, entry]) => [key, markEncrypted(entry)] as const);
+            return { ...value, value: new Map(entries) } as RuntimeValue<ValueType>;
+        }
+        default:
+            return value;
+    }
+}
+
 // Converts an arbitrary JS value (as produced by JSON.parse, yaml.load, CSV
 // decoding, or an inline function body) into a RuntimeValue tree.
 //

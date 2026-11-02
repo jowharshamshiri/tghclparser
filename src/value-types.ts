@@ -145,6 +145,7 @@ export function valueAt(value: RuntimeValue<ValueType> | undefined, path: string
 export function valueSummary(value: RuntimeValue<ValueType>): string {
 	switch (value.type) {
 		case 'string': {
+			if (value.encrypted) return 'encrypted';
 			const text = JSON.stringify(value.value);
 			return text.length > maximumValueLength ? `${text.slice(0, maximumValueLength)}…` : text;
 		}

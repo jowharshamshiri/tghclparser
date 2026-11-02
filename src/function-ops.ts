@@ -9,6 +9,7 @@ export const FUNCTION_CONTEXT_KEY = 'tghclp.function.context';
 type SerializedRuntimeValue = {
 	type: ValueType | 'sensitive';
 	value: unknown;
+	encrypted?: true;
 };
 
 export type FunctionOperationHandler = (
@@ -31,7 +32,7 @@ function serializeRuntimeValue(value: RuntimeValue<ValueType>): SerializedRuntim
 	if ((value.type as string) === 'sensitive') {
 		return { type: 'sensitive', value: serializeRuntimeValue(value.value as RuntimeValue<ValueType>) };
 	}
-	return { type: value.type, value: value.value };
+	return value.encrypted ? { type: value.type, value: value.value, encrypted: true } : { type: value.type, value: value.value };
 }
 
 function deserializeRuntimeValue(value: SerializedRuntimeValue): RuntimeValue<ValueType> {
@@ -50,7 +51,7 @@ function deserializeRuntimeValue(value: SerializedRuntimeValue): RuntimeValue<Va
 	if (value.type === 'sensitive') {
 		return { type: 'sensitive' as ValueType, value: deserializeRuntimeValue(value.value as SerializedRuntimeValue) as never };
 	}
-	return { type: value.type, value: value.value as never };
+	return value.encrypted ? { type: value.type, value: value.value as never, encrypted: true } : { type: value.type, value: value.value as never };
 }
 
 function serializeArgs(args: RuntimeValue<ValueType>[]): SerializedRuntimeValue[] {
