@@ -70,6 +70,27 @@ describe('dependency resolution', () => {
 		assert.match(result.error ?? '', /Dependency "vpc" has no evaluated outputs/);
 	});
 
+	it('does not take a local nothing reads for a fault when its dependency has no outputs yet', async () => {
+		await write('app/terragrunt.hcl', ['dependency "vpc" {', '  config_path = "../vpc"', '}', '', 'locals {', '  id = dependency.vpc.outputs.id', '}', '', 'inputs = { name = "app" }']);
+		const result = await evaluate(recording().evaluator);
+		assert.equal(result.valid, true, result.error);
+		assert.deepEqual(runtimeValueToPlain(result.inputs!), { name: 'app' });
+	});
+
+	it('reads, in a local nothing reads, a dependency declared in another include', async () => {
+		await write('root.hcl', ['dependency "vpc" {', '  config_path = "../vpc"', '}']);
+		await write('common.hcl', ['locals {', '  id = dependency.vpc.outputs.id', '}']);
+		await write('app/terragrunt.hcl', [
+			'include "common" {', '  path = find_in_parent_folders("common.hcl")', '}',
+			'include "root" {', '  path = find_in_parent_folders("root.hcl")', '}', '',
+			'inputs = { name = "app" }'
+		]);
+		const { evaluator, requests } = recording({ vpc: { id: 'vpc-1' } });
+		const result = await evaluate(evaluator);
+		assert.equal(result.valid, true, result.error);
+		assert.deepEqual(requests.map(request => request.name), ['vpc']);
+	});
+
 	it('reports a dependency declared nowhere the unit merges as a fault, without asking the resolver', async () => {
 		await write('app/terragrunt.hcl', ['dependency "vpc" {', '  config_path = "../vpc"', '}', '', 'inputs = { id = dependency.vcp.outputs.id }']);
 		const { evaluator, requests } = recording();
