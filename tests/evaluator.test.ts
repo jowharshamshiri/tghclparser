@@ -150,6 +150,52 @@ describe('semantic configuration evaluation', () => {
 		}
 	});
 
+	it('reports a broken local nothing reads, in the unit and in a configuration it includes, before a broken input', async () => {
+		const os = await import('node:os');
+		const fs = await import('node:fs/promises');
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-located-')));
+		try {
+			const rootPath = path.join(root, 'root.hcl');
+			await fs.writeFile(rootPath, 'locals {\n  unread = local.gone\n}\n');
+			const unitDir = path.join(root, 'app');
+			await fs.mkdir(unitDir);
+			const unitPath = path.join(unitDir, 'terragrunt.hcl');
+			const content = [
+				'include "root" {',
+				'  path = find_in_parent_folders("root.hcl")',
+				'}',
+				'locals {',
+				'  unread = local.missing',
+				'}',
+				'inputs = {',
+				'  x = local.absent',
+				'}'
+			].join('\n');
+			await fs.writeFile(unitPath, content);
+
+			const result = await evaluator.evaluateUnit(unitPath, content, unitDir);
+			assert.deepEqual(result.problems, [
+				{
+					message: 'Undefined local value "missing"',
+					filePath: unitPath,
+					range: { start: { line: 4, character: 11 }, end: { line: 4, character: 24 } }
+				},
+				{
+					message: 'Undefined local value "gone"',
+					filePath: rootPath,
+					range: { start: { line: 1, character: 11 }, end: { line: 1, character: 21 } }
+				},
+				{
+					message: 'Undefined local value "absent"',
+					filePath: unitPath,
+					range: { start: { line: 7, character: 6 }, end: { line: 7, character: 18 } }
+				}
+			]);
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
 	it('denies semantic evaluation until the caller establishes workspace trust', async () => {
 		const evaluator = new ConfigEvaluator({
 			environmentVariables: { SECRET_VALUE: 'must-not-be-exposed' },

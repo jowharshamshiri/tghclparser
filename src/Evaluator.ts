@@ -1042,14 +1042,42 @@ export class ConfigEvaluator {
 		const inputsAssignment = assignments.find(assignment => String(assignment.value) === 'inputs');
 		let ownInputs: Map<string, RuntimeValue<ValueType>> | null = null;
 		const unresolvedInputs = new Map<string, {file: string; reason: string}>();
+		// Every fault found, so all of them are reported where they are written before the first is fixed. One read by
+		// several expressions is one fault.
+		const faults = new Map<string, LocatedEvaluationError>();
+		const recordFault = (error: LocatedEvaluationError) => {
+			const where = `${error.filePath}:${error.range.start.line}:${error.range.start.character}:${error.message}`;
+			if (!faults.has(where)) faults.set(where, error);
+		};
+		/** Throws the first fault, with the rest in `further`, when there is one. */
+		const throwFaults = () => {
+			if (faults.size === 0) return;
+			const [first, ...rest] = faults.values();
+			first.further.push(...rest);
+			throw first;
+		};
+		if (!skipInputs && unit.scope === scope) {
+			// Terragrunt evaluates every local of a unit and of the configurations it includes, whether anything reads it
+			// or not, and fails on a broken one. They are evaluated only once every include is read, as a local may read
+			// a dependency declared in any of them.
+			for (const owner of configurationScopes(scope)) {
+				for (const name of owner.locals.keys()) {
+					try {
+						await this.resolveLocal(owner, name);
+					} catch (error) {
+						// A value that cannot be known yet is not a fault; whatever reads it reports it.
+						if (error instanceof LocatedEvaluationError) recordFault(error);
+						else if (!(error instanceof UnresolvedRenderValueError)) throw error;
+					}
+				}
+			}
+		}
 		if (inputsAssignment && !skipInputs) {
 			const inputNode = requiredValueNode(inputsAssignment, 'root_assignment_identifier');
 			let value: RuntimeValue<ValueType>;
 			if (inputNode.type === 'object' && !(inputNode.children ?? []).some(child => child.type !== 'attribute')) {
-				// Attribute by attribute, so a fault in one does not hide a fault in the next: every input at fault is
-				// reported, where it is written, before the first is fixed.
+				// Attribute by attribute, so a fault in one does not hide a fault in the next.
 				const entries = new Map<string, RuntimeValue<ValueType>>();
-				const faults = new Map<string, LocatedEvaluationError>();
 				let unresolved: UnresolvedRenderValueError | undefined;
 				for (const child of inputNode.children ?? []) {
 					const keyNode = child.children?.find(part => part.type === 'object_key');
@@ -1062,9 +1090,7 @@ export class ConfigEvaluator {
 						unresolvedInputs.delete(key);
 					} catch (error) {
 						if (error instanceof LocatedEvaluationError) {
-							// Two inputs reading one broken local are one fault.
-							const where = `${error.filePath}:${error.range.start.line}:${error.range.start.character}:${error.message}`;
-							if (!faults.has(where)) faults.set(where, error);
+							recordFault(error);
 							continue;
 						}
 						if (!(error instanceof UnresolvedRenderValueError)) throw error;
@@ -1076,21 +1102,26 @@ export class ConfigEvaluator {
 						unresolvedInputs.set(key, {file: filePath, reason: error.message});
 					}
 				}
-				if (faults.size > 0) {
-					const [first, ...rest] = faults.values();
-					first.further.push(...rest);
-					throw first;
-				}
+				throwFaults();
 				if (unresolved) throw unresolved;
 				value = makeObjectValue(entries);
 			} else {
-				value = await this.evalNode(inputNode, scope);
+				try {
+					value = await this.evalNode(inputNode, scope);
+				} catch (error) {
+					if (error instanceof LocatedEvaluationError) {
+						recordFault(error);
+						throwFaults();
+					}
+					throw error;
+				}
 			}
 			if (value.type !== 'object' && value.type !== 'block') {
 				throw new Error(`inputs in ${filePath} must evaluate to an object`);
 			}
 			ownInputs = new Map(value.value as Map<string, RuntimeValue<ValueType>>);
 		}
+		throwFaults();
 
 		let mergedInputs: Map<string, RuntimeValue<ValueType>> | null = ownInputs ? new Map(ownInputs) : new Map();
 		const mergedUnresolved = new Map(unresolvedInputs);
@@ -2496,6 +2527,20 @@ function deepMergeInputs(child: Map<string, RuntimeValue<ValueType>>, parent: Ma
 		}
 	}
 	return out;
+}
+
+/**
+ * A configuration's scope and the scopes of every configuration it includes or autoincludes, at any depth.
+ *
+ * @param scope the configuration's scope.
+ * @returns the scopes, the configuration's own first.
+ */
+function configurationScopes(scope: Scope): Scope[] {
+	return [
+		scope,
+		...[...scope.includes.values()].flatMap(include => configurationScopes(include.result.scope)),
+		...(scope.autoinclude ? configurationScopes(scope.autoinclude.scope) : [])
+	];
 }
 
 function isObjectValue(value: RuntimeValue<ValueType>): boolean {
