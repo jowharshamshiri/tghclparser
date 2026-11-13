@@ -1527,12 +1527,11 @@ export class ConfigEvaluator {
 			return this.traverse(dependency, parts.slice(2), parts[1]);
 		}
 
-		if (parts.length === 1) {
-			for (let index = scope.comprehension.length - 1; index >= 0; index--) {
-				const frame = scope.comprehension[index];
-				if (frame.has(namespace)) return frame.get(namespace)!;
-			}
-			throw new Error(`Undefined reference "${namespace}"`);
+		for (let index = scope.comprehension.length - 1; index >= 0; index--) {
+			const frame = scope.comprehension[index];
+			if (!frame.has(namespace)) continue;
+			const value = frame.get(namespace)!;
+			return parts.length === 1 ? value : this.traverse(value, parts.slice(1), namespace);
 		}
 
 		throw new Error(`Undefined reference "${parts.join('.')}"`);
@@ -2014,39 +2013,89 @@ export class ConfigEvaluator {
 		}
 	}
 
+	/**
+	 * Evaluates `[for … in … : … if …]`.
+	 *
+	 * @param node the list_comprehension node.
+	 * @param scope the scope the comprehension is written in.
+	 * @returns the body's value for each element that passes the condition, in order.
+	 */
 	private async evalListComprehension(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
-		const [identifier, collection, expr] = node.children ?? [];
-		const collectionValue = await this.evalNode(collection, scope);
 		const results: RuntimeValue<ValueType>[] = [];
-		for (const [, item] of iterateValue(collectionValue)) {
-			const frame = new Map<string, RuntimeValue<ValueType>>();
-			frame.set(String(identifier?.value ?? ''), item);
-			scope.comprehension.push(frame);
-			try {
-				results.push(await this.evalNode(expr, scope));
-			} finally {
-				scope.comprehension.pop();
-			}
-		}
+		await this.forEachComprehensionElement(node, 1, scope, async ([expr]) => {
+			results.push(await this.evalNode(expr, scope));
+		});
 		return makeArrayValue(results);
 	}
 
+	/**
+	 * Evaluates `{for … in … : key => value if …}`, and its `...` grouping form.
+	 *
+	 * @param node the map_comprehension node, whose value is `...` when it groups.
+	 * @param scope the scope the comprehension is written in.
+	 * @returns an object of the produced keys; with grouping, each key holds a list of its values in order.
+	 * @throws Error when two elements produce the same key and the comprehension does not group.
+	 */
 	private async evalMapComprehension(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
-		const [identifier, collection, keyNode, valueNode] = node.children ?? [];
-		const collectionValue = await this.evalNode(collection, scope);
+		const grouping = node.value === '...';
 		const map = new Map<string, RuntimeValue<ValueType>>();
-		for (const [, item] of iterateValue(collectionValue)) {
+		const groups = new Map<string, RuntimeValue<ValueType>[]>();
+		await this.forEachComprehensionElement(node, 2, scope, async ([keyNode, valueNode]) => {
+			const key = coerceToString(await this.evalNode(keyNode, scope));
+			const value = await this.evalNode(valueNode, scope);
+			if (grouping) {
+				const group = groups.get(key) ?? [];
+				group.push(value);
+				groups.set(key, group);
+			} else {
+				if (map.has(key)) throw new Error(`Duplicate key "${key}" in a for expression; use "..." to group values by key`);
+				map.set(key, value);
+			}
+		});
+		if (grouping) for (const [key, group] of groups) map.set(key, makeArrayValue(group));
+		return makeObjectValue(map);
+	}
+
+	/**
+	 * Binds a comprehension's variables to each element of its collection in turn, and runs `each` for the elements
+	 * that pass its `if` condition. With two variables, the first is the element's index in a list or its key in an
+	 * object, and the second its value; with one, it is the value.
+	 *
+	 * @param node a list_comprehension or map_comprehension node: its variables, the collection, the body expressions,
+	 *   then the condition if there is one.
+	 * @param bodyLength how many body expressions follow the collection: 1 for a list, 2 for a map's key and value.
+	 * @param scope the scope the comprehension is written in.
+	 * @param each called with the body expressions while the element's variables are in scope.
+	 */
+	private async forEachComprehensionElement(
+		node: TNode,
+		bodyLength: number,
+		scope: Scope,
+		each: (body: TNode[]) => Promise<void>
+	): Promise<void> {
+		const children = node.children ?? [];
+		const variables = children[1]?.type === 'identifier' ? children.slice(0, 2) : children.slice(0, 1);
+		const [collection, ...rest] = children.slice(variables.length);
+		const body = rest.slice(0, bodyLength);
+		const condition = rest[bodyLength];
+		const collectionValue = await this.evalNode(collection, scope);
+		for (const [key, item] of iterateValue(collectionValue)) {
 			const frame = new Map<string, RuntimeValue<ValueType>>();
-			frame.set(String(identifier?.value ?? ''), item);
+			if (variables.length === 2) {
+				frame.set(
+					String(variables[0].value ?? ''),
+					collectionValue.type === 'array' ? makeNumberValue(Number(key)) : makeStringValue(key)
+				);
+			}
+			frame.set(String(variables[variables.length - 1].value ?? ''), item);
 			scope.comprehension.push(frame);
 			try {
-				const key = coerceToString(await this.evalNode(keyNode, scope));
-				map.set(key, await this.evalNode(valueNode, scope));
+				if (condition && !coerceToBool(await this.evalNode(condition, scope))) continue;
+				await each(body);
 			} finally {
 				scope.comprehension.pop();
 			}
 		}
-		return makeObjectValue(map);
 	}
 
 	private async evalSplat(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
