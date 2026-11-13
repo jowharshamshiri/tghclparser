@@ -47,6 +47,75 @@ describe('semantic configuration evaluation', () => {
 		assert.equal(result.unresolved, undefined);
 	});
 
+	describe('for expressions', () => {
+		const forInputs = async (expression: string): Promise<unknown> => {
+			const content = [
+				'locals {',
+				'  containers = { A = { provider = "AWS" }, B = { provider = "GCP" } }',
+				'}',
+				'inputs = {',
+				`  x = ${expression}`,
+				'}'
+			].join('\n');
+			const result = await evaluator.evaluateUnit(configPath, content, process.cwd());
+			assert.equal(result.error, undefined);
+			return (runtimeValueToPlain(result.inputs!) as Record<string, unknown>).x;
+		};
+
+		it('reads an attribute of the variable', async () => {
+			assert.deepEqual(
+				await forInputs('[for c in values(local.containers) : { name = c.provider }]'),
+				[{ name: 'AWS' }, { name: 'GCP' }]
+			);
+		});
+
+		it('binds the key and value of an object', async () => {
+			assert.deepEqual(
+				await forInputs('[for k, c in local.containers : "${k}=${c.provider}"]'),
+				['A=AWS', 'B=GCP']
+			);
+		});
+
+		it('binds the index and value of a list', async () => {
+			assert.deepEqual(await forInputs('{for i, v in ["a", "b"] : v => i}'), { a: 0, b: 1 });
+		});
+
+		it('keeps only the elements that pass the condition', async () => {
+			assert.deepEqual(await forInputs('[for v in [1, 2, 3] : v if v > 1]'), [2, 3]);
+			assert.deepEqual(
+				await forInputs('{for k, c in local.containers : k => c.provider if k != "A"}'),
+				{ B: 'GCP' }
+			);
+		});
+
+		it('groups values by key with ...', async () => {
+			assert.deepEqual(
+				await forInputs('{for v in ["a", "b", "a"] : v => v ... if v != "b"}'),
+				{ a: ['a', 'a'] }
+			);
+		});
+
+		it('rejects a duplicate key without ...', async () => {
+			const result = await evaluator.evaluateUnit(
+				configPath,
+				'inputs = { x = {for v in ["a", "a"] : v => v} }',
+				process.cwd()
+			);
+			assert.equal(result.valid, false);
+			assert.match(result.error ?? '', /Duplicate key "a"/);
+		});
+
+		it('reports a missing attribute of the variable', async () => {
+			const result = await evaluator.evaluateUnit(
+				configPath,
+				'inputs = { x = [for c in [{ a = 1 }] : c.b] }',
+				process.cwd()
+			);
+			assert.equal(result.valid, false);
+			assert.match(result.error ?? '', /Missing attribute "b" on "c"/);
+		});
+	});
+
 	it('places a missing local and a missing attribute where they are written, and reports both', async () => {
 		const content = [
 			'locals {',
