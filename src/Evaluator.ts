@@ -1812,6 +1812,53 @@ export class ConfigEvaluator {
 		}
 	}
 
+	/**
+	 * Evaluates every operand of an expression. One that cannot be known yet does not stop the rest, so a fault
+	 * beside it, such as `local.nope` in `"${dependency.x.outputs.y}-${local.nope}"`, is still found.
+	 *
+	 * @param nodes the operands, in the order they are written.
+	 * @param scope the scope of the file they are written in.
+	 * @param concurrent evaluate them at once, as a list's elements are, rather than in order.
+	 * @returns their values.
+	 * @throws the first fault among them, else the first value that cannot be known yet.
+	 */
+	private async evalOperands(nodes: (TNode | undefined)[], scope: Scope, concurrent = false): Promise<RuntimeValue<ValueType>[]> {
+		return this.settleOperands(nodes.map(node => () => this.evalNode(node, scope)), concurrent);
+	}
+
+	/**
+	 * Runs every step, carrying on past one that cannot be known yet and stopping at the first fault.
+	 *
+	 * @param steps the steps, in the order they are written.
+	 * @param concurrent run them at once rather than in order.
+	 * @returns their results.
+	 * @throws the first fault among them, else the first value that cannot be known yet.
+	 */
+	private async settleOperands<T>(steps: (() => Promise<T>)[], concurrent = false): Promise<T[]> {
+		const values: T[] = [];
+		let unresolved: UnresolvedRenderValueError | undefined;
+		const settle = (error: unknown) => {
+			if (!(error instanceof UnresolvedRenderValueError)) throw error;
+			unresolved ??= error;
+		};
+		if (concurrent) {
+			for (const result of await Promise.allSettled(steps.map(step => step()))) {
+				if (result.status === 'fulfilled') values.push(result.value);
+				else settle(result.reason);
+			}
+		} else {
+			for (const step of steps) {
+				try {
+					values.push(await step());
+				} catch (error) {
+					settle(error);
+				}
+			}
+		}
+		if (unresolved) throw unresolved;
+		return values;
+	}
+
 	private async evalExpression(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
 		switch (node.type) {
 			case 'string_lit':
@@ -1823,7 +1870,7 @@ export class ConfigEvaluator {
 			case 'null_lit':
 				return makeNullValue();
 			case 'array_lit':
-				return makeArrayValue(await Promise.all((node.children ?? []).map(child => this.evalNode(child, scope))));
+				return makeArrayValue(await this.evalOperands(node.children ?? [], scope, true));
 			case 'object':
 				return this.evalObject(node, scope);
 			case 'interpolated_string':
@@ -1857,11 +1904,12 @@ export class ConfigEvaluator {
 				const member = String(node.children?.[1]?.value ?? '');
 				return this.traverse(await this.evalNode(node.children?.[0], scope), member.split('.'), member);
 			}
-			case 'index_expression':
-				return this.indexValue(await this.evalNode(node.children?.[0], scope), await this.evalNode(node.children?.[1], scope));
+			case 'index_expression': {
+				const [collection, index] = await this.evalOperands([node.children?.[0], node.children?.[1]], scope);
+				return this.indexValue(collection, index);
+			}
 			case 'range_expression': {
-				const start = await this.evalNode(node.children?.[0], scope);
-				const end = await this.evalNode(node.children?.[1], scope);
+				const [start, end] = await this.evalOperands([node.children?.[0], node.children?.[1]], scope);
 				if (start.type !== 'number' || end.type !== 'number') throw new Error('range requires number arguments');
 				const items: RuntimeValue<ValueType>[] = [];
 				for (let value = Number(start.value); value < Number(end.value); value++) items.push(makeNumberValue(value));
@@ -1939,43 +1987,47 @@ export class ConfigEvaluator {
 	}
 
 	private async evalObject(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
-		const map = new Map<string, RuntimeValue<ValueType>>();
-		for (const child of node.children ?? []) {
+		type Entry = { key: string; value: RuntimeValue<ValueType>; inherited: boolean };
+		const members = await this.settleOperands((node.children ?? []).flatMap((child): (() => Promise<Entry[]>)[] => {
 			if (child.type === 'attribute') {
-				const keyNode = child.children?.find(c => c.type === 'object_key');
-				const key = keyNode
-					? coerceToString(await this.evalNode(keyNode.children?.[0], scope))
-					: String(child.value);
-				const valueNode = child.children?.find(c => c.type !== 'attribute_identifier' && c.type !== 'object_key');
-				map.set(key, await this.evalNode(valueNode, scope));
-			} else if (child.type === 'inheritance') {
-				const source = await this.evalNode(child.children?.[0], scope);
-				if (source.type !== 'object' && source.type !== 'block') throw new Error('inherit requires an object source');
-				for (const [key, value] of source.value as Map<string, RuntimeValue<ValueType>>) {
-					if (!map.has(key)) map.set(key, value);
-				}
+				return [async () => {
+					const keyNode = child.children?.find(c => c.type === 'object_key');
+					const valueNode = child.children?.find(c => c.type !== 'attribute_identifier' && c.type !== 'object_key');
+					if (!keyNode) return [{ key: String(child.value), value: await this.evalNode(valueNode, scope), inherited: false }];
+					const [key, value] = await this.evalOperands([keyNode.children?.[0], valueNode], scope);
+					return [{ key: coerceToString(key), value, inherited: false }];
+				}];
 			}
+			if (child.type === 'inheritance') {
+				return [async () => {
+					const source = await this.evalNode(child.children?.[0], scope);
+					if (source.type !== 'object' && source.type !== 'block') throw new Error('inherit requires an object source');
+					return [...(source.value as Map<string, RuntimeValue<ValueType>>)].map(([key, value]) => ({ key, value, inherited: true }));
+				}];
+			}
+			return [];
+		}));
+		const map = new Map<string, RuntimeValue<ValueType>>();
+		for (const { key, value, inherited } of members.flat()) {
+			if (!inherited || !map.has(key)) map.set(key, value);
 		}
 		return makeObjectValue(map);
 	}
 
 	private async evalInterpolatedString(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
-		let output = '';
-		for (const child of node.children ?? []) {
-			if (child.type === 'string_lit') {
-				output += String(child.value ?? '');
-			} else if (child.type === 'interpolation') {
-				output += coerceToString(await this.evalNode(child.children?.[0], scope));
-			} else if (child.type === 'if_directive' || child.type === 'for_directive' || child.type === 'else_directive' || child.type === 'endif_directive') {
-				throw new Error('Template directives inside quoted strings are not supported');
+		const parts = await this.settleOperands((node.children ?? []).flatMap((child): (() => Promise<string>)[] => {
+			if (child.type === 'string_lit') return [async () => String(child.value ?? '')];
+			if (child.type === 'interpolation') return [async () => coerceToString(await this.evalNode(child.children?.[0], scope))];
+			if (child.type === 'if_directive' || child.type === 'for_directive' || child.type === 'else_directive' || child.type === 'endif_directive') {
+				return [async () => { throw new Error('Template directives inside quoted strings are not supported'); }];
 			}
-		}
-		return makeStringValue(output);
+			return [];
+		}));
+		return makeStringValue(parts.join(''));
 	}
 
 	private async evalComparison(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
-		const left = unwrapSensitive(await this.evalNode(node.children?.[0], scope));
-		const right = unwrapSensitive(await this.evalNode(node.children?.[1], scope));
+		const [left, right] = (await this.evalOperands([node.children?.[0], node.children?.[1]], scope)).map(unwrapSensitive);
 		const operator = node.value === undefined ? '' : String(node.value);
 		const a = comparisonValue(left);
 		const b = comparisonValue(right);
@@ -1999,8 +2051,7 @@ export class ConfigEvaluator {
 			if (value.type !== 'number') throw new Error('Unary minus requires a number');
 			return makeNumberValue(-Number(value.value));
 		}
-		const left = await this.evalNode(node.children?.[0], scope);
-		const right = await this.evalNode(node.children?.[1], scope);
+		const [left, right] = await this.evalOperands([node.children?.[0], node.children?.[1]], scope);
 		if (left.type !== 'number' || right.type !== 'number') throw new Error('Arithmetic requires numbers');
 		const a = Number(left.value);
 		const b = Number(right.value);
@@ -2088,11 +2139,7 @@ export class ConfigEvaluator {
 		// definition-time shadow checking rejects that, so the order below can
 		// never mask a built-in.
 		const inline = this.findInlineFunction(scope, name);
-		if (inline) {
-			const evaluatedArgs: RuntimeValue<ValueType>[] = [];
-			for (const arg of args) evaluatedArgs.push(await this.evalNode(arg, scope));
-			return this.callInlineFunction(inline, evaluatedArgs);
-		}
+		if (inline) return this.callInlineFunction(inline, await this.evalOperands(args, scope));
 
 		if (!this.schema.getFunctionDefinition(name)) throw new Error(`Unknown function "${name}"`);
 		if (name === 'deep_merge' && !this.options.experiments?.includes('deep-merge')) {
@@ -2102,9 +2149,7 @@ export class ConfigEvaluator {
 			throw new Error(`Function "${name}" has no evaluator`);
 		}
 
-		const evaluatedArgs: RuntimeValue<ValueType>[] = [];
-		for (const arg of args) evaluatedArgs.push(await this.evalNode(arg, scope));
-
+		const evaluatedArgs = await this.evalOperands(args, scope);
 		const context = await this.makeContext(scope);
 		return this.schema.getFunctionRegistry().evaluateFunction(name, evaluatedArgs, context);
 	}

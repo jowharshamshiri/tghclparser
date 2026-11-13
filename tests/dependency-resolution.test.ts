@@ -70,6 +70,36 @@ describe('dependency resolution', () => {
 		assert.match(result.error ?? '', /Dependency "vpc" has no evaluated outputs/);
 	});
 
+	it('reports a fault written beside a dependency with no outputs yet', async () => {
+		const cases: Record<string, string> = {
+			template: '"${dependency.vpc.outputs.id}-${local.nope}"',
+			call: 'format("%s-%s", dependency.vpc.outputs.id, local.nope)',
+			list: '[dependency.vpc.outputs.id, local.nope]',
+			object: '{ id = dependency.vpc.outputs.id, name = local.nope }',
+			arithmetic: 'dependency.vpc.outputs.count + local.nope',
+			comparison: 'dependency.vpc.outputs.id == local.nope',
+			index: 'dependency.vpc.outputs.ids[local.nope]'
+		};
+		for (const [name, expression] of Object.entries(cases)) {
+			await write('app/terragrunt.hcl', ['dependency "vpc" {', '  config_path = "../vpc"', '}', '', `inputs = { x = ${expression} }`]);
+			const result = await evaluate(recording().evaluator);
+			assert.equal(result.unresolved, undefined, name);
+			assert.match(result.error ?? '', /Undefined local value "nope"/, name);
+		}
+	});
+
+	it('reports an expression that only reads dependencies with no outputs yet as unresolved', async () => {
+		await write('app/terragrunt.hcl', ['dependency "vpc" {', '  config_path = "../vpc"', '}', '', 'inputs = { x = "${dependency.vpc.outputs.id}-${dependency.vpc.outputs.name}-${upper("a")}" }']);
+		const result = await evaluate(recording().evaluator);
+		assert.equal(result.unresolved, true, result.error);
+	});
+
+	it('does not evaluate the branch a condition with no outputs yet would choose', async () => {
+		await write('app/terragrunt.hcl', ['dependency "vpc" {', '  config_path = "../vpc"', '}', '', 'inputs = { x = dependency.vpc.outputs.id == "" ? local.nope : "ok" }']);
+		const result = await evaluate(recording().evaluator);
+		assert.equal(result.unresolved, true, result.error);
+	});
+
 	it('does not take a local nothing reads for a fault when its dependency has no outputs yet', async () => {
 		await write('app/terragrunt.hcl', ['dependency "vpc" {', '  config_path = "../vpc"', '}', '', 'locals {', '  id = dependency.vpc.outputs.id', '}', '', 'inputs = { name = "app" }']);
 		const result = await evaluate(recording().evaluator);

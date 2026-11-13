@@ -1076,6 +1076,79 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(made.root, {recursive: true, force: true});
 	});
 
+	it('validates offline without reading a dependency\'s outputs', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const made = await workspaceWithUnappliedDependency(dependencyBlock([]));
+		const env = {...process.env, TG_TF_PATH: path.join(made.root, 'no-such-binary')};
+		const online = spawnSync(process.execPath, [cli, 'hcl', 'validate', '--working-dir', made.consumer],
+			{cwd: made.consumer, encoding: 'utf8', env});
+		expect(online.status).to.equal(1, online.stderr);
+		expect(online.stderr).to.contain('output command failed');
+
+		const offline = spawnSync(process.execPath, [cli, 'hcl', 'validate', '--offline', '--working-dir', made.consumer],
+			{cwd: made.consumer, encoding: 'utf8', env});
+		expect(offline.status).to.equal(0, offline.stderr);
+		expect(offline.stdout).to.equal('');
+		expect(offline.stderr).to.equal('');
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
+	it('validates offline a unit that reads a sops file it cannot decrypt', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const made = await workspaceWithSops([
+			'locals {',
+			'  secrets = yamldecode(sops_decrypt_file("${get_terragrunt_dir()}/locked.sops.yaml"))',
+			'}',
+			'inputs = {',
+			'  token = local.secrets.token',
+			'}'
+		]);
+		await fs.writeFile(path.join(made.root, 'locked.sops.yaml'),
+			'token: ENC[AES256_GCM,data:abc,type:str]\nsops:\n  version: 3.9.0\n');
+		const args = (offline: boolean) => [cli, 'hcl', 'validate', ...(offline ? ['--offline'] : []), '--working-dir', made.root];
+		const env = made.env;
+		await fs.writeFile(path.join(made.root, 'bin', 'sops'),
+			'#!/bin/sh\necho "Failed to get the data key required to decrypt the SOPS file." >&2\nexit 1\n', {mode: 0o755});
+
+		const online = spawnSync(process.execPath, args(false), {cwd: made.root, encoding: 'utf8', env});
+		expect(online.status).to.equal(1, online.stderr);
+		expect(online.stderr).to.contain('Failed to get the data key');
+
+		const offline = spawnSync(process.execPath, args(true), {cwd: made.root, encoding: 'utf8', env});
+		expect(offline.status).to.equal(0, offline.stderr);
+		expect(offline.stderr).to.equal('');
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
+	it('reports offline a fault written beside a dependency output', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const body = dependencyBlock([]);
+		body[body.indexOf('  seen = dependency.producer.outputs.answer')] = '  seen = "${dependency.producer.outputs.answer}-${local.missing}"';
+		const made = await workspaceWithUnappliedDependency(body);
+		const result = spawnSync(process.execPath, [cli, 'hcl', 'validate', '--offline', '--working-dir', made.consumer],
+			{cwd: made.consumer, encoding: 'utf8'});
+		expect(result.status).to.equal(1, result.stderr);
+		expect(result.stderr).to.contain('Undefined local value "missing"');
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
+	it('still reports a fault in the configuration when validating offline', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const made = await workspaceWithUnappliedDependency([
+			'locals {',
+			'  name = local.missing',
+			'}',
+			'inputs = {',
+			'  seen = local.name',
+			'}'
+		]);
+		const result = spawnSync(process.execPath, [cli, 'hcl', 'validate', '--offline', '--working-dir', made.consumer],
+			{cwd: made.consumer, encoding: 'utf8'});
+		expect(result.status).to.equal(1, result.stderr);
+		expect(result.stderr).to.contain('missing');
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
 	it('merges included inputs without reviving an unresolved value', async () => {
 		const cli = path.resolve('dist/cli.cjs');
 		const made = await workspaceWithUnappliedDependency([
