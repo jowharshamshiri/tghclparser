@@ -26,7 +26,15 @@ interface BlockFrame {
 	label?: string;
 	/** The key the brace or bracket is assigned to, when `key =` precedes it on the same line. */
 	key?: string;
+	/** The offset of the opening brace or bracket. */
+	open: number;
 }
+
+/**
+ * @param frame a frame enclosing the cursor.
+ * @returns true when the frame is an object or list value rather than a block or `inputs`.
+ */
+const isValueFrame = (frame: BlockFrame): boolean => frame.type === '<expression>' || frame.type === '<array>';
 
 /** Matches a line that assigns a value to a bare or quoted key, up to the `=`, capturing the key either way. */
 const keyPrefix = /^\s*(?:"([^"]*)"|([\w-]+))\s*=\s*$/;
@@ -63,14 +71,17 @@ export class CompletionsProvider {
 
 		if (structural !== undefined && !context.inString) {
 			const current = context.blocks.at(-1);
+			const inInputs = context.blocks.some(frame => frame.type === '<inputs>');
 			if (!current) {
 				completions.push(...this.blockItems(this.schema.getRootBlockDefinitions(document.getUri()), structural));
 				completions.push(...this.attributeItems(this.schema.getRootAttributeDefinitions(document.getUri()), structural));
 			} else if (current.type === '<inputs>') {
 				completions.push(...this.moduleVariableItems(document, structural));
-			} else if (current.type === '<expression>') {
-				completions.push(...this.nestedInputItems(document, context.blocks, structural));
-			} else if (current.type !== '<array>') {
+			} else if (inInputs) {
+				if (current.type === '<expression>') completions.push(...this.nestedInputItems(document, context.blocks, structural));
+			} else if (context.blocks.some(isValueFrame)) {
+				completions.push(...this.objectKeyItems(context.blocks, documentText, document.getUri(), structural));
+			} else {
 				const definition = this.definitionForFrame(current, context.blocks.at(-2), document.getUri());
 				if (definition) {
 					completions.push(...this.attributeItems(definition.attributes ?? [], structural));
@@ -200,27 +211,19 @@ export class CompletionsProvider {
 			if (char === '{' && beforeCursor[index - 1] !== '$') {
 				const prefix = linePrefix.slice(0, -1);
 				const header = prefix.match(/^\s*([\w-]+)(?:\s+"([^"]+)")?\s*$/);
-				if (header) blocks.push({ type: header[1], label: header[2] });
-				else if (/^\s*inputs\s*=\s*$/.test(prefix)) blocks.push({ type: '<inputs>' });
-				else blocks.push({ type: '<expression>', key: this.keyOf(prefix) });
+				if (header) blocks.push({ type: header[1], label: header[2], open: index });
+				else if (/^\s*inputs\s*=\s*$/.test(prefix)) blocks.push({ type: '<inputs>', open: index });
+				else blocks.push({ type: '<expression>', key: this.keyOf(prefix), open: index });
 			}
-			if (char === '[') blocks.push({ type: '<array>', key: this.keyOf(linePrefix.slice(0, -1)) });
+			if (char === '[') blocks.push({ type: '<array>', key: this.keyOf(linePrefix.slice(0, -1)), open: index });
 			if (char === ']' && blocks.at(-1)?.type === '<array>') blocks.pop();
 			if (char === '}' && blocks.length > 0) blocks.pop();
-		}
-
-		// Expression and array frames only matter inside `inputs = {`, where they trace the path from the module
-		// variable to the value being written. Elsewhere they are dropped so the enclosing block's definition still
-		// applies.
-		const frames: BlockFrame[] = [];
-		for (const block of blocks) {
-			if ((block.type !== '<expression>' && block.type !== '<array>') || frames.some(frame => frame.type === '<inputs>')) frames.push(block);
 		}
 
 		return {
 			beforeCursor,
 			lineBeforeCursor: beforeCursor.slice(beforeCursor.lastIndexOf('\n') + 1),
-			blocks: frames,
+			blocks,
 			inComment: inLineComment || inBlockComment,
 			inString
 		};
@@ -256,6 +259,105 @@ export class CompletionsProvider {
 		if (!parent) return this.schema.getRootBlockDefinitions(uri).find(block => block.type === frame.type);
 		const parentDefinition = this.schema.getBlockDefinition(parent.type);
 		return parentDefinition?.blocks?.find(block => block.type === frame.type) ?? this.schema.getBlockDefinition(frame.type);
+	}
+
+	/**
+	 * Keys for the object value the cursor is writing outside `inputs`, found by walking the frames since the
+	 * innermost block, or since the root, down the schema: each keyed object frame selects a key of the value
+	 * before it. A list, a keyless object, a key the schema does not describe, or the names of a map offer nothing.
+	 *
+	 * @param blocks the frames enclosing the cursor, outermost first.
+	 * @param text the full text of the document, which selector values and present keys are read from.
+	 * @param uri the document's URI, which picks the root definitions.
+	 * @param partial the word typed so far, which item names must start with.
+	 * @returns one item per key of the object at the cursor not already written.
+	 */
+	private objectKeyItems(blocks: BlockFrame[], text: string, uri: string, partial: string): CompletionItem[] {
+		const start = blocks.findIndex(isValueFrame);
+		const owner = blocks[start - 1];
+		const frames = blocks.slice(start);
+		if (frames.some(frame => frame.type !== '<expression>' || frame.key === undefined)) return [];
+
+		const first = frames[0].key!;
+		let attribute = owner
+			? this.definitionForFrame(owner, blocks[start - 2], uri)?.attributes?.find(candidate => candidate.name === first)
+			: this.schema.getRootAttributeDefinition(uri, first);
+		let enclosing: BlockFrame | undefined = owner;
+		for (const [index, frame] of frames.slice(1).entries()) {
+			if (!attribute) return [];
+			attribute = this.schema.getValueKey(attribute, frame.key!, this.selectorValue(attribute, text, enclosing, frames[index]));
+			enclosing = frames[index];
+		}
+		if (!attribute || attribute.elementsOf) return [];
+
+		const keys = this.schema.getValueKeys(attribute, this.selectorValue(attribute, text, enclosing, frames.at(-1)!));
+		const present = this.membersOf(text, frames.at(-1));
+		return this.attributeItems(keys.filter(key => !present.has(key.name)), partial);
+	}
+
+	/**
+	 * @param attribute the attribute whose value is being written.
+	 * @param text the full text of the document.
+	 * @param enclosing the frame the attribute is written in, undefined at the root.
+	 * @param frame the frame of the attribute's value.
+	 * @returns the plain string written for the attribute's variant selector, or undefined when it has none.
+	 */
+	private selectorValue(attribute: AttributeDefinition, text: string, enclosing: BlockFrame | undefined, frame: BlockFrame): string | undefined {
+		const variants = attribute.variants;
+		return variants && this.membersOf(text, variants.scope === 'sibling' ? enclosing : frame).get(variants.selector);
+	}
+
+	/**
+	 * The keys written directly in a block body or an object, read from tokens so a body that does not parse yet
+	 * still gives them.
+	 *
+	 * @param text the full text of the document.
+	 * @param frame the block or object, undefined for the root of the document.
+	 * @returns each key, mapped to its value when that is a plain quoted string and to undefined otherwise.
+	 */
+	private membersOf(text: string, frame: BlockFrame | undefined): Map<string, string | undefined> {
+		const members = new Map<string, string | undefined>();
+		const tokens = scanHclTokens(text, frame ? { start: frame.open + 1 } : {});
+		const opens = new Set(['OBrace', 'OBrack', 'OParen', 'TemplateInterp', 'TemplateControl', 'OHeredoc']);
+		const closes = new Set(['CBrace', 'CBrack', 'CParen', 'TemplateSeqEnd', 'CHeredoc']);
+		const separators = new Set(['Newline', 'Comma', 'Comment']);
+		let depth = 0;
+		for (let index = 0; index < tokens.length; index++) {
+			const token = tokens[index];
+			if (opens.has(token.type)) depth++;
+			else if (closes.has(token.type)) {
+				if (depth === 0) break;
+				depth--;
+			} else if (depth === 0 && token.type === 'Equal') {
+				const key = this.keyBefore(tokens, index);
+				if (key === undefined) continue;
+				const [open, literal, close, after] = tokens.slice(index + 1, index + 5);
+				const plain = open?.type === 'OQuote' && literal?.type === 'QuotedLit' && close?.type === 'CQuote'
+					&& (after === undefined || separators.has(after.type) || after.type === 'CBrace' || after.type === 'EOF');
+				members.set(key, plain ? literal.text : undefined);
+			}
+		}
+		return members;
+	}
+
+	/**
+	 * @param tokens the tokens of a body.
+	 * @param equal the index of an `=` token.
+	 * @returns the bare or quoted key the `=` follows when it starts a statement, else undefined.
+	 */
+	private keyBefore(tokens: HclToken[], equal: number): string | undefined {
+		const previous = tokens[equal - 1];
+		if (previous?.type === 'Ident') return this.startsMember(tokens[equal - 2]) ? previous.text : undefined;
+		if (previous?.type !== 'CQuote' || tokens[equal - 2]?.type !== 'QuotedLit' || tokens[equal - 3]?.type !== 'OQuote') return undefined;
+		return this.startsMember(tokens[equal - 4]) ? tokens[equal - 2].text : undefined;
+	}
+
+	/**
+	 * @param token the token before a key, undefined at the start of the scan.
+	 * @returns true when a key can start after it.
+	 */
+	private startsMember(token: HclToken | undefined): boolean {
+		return token === undefined || ['Newline', 'Comma', 'Comment', 'OBrace'].includes(token.type);
 	}
 
 	private nestedBlocks(definition: BlockDefinition, frame: BlockFrame, parent?: BlockFrame): BlockDefinition[] {

@@ -145,3 +145,161 @@ unit "app" {
 		}
 	});
 });
+
+describe('object value key hovers', () => {
+	const hoverAt = async (content: string, line: number, character: number) => {
+		const document = new ParsedDocument(new Workspace(), 'file:///repo/app/terragrunt.hcl', content);
+		return (await document.getHoverInfo({ line, character }))?.value;
+	};
+	const blockForm = `remote_state {
+  backend = "s3"
+  config = {
+    bucket = "state"
+    skip_bucket_versioning = true
+    assume_role = {
+      role_arn = "arn:aws:iam::123456789012:role/state"
+    }
+  }
+  generate = {
+    path      = "backend.tf"
+    if_exists = "overwrite_terragrunt"
+  }
+}
+`;
+
+	it('documents a backend key by the backend written beside config', async () => {
+		const bucket = await hoverAt(blockForm, 3, 5);
+		expect(bucket).to.include('## bucket Attribute');
+		expect(bucket).to.include('The name of the S3 bucket.');
+		expect(await hoverAt(blockForm, 4, 5)).to.include('Used by Terragrunt, not passed to the backend.');
+		expect(await hoverAt(blockForm, 6, 7)).to.include('## role_arn Attribute');
+	});
+
+	it('documents the keys of remote_state generate, and lists them on generate itself', async () => {
+		const ifExists = await hoverAt(blockForm, 11, 5);
+		expect(ifExists).to.include('## if_exists Attribute');
+		expect(ifExists).to.include('`overwrite_terragrunt`');
+		const generate = await hoverAt(blockForm, 9, 3);
+		expect(generate).to.include('### Properties');
+		expect(generate).to.include('**path** (required)');
+	});
+
+	it('documents keys inside the attribute form of remote_state', async () => {
+		const content = 'remote_state = {\n  backend = "gcs"\n  config = {\n    prefix = "app"\n  }\n}\n';
+		expect(await hoverAt(content, 1, 3)).to.include('## backend Attribute');
+		expect(await hoverAt(content, 3, 5)).to.include('The directory where state files will be saved inside the bucket.');
+	});
+
+	it('documents an entry of the generate map and the keys inside it', async () => {
+		const content = 'generate = {\n  provider = {\n    if_exists = "overwrite_terragrunt"\n  }\n}\n';
+		expect(await hoverAt(content, 1, 3)).to.include('## provider Attribute');
+		const ifExists = await hoverAt(content, 2, 5);
+		expect(ifExists).to.include('## if_exists Attribute');
+		expect(ifExists).to.include('`overwrite_terragrunt`');
+	});
+
+	it('documents nothing for a key the schema does not describe', async () => {
+		expect(await hoverAt('remote_state {\n  backend = "nope"\n  config = {\n    bucket = "state"\n  }\n}\n', 3, 5)).to.equal(undefined);
+		expect(await hoverAt('dependency "vpc" {\n  config_path = "../vpc"\n  mock_outputs = {\n    vpc_id = "vpc-1"\n  }\n}\n', 3, 5)).to.equal(undefined);
+	});
+});
+
+describe('object value key diagnostics', () => {
+	const unit = 'file:///repo/app/terragrunt.hcl';
+
+	it('accepts the keys the schema lists for the backend', () => {
+		expect(diagnosticsFor(unit, `remote_state {
+  backend = "s3"
+  config = {
+    bucket                 = "state"
+    "region"               = "eu-west-2"
+    skip_bucket_versioning = true
+    assume_role = {
+      role_arn = "arn:aws:iam::123456789012:role/state"
+    }
+    (local.extra) = "x"
+  }
+  generate = {
+    path      = "backend.tf"
+    if_exists = "overwrite_terragrunt"
+  }
+}`)).to.deep.equal([]);
+	});
+
+	it('reports a key the backend does not take, nested keys and generate keys', () => {
+		const messages = diagnosticsFor(unit, `remote_state {
+  backend = "s3"
+  config = {
+    bukcet = "state"
+    assume_role = {
+      role_ar = "arn"
+    }
+  }
+  generate = {
+    pth = "backend.tf"
+  }
+}`);
+		expect(messages).to.include('Unknown key "bukcet" in remote_state.config for backend "s3"');
+		expect(messages).to.include('Unknown key "role_ar" in remote_state.config.assume_role');
+		expect(messages).to.include('Unknown key "pth" in remote_state.generate');
+	});
+
+	it('reports a key of another backend', () => {
+		expect(diagnosticsFor(unit, 'remote_state {\n  backend = "gcs"\n  config = {\n    dynamodb_table = "locks"\n  }\n}'))
+			.to.deep.equal(['Unknown key "dynamodb_table" in remote_state.config for backend "gcs"']);
+	});
+
+	it('checks the attribute form of remote_state and the generate map', () => {
+		const messages = diagnosticsFor(unit, `remote_state = {
+  backend = "gcs"
+  bakend  = "gcs"
+  config = {
+    prefx = "app"
+  }
+}
+generate = {
+  provider = {
+    path     = "provider.tf"
+    contnets = ""
+  }
+}`);
+		expect(messages).to.include('Unknown key "bakend" in remote_state');
+		expect(messages).to.include('Unknown key "prefx" in remote_state.config for backend "gcs"');
+		expect(messages).to.include('Unknown key "contnets" in generate.provider');
+	});
+
+	it('checks encryption keys by the key provider written inside it', () => {
+		expect(diagnosticsFor(unit, `remote_state {
+  backend = "s3"
+  config = { bucket = "state" }
+  encryption = {
+    key_provider = "aws_kms"
+    kms_key_id   = "key"
+    kms_key      = "key"
+  }
+}`)).to.deep.equal(['Unknown key "kms_key" in remote_state.encryption for key_provider "aws_kms"']);
+	});
+
+	it('reports nothing when the backend cannot be known', () => {
+		for (const backend of ['local.backend', '"nope"', '"${local.kind}"']) {
+			expect(diagnosticsFor(unit, `remote_state {\n  backend = ${backend}\n  config = {\n    anything = "x"\n  }\n}`), backend).to.deep.equal([]);
+		}
+		expect(diagnosticsFor(unit, 'remote_state {\n  config = {\n    anything = "x"\n  }\n}')).to.deep.equal(['Missing required attribute: backend']);
+	});
+
+	it('reports nothing inside values whose keys the schema does not describe', () => {
+		expect(diagnosticsFor(unit, `locals {
+  settings = { anything = "x" }
+}
+dependency "vpc" {
+  config_path = "../vpc"
+  mock_outputs = {
+    vpc_id = "vpc-1"
+  }
+  mock_outputs_allowed_terraform_commands = ["validate"]
+}
+inputs = {
+  anything = "x"
+}`)).to.deep.equal([]);
+	});
+});
