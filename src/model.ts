@@ -197,6 +197,20 @@ export class Token {
 	}
 }
 
+/**
+ * The plain string written for a member of a block, object or root, such as the `backend` that selects a
+ * `remote_state` config's keys.
+ *
+ * @param container a block, object or root token.
+ * @param name the key to look for among its direct members.
+ * @returns the key's value when it is a plain string, else undefined.
+ */
+export function plainStringMember(container: Token | null | undefined, name: string): string | undefined {
+	const member = container?.children.find(child => (child.type === 'attribute' || child.type === 'assignment') && child.getDisplayText() === name);
+	const value = member?.children.find(child => child.type !== 'attribute_identifier' && child.type !== 'root_assignment_identifier');
+	return value?.type === 'string_lit' ? String(value.value) : undefined;
+}
+
 export enum PositionContext {
 	Block,
 	Function,
@@ -255,10 +269,27 @@ export interface AttributeDefinition {
 		allowedValues?: any[];
 		customValidator?: (value: any) => boolean;
 	};
+	/** The keys an object value takes, whatever else it holds. */
 	attributes?: AttributeDefinition[];
+	/** The block type whose attributes an object value takes, for the attribute form of a block such as `remote_state`. */
+	attributesOf?: string;
+	/** The block type whose attributes every value of a map takes, for the attribute form of a labeled block such as `generate`. */
+	elementsOf?: string;
+	/** Further keys an object value takes, chosen by the literal string value of another key. */
+	variants?: AttributeVariants;
 	deprecated?: boolean;
 	deprecationMessage?: string;
 	fileKinds?: TerragruntFileKind[];
+}
+
+/** The keys an object-valued attribute takes in addition to its own, selected by the value of another key. */
+export interface AttributeVariants {
+	/** The key whose literal string value selects the keys, such as `backend` or `key_provider`. */
+	selector: string;
+	/** `sibling` when the selector is written beside the attribute, `self` when it is written inside its own value. */
+	scope: 'sibling' | 'self';
+	/** The keys for each value of the selector. */
+	attributes: Record<string, AttributeDefinition[]>;
 }
 
 export interface ParameterDefinition {

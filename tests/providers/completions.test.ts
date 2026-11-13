@@ -231,6 +231,87 @@ locals { reference = REFERENCE }`;
 	});
 });
 
+describe('object value completions outside inputs', () => {
+	const provider = new CompletionsProvider(Schema.getInstance());
+	const labelsAt = async (source: string): Promise<string[]> => {
+		const { text, position } = sourceAtCursor(source);
+		const items = await provider.getCompletions(text, position, null, documentFor('file:///repo/terragrunt.hcl', { getInlineFunctions: () => new Map() }));
+		return items.map(item => item.label);
+	};
+
+	it('offers nothing inside an object the schema gives no keys for', async () => {
+		for (const source of [
+			'dependency "vpc" {\n  config_path = "../vpc"\n  mock_outputs = {\n    <|>\n  }\n}\n',
+			'locals {\n  x = {\n    <|>\n  }\n}\n',
+			'remote_state {\n  config = {\n    tags = {\n      <|>\n    }\n  }\n}\n',
+			'remote_state {\n  backend = "s3"\n  config = {\n    s3_bucket_tags = [\n      <|>\n    ]\n  }\n}\n'
+		]) {
+			expect(await labelsAt(source), JSON.stringify(source)).to.deep.equal([]);
+		}
+	});
+
+	it('offers the keys of remote_state generate', async () => {
+		expect(await labelsAt('remote_state {\n  generate = {\n    <|>\n  }\n}\n')).to.have.members(['path', 'if_exists']);
+	});
+
+	it('offers the remote_state block attributes inside the attribute form, not the root definitions', async () => {
+		const labels = await labelsAt('remote_state = {\n  <|>\n}\n');
+		expect(labels).to.include.members(['backend', 'config', 'generate', 'disable_init']);
+		expect(labels).not.to.include.members(['terraform', 'include', 'inputs', 'download_dir']);
+	});
+
+	it('offers the keys of the backend named beside config, before or after it', async () => {
+		const s3 = await labelsAt('remote_state {\n  backend = "s3"\n  config = {\n    <|>\n  }\n}\n');
+		expect(s3).to.include.members(['bucket', 'key', 'region', 'use_lockfile', 'assume_role', 'skip_bucket_versioning', 's3_bucket_tags']);
+		expect(s3).not.to.include.members(['backend', 'config', 'generate', 'prefix']);
+
+		const gcs = await labelsAt('remote_state {\n  config = {\n    <|>\n  }\n  backend = "gcs"\n}\n');
+		expect(gcs).to.include.members(['bucket', 'prefix', 'project', 'location']);
+		expect(gcs).not.to.include('dynamodb_table');
+
+		const azurerm = await labelsAt('remote_state = {\n  backend = "azurerm"\n  config = {\n    <|>\n  }\n}\n');
+		expect(azurerm).to.include.members(['storage_account_name', 'container_name', 'key', 'resource_group_name']);
+	});
+
+	it('offers the keys of a nested backend object', async () => {
+		const labels = await labelsAt('remote_state {\n  backend = "s3"\n  config = {\n    assume_role = {\n      <|>\n    }\n  }\n}\n');
+		expect(labels).to.include.members(['role_arn', 'duration', 'external_id']);
+		expect(labels).not.to.include('bucket');
+	});
+
+	it('leaves out keys already written before or after the cursor', async () => {
+		const labels = await labelsAt('remote_state {\n  backend = "s3"\n  config = {\n    bucket = "state"\n    <|>\n    key = "${path_relative_to_include()}/tofu.tfstate"\n  }\n}\n');
+		expect(labels).to.include('region');
+		expect(labels).not.to.include.members(['bucket', 'key']);
+	});
+
+	it('offers no backend keys when the backend is unknown or not a plain string', async () => {
+		for (const backend of ['"nope"', '"${local.backend}"', 'local.backend', '""']) {
+			expect(await labelsAt(`remote_state {\n  backend = ${backend}\n  config = {\n    <|>\n  }\n}\n`), backend).to.deep.equal([]);
+		}
+		expect(await labelsAt('remote_state {\n  config = {\n    <|>\n  }\n}\n')).to.deep.equal([]);
+	});
+
+	it('offers no names in the generate map, and the generate block attributes inside each entry', async () => {
+		expect(await labelsAt('generate = {\n  <|>\n}\n')).to.deep.equal([]);
+		const labels = await labelsAt('generate = {\n  provider = {\n    path = "provider.tf"\n    <|>\n  }\n}\n');
+		expect(labels).to.include.members(['if_exists', 'contents', 'disable_signature']);
+		expect(labels).not.to.include.members(['path', 'provider', 'terraform']);
+	});
+
+	it('offers the keys of the encryption key provider written inside it', async () => {
+		const labels = await labelsAt('remote_state {\n  encryption = {\n    key_provider = "pbkdf2"\n    <|>\n  }\n}\n');
+		expect(labels).to.include.members(['passphrase', 'enforced']);
+		expect(labels).not.to.include('key_provider');
+	});
+
+	it('still offers functions after an equals sign inside an object value', async () => {
+		const labels = await labelsAt('remote_state {\n  backend = "s3"\n  config = {\n    region = get_<|>\n  }\n}\n');
+		expect(labels).to.include('get_env');
+		expect(labels).not.to.include('bucket');
+	});
+});
+
 describe('dependency config_path completions', () => {
 	const provider = new CompletionsProvider(Schema.getInstance());
 	let directory: string;

@@ -6,6 +6,7 @@ import { URI } from 'vscode-uri';
 
 import { readTypeConstraint, tokenToNode } from '../inline-functions';
 import type { AttributeDefinition, BlockDefinition, FunctionDefinition, Token, ValueType } from '../model';
+import { plainStringMember } from '../model';
 import type { ModuleType } from '../module-variables';
 import { untrustedReason } from '../module-variables';
 import type { ParsedDocument } from '../ParsedDocument';
@@ -235,7 +236,51 @@ export class DiagnosticsProvider {
 			return;
 		}
 		const value = token.children.find(child => child.type !== 'root_assignment_identifier');
-		if (value) this.validateLiteralType(value, definition, diagnostics);
+		if (!value) return;
+		this.validateLiteralType(value, definition, diagnostics);
+		this.validateObjectKeys(value, definition, token.parent, definition.name, diagnostics);
+	}
+
+	/**
+	 * Reports keys of an object value that the schema does not list for its attribute, such as a misspelt
+	 * `remote_state` config key, and walks into the keys it does list. Only an attribute whose keys the schema
+	 * describes is checked. One whose keys depend on a selector, such as `backend`, is checked only when the
+	 * selector is a plain string the schema knows, so a backend read from a local is never reported. A key written
+	 * as an expression is left alone.
+	 *
+	 * @param value the attribute's value token; anything but an object literal is left alone.
+	 * @param attribute the attribute's definition.
+	 * @param holder the block, object or root the attribute is written in, where a sibling selector is read.
+	 * @param label the path of the value as a message names it, such as `remote_state.config`.
+	 * @param diagnostics the list findings are appended to.
+	 */
+	private validateObjectKeys(
+		value: Token,
+		attribute: AttributeDefinition,
+		holder: Token | null,
+		label: string,
+		diagnostics: Diagnostic[]
+	): void {
+		if (value.type !== 'object') return;
+		const variants = attribute.variants;
+		const selected = variants && plainStringMember(variants.scope === 'sibling' ? holder : value, variants.selector);
+		const known = attribute.elementsOf !== undefined
+			|| (variants ? selected !== undefined && Object.hasOwn(variants.attributes, selected) : this.schema.getValueKeys(attribute).length > 0);
+		for (const member of value.children.filter(child => child.type === 'attribute')) {
+			const identifier = member.children.find(child => child.type === 'attribute_identifier');
+			if (!identifier) continue;
+			const name = identifier.getDisplayText();
+			const key = this.schema.getValueKey(attribute, name, selected);
+			if (!key) {
+				if (known) {
+					const scope = variants && selected !== undefined ? ` for ${variants.selector} "${selected}"` : '';
+					diagnostics.push(this.diagnostic(identifier, `Unknown key "${name}" in ${label}${scope}`, DiagnosticSeverity.Warning));
+				}
+				continue;
+			}
+			const assigned = member.children.find(child => child.type !== 'attribute_identifier');
+			if (assigned) this.validateObjectKeys(assigned, key, value, `${label}.${name}`, diagnostics);
+		}
 	}
 
 	private validateBlock(token: Token, allowed: BlockDefinition[], diagnostics: Diagnostic[]): void {
@@ -260,7 +305,10 @@ export class DiagnosticsProvider {
 			}
 			if (attribute) {
 				const value = attributeToken.children.find(child => child.type !== 'attribute_identifier');
-				if (value) this.validateLiteralType(value, attribute, diagnostics);
+				if (value) {
+					this.validateLiteralType(value, attribute, diagnostics);
+					this.validateObjectKeys(value, attribute, token, `${definition.type}.${attribute.name}`, diagnostics);
+				}
 			}
 		}
 

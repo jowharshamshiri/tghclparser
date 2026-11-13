@@ -5,7 +5,7 @@ import { MarkupKind } from 'vscode-languageserver-types';
 import { URI } from 'vscode-uri';
 
 import type { AttributeDefinition, BlockDefinition, FunctionDefinition, TokenType, ValueType } from '../model';
-import { Token } from '../model';
+import { plainStringMember, Token } from '../model';
 import { escapeMarkdownText, markdownCode, markdownFence } from '../markdown';
 import type { ModuleType } from '../module-variables';
 import { anyType, formatModuleType, summarizeModuleType, untrustedReason } from '../module-variables';
@@ -470,14 +470,14 @@ export class HoverProvider {
 				}
 				if (token.parent?.parent?.type === 'block') {
 					const parentBlock = token.parent.parent;
-					const parentBlockDefinition = parentBlock.parent?.type === 'root'
-						? this.schema.getRootBlockDefinitions(doc.getUri()).find(block => block.type === parentBlock.getDisplayText())
-						: this.schema.getBlockDefinition(parentBlock.getDisplayText());
-					const attr = parentBlockDefinition?.attributes?.find(a => a.name === value);
+					const attr = this.blockDefinitionOf(parentBlock, doc)?.attributes?.find(a => a.name === value);
 					if (attr) {
 						contents = this.getAttributeDocumentation(attr);
 					}
+					break;
 				}
+				const key = this.objectKeyDefinition(token, doc);
+				if (key) contents = this.getAttributeDocumentation(key);
 				break;
 			}
 
@@ -682,6 +682,53 @@ export class HoverProvider {
 		}
 
 		return contents;
+	}
+
+	/**
+	 * @param block a `block` token.
+	 * @param doc the document being hovered, which picks the root definitions.
+	 * @returns the block's definition, looked up among the root blocks of the file's kind when it is at the root.
+	 */
+	private blockDefinitionOf(block: Token, doc: ParsedDocument): BlockDefinition | undefined {
+		return block.parent?.type === 'root'
+			? this.schema.getRootBlockDefinitions(doc.getUri()).find(definition => definition.type === block.getDisplayText())
+			: this.schema.getBlockDefinition(block.getDisplayText());
+	}
+
+	/**
+	 * The definition of a key inside an object value outside `inputs`, found by walking up to the block attribute or
+	 * root assignment that holds the object and then down the schema, one key at a time. A key under a list or a
+	 * function call has none.
+	 *
+	 * @param token the hovered `attribute_identifier`.
+	 * @param doc the document being hovered.
+	 * @returns the key's definition, or undefined when the schema does not describe it.
+	 */
+	private objectKeyDefinition(token: Token, doc: ParsedDocument): AttributeDefinition | undefined {
+		const path: Token[] = [];
+		let current = token.parent;
+		while (current?.type === 'attribute' && current.parent?.type === 'object') {
+			path.unshift(current);
+			current = current.parent.parent;
+		}
+		if (path.length === 0 || !current) return undefined;
+
+		let attribute: AttributeDefinition | undefined;
+		if (current.type === 'attribute' && current.parent?.type === 'block') {
+			attribute = this.blockDefinitionOf(current.parent, doc)?.attributes?.find(definition => definition.name === current!.getDisplayText());
+		} else if (current.type === 'assignment' && current.parent?.type === 'root') {
+			attribute = this.schema.getRootAttributeDefinition(doc.getUri(), current.getDisplayText());
+		}
+
+		let holder = current;
+		for (const link of path) {
+			if (!attribute) return undefined;
+			const variants = attribute.variants;
+			const selected = variants && plainStringMember(variants.scope === 'sibling' ? holder.parent : link.parent, variants.selector);
+			attribute = this.schema.getValueKey(attribute, link.getDisplayText(), selected);
+			holder = link;
+		}
+		return attribute;
 	}
 
 	/**
