@@ -24,6 +24,13 @@ import { Schema } from './Schema';
 import { StateManager } from './tf/StateManager';
 import type { Workspace } from './Workspace';
 
+/** A `for` expression as last evaluated: the name it binds each element's value to, and the elements. */
+interface EvaluatedForExpression {
+	variable: string;
+	/** The elements of its collection: the items of a list, or the values of an object. */
+	elements: RuntimeValue<ValueType>[];
+}
+
 /**
  * What is known about the Terraform module a unit's `terraform { source }` names. `loaded` carries the module's
  * variables plus the input keys the autoinclude and included configurations supply; `missing` means the source
@@ -132,6 +139,11 @@ export class ParsedDocument {
 	private editorChange: TextChange | undefined;
 	/** The values of this document's locals as last evaluated; see {@link setEvaluatedSpans}. */
 	private evaluatedLocals = new Map<string, RuntimeValue<ValueType>>();
+	/** The `for` expressions of the text last evaluated, and that text; see {@link setEvaluatedSpans}. */
+	private evaluatedForExpressions: { content: string; expressions: Map<number, EvaluatedForExpression> } = {
+		content: '',
+		expressions: new Map()
+	};
 	private diagnostics: Diagnostic[] = [];
 	/** The tokens of the last text that parsed, kept while a later edit does not parse. */
 	private tokens: Token[] = [];
@@ -191,6 +203,7 @@ export class ParsedDocument {
 			this.tokens = previous.tokens;
 			this.parsedContent = previous.parsedContent;
 			this.evaluatedLocals = previous.evaluatedLocals;
+			this.evaluatedForExpressions = previous.evaluatedForExpressions;
 			this.moduleVariables = previous.moduleVariables;
 		}
 		this.parseContent();
@@ -361,11 +374,33 @@ export class ParsedDocument {
 	 * include. The values carry over to a document built from this one, so they stay while an edit does not parse.
 	 * Spans are ignored unless the current text parses, since their offsets are in it.
 	 *
+	 * The elements of each `for` expression's collection are kept too, so completion can offer the keys of its
+	 * variable; see {@link getForVariableElements}.
+	 *
 	 * @param spans the evaluated spans of the current text, as `ConfigEvaluator.evaluatedSpans` returns them.
 	 */
 	public setEvaluatedSpans(spans: EvaluatedSpan[]): void {
 		if (!this.parsed) return;
 		const names = new Map(spans.filter(span => span.kind === 'name').map(span => [`${span.start}:${span.end}`, span.value]));
+		const expressions = new Map(spans.filter(span => span.kind === 'expression').map(span => [`${span.start}:${span.end}`, span.value]));
+		const forExpressions = new Map<number, EvaluatedForExpression>();
+		const visit = (node: any): void => {
+			if ((node.type === 'list_comprehension' || node.type === 'map_comprehension') && node.location) {
+				const children = node.children ?? [];
+				const variables = children[1]?.type === 'identifier' ? children.slice(0, 2) : children.slice(0, 1);
+				const collection = children[variables.length]?.location;
+				const value = collection && expressions.get(`${collection.start.offset}:${collection.end.offset}`);
+				const elements = value?.type === 'array'
+					? value.value as RuntimeValue<ValueType>[]
+					: value?.type === 'object' || value?.type === 'block'
+						? [...(value.value as Map<string, RuntimeValue<ValueType>>).values()]
+						: undefined;
+				if (elements) forExpressions.set(node.location.start.offset, { variable: String(variables.at(-1)?.value ?? ''), elements });
+			}
+			for (const child of node.children ?? []) visit(child);
+		};
+		if (this.ast) visit(this.ast);
+		this.evaluatedForExpressions = { content: this.content, expressions: forExpressions };
 		const locals = new Map<string, RuntimeValue<ValueType>>();
 		for (const block of this.ast?.children ?? []) {
 			if (block.type !== 'block' || block.value !== 'locals') continue;
@@ -376,6 +411,22 @@ export class ParsedDocument {
 			}
 		}
 		this.evaluatedLocals = locals;
+	}
+
+	/**
+	 * The elements a `for` expression binds its value variable to, as last evaluated; see {@link setEvaluatedSpans}.
+	 * The expression is found in the evaluated text by mapping its opening bracket back across any edit since.
+	 *
+	 * @param open the offset in the current text of the `[` or `{` that opens the `for` expression.
+	 * @param variable the name the current text binds each element's value to.
+	 * @returns the elements, or undefined when the expression was not evaluated or bound a different name.
+	 */
+	public getForVariableElements(open: number, variable: string): RuntimeValue<ValueType>[] | undefined {
+		const evaluated = this.evaluatedForExpressions;
+		const before = evaluated.content === this.content ? open : new TextChange(evaluated.content, this.content).toBefore(open, 'start');
+		if (before === undefined) return undefined;
+		const expression = evaluated.expressions.get(before);
+		return expression?.variable === variable ? expression.elements : undefined;
 	}
 
 	/**

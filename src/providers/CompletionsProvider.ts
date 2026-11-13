@@ -31,6 +31,19 @@ interface BlockFrame {
 /** Matches a line that assigns a value to a bare or quoted key, up to the `=`, capturing the key either way. */
 const keyPrefix = /^\s*(?:"([^"]*)"|([\w-]+))\s*=\s*$/;
 
+/** A partly typed reference to a variable of an enclosing `for` expression. */
+interface ForVariableReference {
+	name: string;
+	/** The offset of the `[` or `{` that opens the `for` expression declaring it. */
+	open: number;
+	/** True for the value variable, false for the key or index variable of `for k, v`. */
+	isValue: boolean;
+	/** The names typed after the variable, before the partial one. */
+	parts: string[];
+	/** The name typed so far at the cursor. */
+	partial: string;
+}
+
 interface CursorContext {
 	beforeCursor: string;
 	lineBeforeCursor: string;
@@ -56,6 +69,9 @@ export class CompletionsProvider {
 
 		const reference = this.referenceAtCursor(context.beforeCursor);
 		if (reference) return this.referenceCompletions(reference, documentText, document);
+
+		const forVariable = this.forVariableAtCursor(context.beforeCursor);
+		if (forVariable) return this.forVariableCompletions(forVariable, document);
 
 		const expression = this.isExpressionPosition(context);
 		const structural = context.lineBeforeCursor.trim().match(/^([\w-]*)$/)?.[1];
@@ -508,6 +524,91 @@ export class CompletionsProvider {
 	}
 
 	/**
+	 * A partly typed reference to a `for` variable, such as `container.` or `container.network.`, in the body of the
+	 * innermost enclosing `for` expression that declares the name.
+	 *
+	 * @param beforeCursor the document's text up to the cursor.
+	 * @returns the variable, where its `for` expression opens, whether it is the value variable rather than the key or
+	 *   index, the names typed after it and the partial name at the cursor; undefined when no enclosing `for`
+	 *   expression declares the name.
+	 */
+	private forVariableAtCursor(beforeCursor: string): ForVariableReference | undefined {
+		const match = beforeCursor.match(/(?<![\w.-])([A-Za-z_][\w-]*)((?:\.[\w-]*)+)$/);
+		if (!match) return undefined;
+		const name = match[1];
+		const segments = match[2].slice(1).split('.');
+		const tokens = scanHclTokens(beforeCursor).filter(token => token.type !== 'Newline' && token.type !== 'Comment');
+		const open: number[] = [];
+		for (let index = 0; index < tokens.length; index++) {
+			const type = tokens[index].type;
+			if (type === 'OBrace' || type === 'OBrack' || type === 'OParen' || type === 'TemplateInterp' || type === 'TemplateControl') open.push(index);
+			else if (type === 'CBrace' || type === 'CBrack' || type === 'CParen' || type === 'TemplateSeqEnd') open.pop();
+		}
+		for (const index of open.toReversed()) {
+			const header = this.forHeader(tokens, index);
+			if (!header?.variables.includes(name) || !this.inForBody(tokens, header.inIndex)) continue;
+			return {
+				name,
+				open: tokens[index].start,
+				isValue: header.variables.at(-1) === name,
+				parts: segments.slice(0, -1),
+				partial: segments.at(-1) ?? ''
+			};
+		}
+		return undefined;
+	}
+
+	/**
+	 * The variables a `for` expression declares, read from the tokens after its opening bracket.
+	 *
+	 * @param tokens the tokens of the text.
+	 * @param open the index of the `[` or `{` token.
+	 * @returns the one or two variable names and the index of the `in` token, or undefined when the bracket does not
+	 *   open a `for` expression.
+	 */
+	private forHeader(tokens: HclToken[], open: number): { variables: string[]; inIndex: number } | undefined {
+		if (tokens[open].type !== 'OBrack' && tokens[open].type !== 'OBrace') return undefined;
+		const isIdent = (index: number, text?: string) => tokens[index]?.type === 'Ident' && (text === undefined || tokens[index].text === text);
+		if (!isIdent(open + 1, 'for') || !isIdent(open + 2)) return undefined;
+		if (isIdent(open + 3, 'in')) return { variables: [tokens[open + 2].text], inIndex: open + 3 };
+		if (tokens[open + 3]?.type === 'Comma' && isIdent(open + 4) && isIdent(open + 5, 'in')) {
+			return { variables: [tokens[open + 2].text, tokens[open + 4].text], inIndex: open + 5 };
+		}
+		return undefined;
+	}
+
+	/**
+	 * @param tokens the tokens of the text up to the cursor.
+	 * @param inIndex the index of a `for` expression's `in` token.
+	 * @returns true when the cursor is past the `:` that ends the expression's collection, where its variables are in
+	 *   scope.
+	 */
+	private inForBody(tokens: HclToken[], inIndex: number): boolean {
+		let depth = 0;
+		for (let index = inIndex + 1; index < tokens.length; index++) {
+			const type = tokens[index].type;
+			if (type === 'OBrace' || type === 'OBrack' || type === 'OParen' || type === 'TemplateInterp' || type === 'TemplateControl') depth++;
+			else if (type === 'CBrace' || type === 'CBrack' || type === 'CParen' || type === 'TemplateSeqEnd') depth--;
+			else if (type === 'Colon' && depth === 0) return true;
+		}
+		return false;
+	}
+
+	/**
+	 * The names that can follow a partly typed reference to a `for` variable: the keys of the elements its
+	 * collection evaluated to, at the path typed after it. A key or index variable offers nothing.
+	 *
+	 * @param reference the variable and the path typed after it.
+	 * @param document the document being completed, which holds the evaluated elements.
+	 * @returns one item per key any element has at the path, empty when the elements are unknown.
+	 */
+	private forVariableCompletions(reference: ForVariableReference, document: ParsedDocument): CompletionItem[] {
+		if (!reference.isValue) return [];
+		const elements = document.getForVariableElements(reference.open, reference.name) ?? [];
+		return this.valueAttributeItems(elements.map(element => valueAt(element, reference.parts)), reference.partial);
+	}
+
+	/**
 	 * The names that can follow a partly typed reference such as `local.`, `local.config.` or
 	 * `dependency.vpc.outputs.subnets.`.
 	 *
@@ -520,7 +621,7 @@ export class CompletionsProvider {
 		if (reference.namespace === 'local' && reference.parts.length > 0) {
 			const [name, ...attributes] = reference.parts;
 			const evaluated = document.getEvaluatedLocal(name);
-			if (evaluated) return this.valueAttributeItems(valueAt(evaluated, attributes), reference.partial);
+			if (evaluated) return this.valueAttributeItems([valueAt(evaluated, attributes)], reference.partial);
 			return this.typeAttributeItems(typeAt(document.getLocalType(name), attributes), reference.partial);
 		}
 		if (reference.namespace === 'dependency' && reference.parts.length >= 2) {
@@ -622,16 +723,23 @@ export class CompletionsProvider {
 	}
 
 	/**
-	 * The attributes of an evaluated object, offered after a dot in a reference.
+	 * The attributes of evaluated objects, offered after a dot in a reference. With several objects, such as the
+	 * elements a `for` variable takes, every attribute any of them has is offered once, detailed by the first.
 	 *
-	 * @param value the value at the reference's path.
+	 * @param values the values at the reference's path.
 	 * @param partial the name typed so far, which attribute names must start with.
-	 * @returns one item per matching attribute, with its value summarised as the detail; empty when the value is not
-	 *   an object.
+	 * @returns one item per matching attribute, with its value summarised as the detail; empty when no value is an
+	 *   object.
 	 */
-	private valueAttributeItems(value: RuntimeValue<ValueType> | undefined, partial: string): CompletionItem[] {
-		if (value?.type !== 'object' && value?.type !== 'block') return [];
-		return [...(value.value as Map<string, RuntimeValue<ValueType>>).entries()]
+	private valueAttributeItems(values: Array<RuntimeValue<ValueType> | undefined>, partial: string): CompletionItem[] {
+		const attributes = new Map<string, RuntimeValue<ValueType>>();
+		for (const value of values) {
+			if (value?.type !== 'object' && value?.type !== 'block') continue;
+			for (const [name, entry] of value.value as Map<string, RuntimeValue<ValueType>>) {
+				if (!attributes.has(name)) attributes.set(name, entry);
+			}
+		}
+		return [...attributes.entries()]
 			.filter(([name]) => name.startsWith(partial))
 			.map(([name, entry]) => this.attributeItem(name, valueSummary(entry)));
 	}

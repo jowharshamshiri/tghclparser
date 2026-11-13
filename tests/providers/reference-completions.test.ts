@@ -214,6 +214,75 @@ inputs = {
 		});
 	});
 
+	describe('for variables', () => {
+		const unit = (value: string) => `locals {
+  containers = {
+    A = { provider = "AWS", region = "EU_WEST_2", network = { cidr = "10.0.0.0/21" } }
+    B = { provider = "GCP", priority = 7 }
+  }
+  sizes = [{ name = "M10" }]
+}
+
+inputs = {
+  x = ${value}
+}`;
+
+		const evaluatedUnit = async (value: string): Promise<ParsedDocument> => {
+			const document = await openUnit(unit(value));
+			const evaluator = new ConfigEvaluator({ environmentVariables: {}, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true });
+			document.setEvaluatedSpans(await evaluator.evaluatedSpans(URI.parse(document.getUri()).fsPath, document.getContent(), directory));
+			return document;
+		};
+
+		const complete = async (previous: ParsedDocument, value: string): Promise<CompletionItem[]> => {
+			const { text, position } = cursorIn(unit(value));
+			return new ParsedDocument(workspace, previous.getUri(), text, previous).getCompletionsAtPosition(position);
+		};
+
+		it('offers the keys any element has, detailed by the first element with each, while an edit does not parse', async () => {
+			const previous = await evaluatedUnit('[for c in values(local.containers) : c.provider]');
+
+			expect((await complete(previous, '[for c in values(local.containers) : c.<|>]')).map(item => [item.label, item.detail])).to.deep.equal([
+				['provider', '"AWS"'],
+				['region', '"EU_WEST_2"'],
+				['network', 'object'],
+				['priority', '7']
+			]);
+			expect(labels(await complete(previous, '[for c in values(local.containers) : c.network.<|>]'))).to.deep.equal(['cidr']);
+			expect(labels(await complete(previous, '[for c in values(local.containers) : { p = c.pr<|> }]'))).to.deep.equal(['provider', 'priority']);
+		});
+
+		it('finds a for expression written across lines, with comments', async () => {
+			const multiline = (body: string) => `[ # one per container\n    for c in values(local.containers) : {\n      p = ${body}\n    }\n  ]`;
+			const previous = await evaluatedUnit(multiline('c.provider'));
+
+			expect(labels(await complete(previous, multiline('c.<|>')))).to.deep.equal(['provider', 'region', 'network', 'priority']);
+		});
+
+		it('offers the keys of the value of an object and nothing for its key', async () => {
+			const previous = await evaluatedUnit('{for k, c in local.containers : k => c.provider}');
+
+			expect(labels(await complete(previous, '{for k, c in local.containers : k => c.<|>}'))).to.deep.equal(['provider', 'region', 'network', 'priority']);
+			expect(await complete(previous, '{for k, c in local.containers : k => k.<|>}')).to.deep.equal([]);
+		});
+
+		it('finds the variable in an enclosing for expression, and the innermost one that declares the name', async () => {
+			const outer = await evaluatedUnit('[for c in values(local.containers) : [for s in local.sizes : "${c.provider}-${s.name}"]]');
+			expect(labels(await complete(outer, '[for c in values(local.containers) : [for s in local.sizes : "${c.<|>}-${s.name}"]]'))).to.deep.equal(['provider', 'region', 'network', 'priority']);
+
+			const shadowed = await evaluatedUnit('[for c in values(local.containers) : [for c in local.sizes : c.name]]');
+			expect(labels(await complete(shadowed, '[for c in values(local.containers) : [for c in local.sizes : c.<|>]]'))).to.deep.equal(['name']);
+		});
+
+		it('offers no element keys in the collection, outside the for expression, or once the variable is renamed', async () => {
+			const previous = await evaluatedUnit('[for c in values(local.containers) : c.provider]');
+
+			expect(labels(await complete(previous, '[for c in c.<|>]'))).to.not.include('provider');
+			expect(labels(await complete(previous, '[for c in values(local.containers) : c.provider], c.<|>'))).to.not.include('provider');
+			expect(labels(await complete(previous, '[for d in values(local.containers) : d.<|>]'))).to.not.include('provider');
+		});
+	});
+
 	describe('dependency outputs', () => {
 		beforeEach(async () => {
 			await write(path.join('modules', 'vpc', 'outputs.tf'), `output "vpc_id" {
