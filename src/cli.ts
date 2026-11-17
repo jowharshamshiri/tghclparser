@@ -38,6 +38,7 @@ export interface CLIOptions {
 	noHidden: boolean;
 	dependencies: boolean;
 	dag: boolean;
+	offline: boolean;
 }
 
 /**
@@ -133,6 +134,9 @@ function usage(): string {
 		'  --working-dir <path>   Validate from a working directory',
 		'  --show-config-path     List invalid configuration paths',
 		'  --experiment <name>   Enable a named experiment',
+		'  --offline              Read a sops file that cannot be decrypted as',
+		'                         written, for CI with no keys. Does not check',
+		'                         that secrets decrypt or what is computed from them.',
 		'  --help                 Show this help'
 	].join('\n');
 }
@@ -593,7 +597,7 @@ function discoveryUsage(command: string): string {
  * than to look.
  */
 export function parseArgs(argv: string[]): CLIOptions | 'help' {
-	const options: CLIOptions = { json: false, showConfigPath: false, experiments: [], workingDir: process.cwd(), paths: [], noHidden: false, dependencies: false, dag: false };
+	const options: CLIOptions = { json: false, showConfigPath: false, experiments: [], workingDir: process.cwd(), paths: [], noHidden: false, dependencies: false, dag: false, offline: false };
 	for (let index = 0; index < argv.length; index++) {
 		const argument = argv[index];
 		if (argument.startsWith('--format=')) {
@@ -617,6 +621,7 @@ export function parseArgs(argv: string[]): CLIOptions | 'help' {
 			case '--no-hidden': options.noHidden = true; break;
 			case '--dependencies': options.dependencies = true; break;
 			case '--dag': options.dag = true; break;
+			case '--offline': options.offline = true; break;
 			case '--format': {
 				const value = argv[++index] as CLIOptions['format'];
 				if (!value || !['text', 'json', 'tree', 'dot'].includes(value)) throw new Error(`Unsupported format ${value ?? ''}`);
@@ -1475,6 +1480,10 @@ function generatedEntries(value: unknown): Array<[string, Record<string, unknown
  *   they are the mocks the command is allowed, or unresolved, as Terragrunt's
  *   `hcl validate` sees them. Only for checking a configuration, never for
  *   running one.
+ * @param options.readEncryptedSops reads a sops file that cannot be decrypted
+ *   as written: its keys are there, and what is computed from its values is
+ *   unresolved. Only `hcl validate --offline` sets it, and validation writes no
+ *   file; every evaluator that runs or generates reads the real secrets.
  * @returns the configured evaluator.
  */
 function evaluatorFor(options: {
@@ -1484,6 +1493,7 @@ function evaluatorFor(options: {
 	tfPath?: string;
 	partialRender?: boolean;
 	skipOutputs?: boolean;
+	readEncryptedSops?: boolean;
 } = {}): ConfigEvaluator {
 	const terraformCommand = options.terraformCommand ?? '';
 	return new ConfigEvaluator({
@@ -1494,6 +1504,7 @@ function evaluatorFor(options: {
 		workspaceTrusted: true,
 		allowedPaths,
 		partialRender: options.partialRender,
+		readEncryptedSops: options.readEncryptedSops,
 		// The command decides whether a dependency's mock_outputs may be seen,
 		// so it has to reach the resolver. Without it every evaluation looked
 		// like the same command and a mock could not be scoped at all.
@@ -2208,7 +2219,7 @@ async function executeTerraformCommand(argv: string[]): Promise<number> {
 	if (await pathExists(stackPath)) await stackGenerate(['--working-dir', options.workingDir]);
 	const configFiles = (await collectFiles(executionWorkingDir)).filter(file => path.basename(file) === 'terragrunt.hcl' || path.basename(file) === 'terragrunt.hcl.json');
 	if (configFiles.length === 0) throw new Error(`No Terragrunt HCL files found under ${executionWorkingDir}`);
-	const diagnostics = (await Promise.all(configFiles.map(file => validateFile(file, executionWorkingDir, [], options.command, false)))).flat();
+	const diagnostics = (await Promise.all(configFiles.map(file => validateFile(file, executionWorkingDir, [], options.command, false, false)))).flat();
 	if (diagnostics.length > 0) {
 		for (const item of diagnostics) process.stderr.write(`${item.range.filename}: ${item.summary}: ${item.detail}\n`);
 		return 1;
@@ -2368,6 +2379,9 @@ async function inheritedInlineFunctions(
  * @param skipOutputs validate without reading dependency outputs, reporting
  *   nothing for the values that need them, as Terragrunt's `hcl validate`
  *   does. The run path's pre-flight reads them, as running the unit will.
+ * @param readEncryptedSops validate a sops file that cannot be decrypted as
+ *   written, reporting nothing for what is computed from its secrets. Only
+ *   `hcl validate --offline` sets it; Terragrunt fails on such a file.
  * @returns the problems found, empty when the configuration is valid.
  */
 async function validateFile(
@@ -2375,7 +2389,8 @@ async function validateFile(
 	workDir: string,
 	experiments: string[],
 	terraformCommand: string,
-	skipOutputs: boolean
+	skipOutputs: boolean,
+	readEncryptedSops: boolean
 ): Promise<DiagnosticOutput[]> {
 	const content = await fs.readFile(filePath, 'utf8');
 	if (filePath.endsWith('.json')) {
@@ -2406,10 +2421,11 @@ async function validateFile(
 	// running `output` in any dependency: their outputs are the mocks validate
 	// may see, or unknown. The run path's pre-flight reads them, since running
 	// the unit will.
-	const evaluator = evaluatorFor({experiments, terraformCommand, skipOutputs});
+	const evaluator = evaluatorFor({experiments, terraformCommand, skipOutputs, readEncryptedSops});
 	const result = await evaluator.evaluateUnit(filePath, content, workDir);
-	// Without outputs, a value that needs a dependency's is unresolved, which
-	// is not a fault in the configuration.
+	// Without outputs, a value that needs a dependency's is unresolved, as is
+	// one computed from a secret read as written: neither is a fault in the
+	// configuration.
 	if (result.valid || (skipOutputs && result.unresolved)) return [];
 	return [{
 		range: { filename: filePath, start: { line: 1, column: 1, byte: 0 }, end: { line: 1, column: 1, byte: 0 } },
@@ -2597,7 +2613,7 @@ async function main(argv: string[]): Promise<number> {
 	const roots = parsed.paths.length > 0 ? parsed.paths.map(target => path.resolve(parsed.workingDir, target)) : [parsed.workingDir];
 	const files = (await Promise.all(roots.map(collectFiles))).flat().sort();
 	if (files.length === 0) throw new Error(`No Terragrunt HCL files found under ${parsed.workingDir}`);
-	const diagnostics = (await Promise.all(files.map(file => validateFile(file, parsed.workingDir, parsed.experiments, 'validate', true)))).flat();
+	const diagnostics = (await Promise.all(files.map(file => validateFile(file, parsed.workingDir, parsed.experiments, 'validate', true, parsed.offline)))).flat();
 	if (parsed.showConfigPath) {
 		if (diagnostics.length > 0) {
 			const paths = [...new Set(diagnostics.map(item => item.range.filename))];

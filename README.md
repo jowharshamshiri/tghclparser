@@ -100,6 +100,8 @@ It recursively validates Terragrunt HCL files, returns a non-zero status when di
 
 Validation does not read a dependency's outputs, as Terragrunt's does not, so it needs no providers installed. A dependency's outputs are its `mock_outputs` where `validate` is allowed to see them, and otherwise unknown: an expression that needs them is not checked, while a fault written beside one is still reported. Sops files are decrypted as when running, so a unit that reads one needs its key.
 
+Add `--offline` to validate where there are no sops keys, as in CI. A sops file that cannot be decrypted is then read as written: its keys are checked, so reading one the file does not have is still reported, but whether it decrypts, and what its secrets hold, is not. A secret can be passed along as it is; anything computed from one (a template, a comparison, a function other than `yamldecode`, `jsondecode` or one that only selects from a collection) is not checked, and is never run: `run_cmd` is not called with a secret it could not decrypt, and no generated file receives one. Terragrunt has no such mode, so a configuration that passes with `--offline` can still fail without it.
+
 Configuration discovery is also available without evaluating a configuration:
 
 ```sh

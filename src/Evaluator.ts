@@ -73,8 +73,13 @@ export interface ConfigEvaluatorOptions {
 	/**
 	 * When sops cannot decrypt a file, read its keys from the encrypted file itself, with the values left as sops
 	 * wrote them. For an editor, whose completion and hover can then name a secret's keys on a machine that has no
-	 * key to it. Leave unset for anything that runs or generates, which must not take an encrypted value for a real
-	 * one.
+	 * key to it, and for validating where there is no key, as in CI: a key the file does not have is still a fault.
+	 *
+	 * Such a value can be passed along as it is, but anything computed from it (a template, an operator, a function
+	 * other than one that only decodes the file or selects from a collection, an inline function) is unresolved, as
+	 * {@link EncryptedSopsValueError}. So `run_cmd` is never run with one, and a `generate` block or `remote_state`
+	 * holding one is unresolved rather than rendered to be written to a file. Leave unset for anything that runs or
+	 * generates, which needs the real value.
 	 */
 	readEncryptedSops?: boolean;
 }
@@ -146,6 +151,19 @@ export class UnreadableSopsFileError extends UnresolvedRenderValueError {
 	constructor(file: string, reason: string) {
 		super(`sops could not decrypt ${file}: ${reason}`);
 		this.name = 'UnreadableSopsFileError';
+	}
+}
+
+/**
+ * A value read as written from a sops file that could not be decrypted (see {@link ConfigEvaluatorOptions.readEncryptedSops}),
+ * used where its plain value is needed. The secret is not known here, so nothing computed from it is either: it is
+ * unresolved, as an unapplied dependency's output is, rather than computed from the encrypted text, and no command or
+ * generated file ever receives that text.
+ */
+export class EncryptedSopsValueError extends UnresolvedRenderValueError {
+	constructor() {
+		super('reads a secret from a sops file that could not be decrypted, so its value is not known');
+		this.name = 'EncryptedSopsValueError';
 	}
 }
 
@@ -1317,7 +1335,9 @@ export class ConfigEvaluator {
 				const unresolved: Array<{file: string; field: string; reason: string}> = [];
 				for (const [name, node] of attributes) {
 					try {
-						rendered.set(name, await this.evalNode(node, scope));
+						// What a generate block renders is written to a file, which a value sops left encrypted must
+						// never reach.
+						rendered.set(name, computable(await this.evalNode(node, scope)));
 					} catch (error) {
 						if (!this.options.partialRender || !(error instanceof UnresolvedRenderValueError)) throw error;
 						unresolved.push({file: from.filePath, field: `generate.${label}.${name}`, reason: error.message});
@@ -1391,10 +1411,19 @@ export class ConfigEvaluator {
 		}
 		output.set('terraform', makeObjectValue(terraformDefaults));
 		for (const block of result.scope.blocks) {
-			if (['locals', 'terraform', 'include'].includes(String(block.value))) continue;
+			// `generate` is read above, inherited blocks with the unit's own, each in the scope that declares it.
+			if (['locals', 'terraform', 'include', 'generate'].includes(String(block.value))) continue;
 			const name = String(block.value);
 			const labels = (block.children ?? []).filter(child => child.type === 'parameter').map(child => String(child.value));
-			const value = await this.renderField(result.filePath, `${name}${labels[0] ? `.${labels[0]}` : ''}`, () => this.evaluateBlock(block, result.scope));
+			// remote_state's config is written to the backend file it generates, which a value sops left encrypted must
+			// never reach.
+			const value = await this.renderField(
+				result.filePath,
+				`${name}${labels[0] ? `.${labels[0]}` : ''}`,
+				async () => name === 'remote_state'
+					? computable(await this.evaluateBlock(block, result.scope))
+					: this.evaluateBlock(block, result.scope)
+			);
 			if (value === undefined) continue;
 			if (labels.length > 0) {
 				const existing = output.get(name);
@@ -1879,17 +1908,17 @@ export class ConfigEvaluator {
 				return this.evalNode(node.children?.[0], scope);
 			case 'ternary_expression': {
 				const [condition, whenTrue, whenFalse] = node.children ?? [];
-				const truth = coerceToBool(await this.evalNode(condition, scope));
+				const truth = coerceToBool(computable(await this.evalNode(condition, scope)));
 				return truth ? this.evalNode(whenTrue, scope) : this.evalNode(whenFalse, scope);
 			}
 			case 'logical_expression': {
 				const operator = node.value === undefined ? '' : String(node.value);
 				if (operator === '!') {
-					return makeBooleanValue(!coerceToBool(await this.evalNode(node.children?.[0], scope)));
+					return makeBooleanValue(!coerceToBool(computable(await this.evalNode(node.children?.[0], scope))));
 				}
-				const left = coerceToBool(await this.evalNode(node.children?.[0], scope));
-				if (operator === '&&') return makeBooleanValue(left && coerceToBool(await this.evalNode(node.children?.[1], scope)));
-				if (operator === '||') return makeBooleanValue(left || coerceToBool(await this.evalNode(node.children?.[1], scope)));
+				const left = coerceToBool(computable(await this.evalNode(node.children?.[0], scope)));
+				if (operator === '&&') return makeBooleanValue(left && coerceToBool(computable(await this.evalNode(node.children?.[1], scope))));
+				if (operator === '||') return makeBooleanValue(left || coerceToBool(computable(await this.evalNode(node.children?.[1], scope))));
 				throw new Error(`Unknown logical operator "${operator}"`);
 			}
 			case 'comparison_expression':
@@ -1906,10 +1935,10 @@ export class ConfigEvaluator {
 			}
 			case 'index_expression': {
 				const [collection, index] = await this.evalOperands([node.children?.[0], node.children?.[1]], scope);
-				return this.indexValue(collection, index);
+				return this.indexValue(collection, computable(index));
 			}
 			case 'range_expression': {
-				const [start, end] = await this.evalOperands([node.children?.[0], node.children?.[1]], scope);
+				const [start, end] = (await this.evalOperands([node.children?.[0], node.children?.[1]], scope)).map(computable);
 				if (start.type !== 'number' || end.type !== 'number') throw new Error('range requires number arguments');
 				const items: RuntimeValue<ValueType>[] = [];
 				for (let value = Number(start.value); value < Number(end.value); value++) items.push(makeNumberValue(value));
@@ -1995,7 +2024,7 @@ export class ConfigEvaluator {
 					const valueNode = child.children?.find(c => c.type !== 'attribute_identifier' && c.type !== 'object_key');
 					if (!keyNode) return [{ key: String(child.value), value: await this.evalNode(valueNode, scope), inherited: false }];
 					const [key, value] = await this.evalOperands([keyNode.children?.[0], valueNode], scope);
-					return [{ key: coerceToString(key), value, inherited: false }];
+					return [{ key: coerceToString(computable(key)), value, inherited: false }];
 				}];
 			}
 			if (child.type === 'inheritance') {
@@ -2017,7 +2046,7 @@ export class ConfigEvaluator {
 	private async evalInterpolatedString(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
 		const parts = await this.settleOperands((node.children ?? []).flatMap((child): (() => Promise<string>)[] => {
 			if (child.type === 'string_lit') return [async () => String(child.value ?? '')];
-			if (child.type === 'interpolation') return [async () => coerceToString(await this.evalNode(child.children?.[0], scope))];
+			if (child.type === 'interpolation') return [async () => coerceToString(computable(await this.evalNode(child.children?.[0], scope)))];
 			if (child.type === 'if_directive' || child.type === 'for_directive' || child.type === 'else_directive' || child.type === 'endif_directive') {
 				return [async () => { throw new Error('Template directives inside quoted strings are not supported'); }];
 			}
@@ -2027,7 +2056,7 @@ export class ConfigEvaluator {
 	}
 
 	private async evalComparison(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
-		const [left, right] = (await this.evalOperands([node.children?.[0], node.children?.[1]], scope)).map(unwrapSensitive);
+		const [left, right] = (await this.evalOperands([node.children?.[0], node.children?.[1]], scope)).map(computable).map(unwrapSensitive);
 		const operator = node.value === undefined ? '' : String(node.value);
 		const a = comparisonValue(left);
 		const b = comparisonValue(right);
@@ -2047,11 +2076,11 @@ export class ConfigEvaluator {
 	private async evalArithmetic(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
 		const operator = node.value === undefined ? '' : String(node.value);
 		if (operator === '-' && (node.children?.length ?? 0) === 1) {
-			const value = await this.evalNode(node.children?.[0], scope);
+			const value = computable(await this.evalNode(node.children?.[0], scope));
 			if (value.type !== 'number') throw new Error('Unary minus requires a number');
 			return makeNumberValue(-Number(value.value));
 		}
-		const [left, right] = await this.evalOperands([node.children?.[0], node.children?.[1]], scope);
+		const [left, right] = (await this.evalOperands([node.children?.[0], node.children?.[1]], scope)).map(computable);
 		if (left.type !== 'number' || right.type !== 'number') throw new Error('Arithmetic requires numbers');
 		const a = Number(left.value);
 		const b = Number(right.value);
@@ -2093,7 +2122,7 @@ export class ConfigEvaluator {
 		const map = new Map<string, RuntimeValue<ValueType>>();
 		const groups = new Map<string, RuntimeValue<ValueType>[]>();
 		await this.forEachComprehensionElement(node, 2, scope, async ([keyNode, valueNode]) => {
-			const key = comprehensionKey(await this.evalNode(keyNode, scope));
+			const key = comprehensionKey(computable(await this.evalNode(keyNode, scope)));
 			const value = await this.evalNode(valueNode, scope);
 			if (grouping) {
 				const group = groups.get(key) ?? [];
@@ -2142,7 +2171,7 @@ export class ConfigEvaluator {
 			frame.set(String(variables[variables.length - 1].value ?? ''), item);
 			scope.comprehension.push(frame);
 			try {
-				if (condition && !comprehensionCondition(await this.evalNode(condition, scope))) continue;
+				if (condition && !comprehensionCondition(computable(await this.evalNode(condition, scope)))) continue;
 				await each(body);
 			} finally {
 				scope.comprehension.pop();
@@ -2188,8 +2217,10 @@ export class ConfigEvaluator {
 		// Inline functions resolve before built-ins. A name may not be both:
 		// definition-time shadow checking rejects that, so the order below can
 		// never mask a built-in.
+		// An inline function computes from its arguments in a body this evaluator does not see into, so it is given no
+		// value sops left encrypted.
 		const inline = this.findInlineFunction(scope, name);
-		if (inline) return this.callInlineFunction(inline, await this.evalOperands(args, scope));
+		if (inline) return this.callInlineFunction(inline, (await this.evalOperands(args, scope)).map(computable));
 
 		if (!this.schema.getFunctionDefinition(name)) throw new Error(`Unknown function "${name}"`);
 		if (name === 'deep_merge' && !this.options.experiments?.includes('deep-merge')) {
@@ -2199,7 +2230,7 @@ export class ConfigEvaluator {
 			throw new Error(`Function "${name}" has no evaluator`);
 		}
 
-		const evaluatedArgs = await this.evalOperands(args, scope);
+		const evaluatedArgs = functionArguments(name, await this.evalOperands(args, scope));
 		const context = await this.makeContext(scope);
 		return this.schema.getFunctionRegistry().evaluateFunction(name, evaluatedArgs, context);
 	}
@@ -2681,6 +2712,67 @@ function configurationScopes(scope: Scope): Scope[] {
 
 function isObjectValue(value: RuntimeValue<ValueType>): boolean {
 	return value.type === 'object' || value.type === 'block';
+}
+
+/**
+ * Built-in functions that give back, as they are, the values sops left encrypted that they are given. The decoders
+ * read an encrypted document and mark each value in it as still encrypted; the rest only select from or combine
+ * collections, so an encrypted value in their result is one they were given. They may not take an encrypted value as
+ * a key, index or other plain argument. Every other function computes from its arguments.
+ */
+const ENCRYPTED_DOCUMENT_DECODERS = new Set(['yamldecode', 'jsondecode']);
+const COLLECTION_SELECTORS = new Set(['merge', 'lookup', 'element', 'concat', 'flatten', 'values', 'tolist', 'tomap']);
+
+/**
+ * Whether a value is, or holds, one read as written from a sops file that could not be decrypted.
+ *
+ * @param value the value.
+ * @returns true when it or anything in it is still encrypted.
+ */
+function holdsEncrypted(value: RuntimeValue<ValueType>): boolean {
+	if (value.encrypted) return true;
+	switch (value.type) {
+		case 'array':
+			return (value.value as RuntimeValue<ValueType>[]).some(holdsEncrypted);
+		case 'object':
+		case 'block':
+			return [...(value.value as Map<string, RuntimeValue<ValueType>>).values()].some(holdsEncrypted);
+		default:
+			return (value.type as string) === 'sensitive' && holdsEncrypted(value.value as RuntimeValue<ValueType>);
+	}
+}
+
+/**
+ * A value an expression is about to compute from.
+ *
+ * @param value the operand.
+ * @returns the operand, when nothing in it is still encrypted.
+ * @throws EncryptedSopsValueError when it is, or holds, a value sops left encrypted: what is computed from it is not
+ *   known.
+ */
+function computable(value: RuntimeValue<ValueType>): RuntimeValue<ValueType> {
+	if (holdsEncrypted(value)) throw new EncryptedSopsValueError();
+	return value;
+}
+
+/**
+ * The arguments of a built-in function, checked against what it does with a value sops left encrypted.
+ *
+ * @param name the function.
+ * @param args its evaluated arguments.
+ * @returns the arguments.
+ * @throws EncryptedSopsValueError when the function would compute from an encrypted value: any function given one
+ *   other than the decoders, and a selector given one as a plain argument rather than inside a collection.
+ */
+function functionArguments(name: string, args: RuntimeValue<ValueType>[]): RuntimeValue<ValueType>[] {
+	if (ENCRYPTED_DOCUMENT_DECODERS.has(name)) return args;
+	if (COLLECTION_SELECTORS.has(name)) {
+		for (const arg of args) {
+			if (arg.type !== 'array' && !isObjectValue(arg)) computable(arg);
+		}
+		return args;
+	}
+	return args.map(computable);
 }
 
 /** What stands in for a value sops stored encrypted wherever a plain form of it is shown. */

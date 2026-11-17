@@ -1131,6 +1131,80 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(made.root, {recursive: true, force: true});
 	});
 
+	/**
+	 * A workspace whose unit reads `locked.sops.yaml`, which the `sops` on its PATH cannot decrypt, as in CI with no
+	 * key.
+	 */
+	async function workspaceWithLockedSops(unit: string[]): Promise<{root: string; env: NodeJS.ProcessEnv}> {
+		const made = await workspaceWithSops([
+			'locals {',
+			'  secrets = yamldecode(sops_decrypt_file("${get_terragrunt_dir()}/locked.sops.yaml"))',
+			'}',
+			...unit
+		]);
+		await fs.writeFile(path.join(made.root, 'locked.sops.yaml'),
+			'token: ENC[AES256_GCM,data:abc,type:str]\nport: ENC[AES256_GCM,data:def,type:int]\nsops:\n  version: 3.9.0\n');
+		await fs.writeFile(path.join(made.root, 'bin', 'sops'),
+			'#!/bin/sh\necho "Failed to get the data key required to decrypt the SOPS file." >&2\nexit 1\n', {mode: 0o755});
+		return made;
+	}
+
+	it('validates with --offline a unit that reads a sops file it cannot decrypt, not checking what is computed from it', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const made = await workspaceWithLockedSops([
+			'inputs = {',
+			'  token = local.secrets.token',
+			'  url   = "https://${local.secrets.token}@example.com"',
+			'  port  = tonumber(local.secrets.port) + 1',
+			'  set   = local.secrets.token != ""',
+			'}'
+		]);
+		const validate = (offline: boolean) => spawnSync(process.execPath,
+			[cli, 'hcl', 'validate', ...(offline ? ['--offline'] : []), '--working-dir', made.root],
+			{cwd: made.root, encoding: 'utf8', env: made.env});
+
+		const online = validate(false);
+		expect(online.status).to.equal(1, online.stderr);
+		expect(online.stderr).to.contain('Failed to get the data key');
+
+		const offline = validate(true);
+		expect(offline.status).to.equal(0, offline.stderr);
+		expect(offline.stdout).to.equal('');
+		expect(offline.stderr).to.equal('');
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
+	it('still reports with --offline a key the sops file does not have, and a fault beside a secret', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		for (const [field, fault] of [
+			['local.secrets.nope', 'nope'],
+			['"${local.secrets.token}-${local.missing}"', 'Undefined local value "missing"']
+		]) {
+			const made = await workspaceWithLockedSops(['inputs = {', `  seen = ${field}`, '}']);
+			const result = spawnSync(process.execPath, [cli, 'hcl', 'validate', '--offline', '--working-dir', made.root],
+				{cwd: made.root, encoding: 'utf8', env: made.env});
+			expect(result.status).to.equal(1, `${field}: ${result.stderr}`);
+			expect(result.stderr).to.contain(fault);
+			await fs.rm(made.root, {recursive: true, force: true});
+		}
+	});
+
+	it('never runs a command with a secret it could not decrypt when validating with --offline', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const made = await workspaceWithLockedSops([
+			'inputs = {',
+			'  given    = run_cmd("sh", "-c", "echo given >> ran", local.secrets.token)',
+			'  embedded = run_cmd("sh", "-c", "echo embedded >> ran; echo ${local.secrets.token}")',
+			'  plain    = run_cmd("sh", "-c", "echo plain >> ran")',
+			'}'
+		]);
+		const result = spawnSync(process.execPath, [cli, 'hcl', 'validate', '--offline', '--working-dir', made.root],
+			{cwd: made.root, encoding: 'utf8', env: made.env});
+		expect(result.status).to.equal(0, result.stderr);
+		expect(await fs.readFile(path.join(made.root, 'ran'), 'utf8')).to.equal('plain\n');
+		await fs.rm(made.root, {recursive: true, force: true});
+	});
+
 	it('reports a fault written beside a dependency output when validating', async () => {
 		const cli = path.resolve('dist/cli.cjs');
 		const body = dependencyBlock([]);
