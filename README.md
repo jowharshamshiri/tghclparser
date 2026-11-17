@@ -98,7 +98,7 @@ tghclp hcl validate --json --working-dir ./infrastructure
 
 It recursively validates Terragrunt HCL files, returns a non-zero status when diagnostics are found, and supports JSON diagnostics for automation. Add `--show-config-path` to emit the invalid configuration paths instead of diagnostic objects.
 
-Validation reads each dependency's outputs with `tofu output`, and decrypts sops files, as Terragrunt does. Add `--offline` to validate without either, for example in CI with no providers or keys. A dependency's outputs are then its `mock_outputs` where `validate` is allowed to see them, a sops file that cannot be decrypted is read as written, and anything that needs a real value is not checked or reported.
+Validation does not read a dependency's outputs, as Terragrunt's does not, so it needs no providers installed. A dependency's outputs are its `mock_outputs` where `validate` is allowed to see them, and otherwise unknown: an expression that needs them is not checked, while a fault written beside one is still reported. Sops files are decrypted as when running, so a unit that reads one needs its key.
 
 Configuration discovery is also available without evaluating a configuration:
 
