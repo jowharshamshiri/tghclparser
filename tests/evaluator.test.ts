@@ -47,6 +47,106 @@ describe('semantic configuration evaluation', () => {
 		assert.equal(result.unresolved, undefined);
 	});
 
+	describe('for expressions', () => {
+		const forInputs = async (expression: string): Promise<unknown> => {
+			const content = [
+				'locals {',
+				'  containers = { A = { provider = "AWS" }, B = { provider = "GCP" } }',
+				'}',
+				'inputs = {',
+				`  x = ${expression}`,
+				'}'
+			].join('\n');
+			const result = await evaluator.evaluateUnit(configPath, content, process.cwd());
+			assert.equal(result.error, undefined);
+			return (runtimeValueToPlain(result.inputs!) as Record<string, unknown>).x;
+		};
+
+		it('reads an attribute of the variable', async () => {
+			assert.deepEqual(
+				await forInputs('[for c in values(local.containers) : { name = c.provider }]'),
+				[{ name: 'AWS' }, { name: 'GCP' }]
+			);
+		});
+
+		it('binds the key and value of an object', async () => {
+			assert.deepEqual(
+				await forInputs('[for k, c in local.containers : "${k}=${c.provider}"]'),
+				['A=AWS', 'B=GCP']
+			);
+		});
+
+		it('binds the index and value of a list', async () => {
+			assert.deepEqual(await forInputs('{for i, v in ["a", "b"] : v => i}'), { a: 0, b: 1 });
+		});
+
+		it('keeps only the elements that pass the condition', async () => {
+			assert.deepEqual(await forInputs('[for v in [1, 2, 3] : v if v > 1]'), [2, 3]);
+			assert.deepEqual(
+				await forInputs('{for k, c in local.containers : k => c.provider if k != "A"}'),
+				{ B: 'GCP' }
+			);
+		});
+
+		it('groups values by key with ...', async () => {
+			assert.deepEqual(
+				await forInputs('{for v in ["a", "b", "a"] : v => v ... if v != "b"}'),
+				{ a: ['a', 'a'] }
+			);
+		});
+
+		it('rejects a duplicate key without ...', async () => {
+			const result = await evaluator.evaluateUnit(
+				configPath,
+				'inputs = { x = {for v in ["a", "a"] : v => v} }',
+				process.cwd()
+			);
+			assert.equal(result.valid, false);
+			assert.match(result.error ?? '', /Duplicate key "a"/);
+		});
+
+		it('reports a missing attribute of the variable', async () => {
+			const result = await evaluator.evaluateUnit(
+				configPath,
+				'inputs = { x = [for c in [{ a = 1 }] : c.b] }',
+				process.cwd()
+			);
+			assert.equal(result.valid, false);
+			assert.match(result.error ?? '', /Missing attribute "b" on "c"/);
+		});
+
+		it('visits the keys of an object in lexical order, as HCL does', async () => {
+			assert.deepEqual(await forInputs('[for k, v in { b = 1, a = 2, "10" = 3, "9" = 4 } : k]'), ['10', '9', 'a', 'b']);
+			assert.deepEqual(await forInputs('[for v in { b = 1, a = 2 } : v]'), [2, 1]);
+		});
+
+		it('takes a condition that converts to a bool', async () => {
+			assert.deepEqual(await forInputs('[for v in [1, 2] : v if v > 1 ? "true" : "false"]'), [2]);
+		});
+
+		const forError = async (expression: string): Promise<string> => {
+			const result = await evaluator.evaluateUnit(configPath, `inputs = { x = ${expression} }`, process.cwd());
+			assert.equal(result.valid, false);
+			return result.error ?? '';
+		};
+
+		it('rejects a condition that is not a bool', async () => {
+			assert.match(await forError('[for v in [1, 2] : v if v]'), /"if" clause of a for expression must be a bool, got number/);
+			assert.match(await forError('[for v in [1, 2] : v if "yes"]'), /"if" clause of a for expression must be a bool, got string "yes"/);
+			assert.match(await forError('[for v in [1, 2] : v if null]'), /"if" clause of a for expression must not be null/);
+		});
+
+		it('takes a key that converts to a string, and rejects any other', async () => {
+			assert.deepEqual(await forInputs('{for v in [true, 2] : v => v}'), { true: true, '2': 2 });
+			assert.match(await forError('{for v in [{ n = "x" }] : v => v}'), /key of a for expression must be a string, got object/);
+			assert.match(await forError('{for v in [null] : v => 1}'), /key of a for expression must not be null/);
+		});
+
+		it('lets a variable shadow a namespace of the same name', async () => {
+			assert.deepEqual(await forInputs('[for local in [{ provider = "x" }] : local.provider]'), ['x']);
+		});
+	});
+
 	it('places a missing local and a missing attribute where they are written, and reports both', async () => {
 		const content = [
 			'locals {',

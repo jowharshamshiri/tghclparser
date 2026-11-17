@@ -737,10 +737,10 @@ MapComprehension = "{" _
   "in" _ collection:(ParenthesizedCollection / Expression) _
   precondition:OptionalCondition? _
   ":" _ key:Expression _
-  "=>" _ value:Expression _ grouping:"..."?
+  "=>" _ value:Expression _ grouping:"..."? _
   postcondition:OptionalCondition? _
 "}" {
-  return makeNode('map_comprehension', null, location(), [
+  return makeNode('map_comprehension', grouping, location(), [
     makeIdentifierNode(item, location()),
     ...(second ? [makeIdentifierNode(second[2], location())] : []),
     collection,

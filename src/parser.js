@@ -898,7 +898,7 @@ function peg$parse(input, options) {
   ]);
 };
   var peg$f86 = function(item, second, collection, precondition, key, value, grouping, postcondition) {
-  return makeNode('map_comprehension', null, location(), [
+  return makeNode('map_comprehension', grouping, location(), [
     makeIdentifierNode(item, location()),
     ...(second ? [makeIdentifierNode(second[2], location())] : []),
     collection,
@@ -10738,7 +10738,7 @@ function peg$parse(input, options) {
 
   function peg$parseMapComprehension() {
     var startPos = peg$currPos;
-    var s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, s12, s13, s14, s15, s16, s17, s18, s19, s20, s21, s22, s23, s24, s25, s26;
+    var s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, s12, s13, s14, s15, s16, s17, s18, s19, s20, s21, s22, s23, s24, s25, s26, s27;
 
     peg$tracer.trace({
       type: "rule.enter",
@@ -10872,21 +10872,22 @@ function peg$parse(input, options) {
                       if (s23 === peg$FAILED) {
                         s23 = null;
                       }
-                      s24 = peg$parseOptionalCondition();
-                      if (s24 === peg$FAILED) {
-                        s24 = null;
+                      s24 = peg$parse_();
+                      s25 = peg$parseOptionalCondition();
+                      if (s25 === peg$FAILED) {
+                        s25 = null;
                       }
-                      s25 = peg$parse_();
+                      s26 = peg$parse_();
                       if (input.charCodeAt(peg$currPos) === 125) {
-                        s26 = peg$c8;
+                        s27 = peg$c8;
                         peg$currPos++;
                       } else {
-                        s26 = peg$FAILED;
+                        s27 = peg$FAILED;
                         if (peg$silentFails === 0) { peg$fail(peg$e10); }
                       }
-                      if (s26 !== peg$FAILED) {
+                      if (s27 !== peg$FAILED) {
                         peg$savedPos = s0;
-                        s0 = peg$f86(s5, s7, s11, s13, s17, s21, s23, s24);
+                        s0 = peg$f86(s5, s7, s11, s13, s17, s21, s23, s25);
                       } else {
                         peg$currPos = s0;
                         s0 = peg$FAILED;

@@ -107,6 +107,40 @@ export class Schema {
 		return result ?? undefined;
 	}
 
+	/**
+	 * The keys an object-valued attribute takes: its own, or those of the block it is the attribute form of, and the
+	 * variant keys for the value written for its selector.
+	 *
+	 * @param attribute the attribute whose value is being read.
+	 * @param selected the plain string written for the attribute's variant selector, when there is one.
+	 * @returns the keys, empty when the schema gives none.
+	 */
+	getValueKeys(attribute: AttributeDefinition, selected?: string): AttributeDefinition[] {
+		const own = attribute.attributesOf
+			? this.getBlockDefinition(attribute.attributesOf)?.attributes ?? []
+			: attribute.attributes ?? [];
+		const variants = attribute.variants?.attributes;
+		if (selected === undefined || !variants || !Object.hasOwn(variants, selected)) return own;
+		return [...own, ...variants[selected]];
+	}
+
+	/**
+	 * One key of an object-valued attribute. For a map whose values take a block's attributes, every name is a key,
+	 * and its value takes that block's attributes.
+	 *
+	 * @param attribute the attribute whose value holds the key.
+	 * @param name the key.
+	 * @param selected the plain string written for the attribute's variant selector, when there is one.
+	 * @returns the key's definition, or undefined when the schema does not describe it.
+	 */
+	getValueKey(attribute: AttributeDefinition, name: string, selected?: string): AttributeDefinition | undefined {
+		if (attribute.elementsOf) {
+			const block = this.getBlockDefinition(attribute.elementsOf);
+			return block && { name, description: block.description ?? '', required: false, types: ['object'], attributesOf: attribute.elementsOf };
+		}
+		return this.getValueKeys(attribute, selected).find(key => key.name === name);
+	}
+
 	getAllBlockTemplates(): BlockDefinition[] {
 		const collect = (blocks: BlockDefinition[]): BlockDefinition[] => blocks.flatMap(block => [
 			block,

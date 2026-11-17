@@ -7,6 +7,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { DiagnosticSeverity } from 'vscode-languageserver';
+
 import { ConfigEvaluator, UnresolvedDependencyOutputError, runtimeValueToPlain } from './Evaluator';
 import type { DependencyRequest } from './Evaluator';
 import { convertToRuntimeValue, makeObjectValue } from './functions/utils';
@@ -2392,7 +2394,12 @@ async function validateFile(
 	if (document.hasIncludes()) {
 		document.setInheritedInlineFunctions(await inheritedInlineFunctions(filePath, content, workDir));
 	}
-	const diagnostics = document.getDiagnostics().map(item => diagnostic(filePath, content, item));
+	// Only errors fail validation. A warning, such as a backend key the schema
+	// does not list, is the editor's advice: Terragrunt's hcl validate does not
+	// check it.
+	const diagnostics = document.getDiagnostics()
+		.filter(item => item.severity === DiagnosticSeverity.Error)
+		.map(item => diagnostic(filePath, content, item));
 	if (diagnostics.length > 0) return diagnostics;
 	if (path.basename(filePath) === 'terragrunt.values.hcl') return [];
 	// Validation evaluates the unit. Terragrunt's `hcl validate` does so without

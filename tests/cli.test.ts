@@ -1292,6 +1292,26 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(made.root, {recursive: true, force: true});
 	});
 
+	it('validates a backend key the editor warns about, as Terragrunt does, and still fails on an error', async () => {
+		// Terragrunt's hcl validate does not check a backend's config keys; the editor's warning about one is advice,
+		// not a validation failure.
+		const cli = path.resolve('dist/cli.cjs');
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-backend-keys-')));
+		const validate = async (body: string) => {
+			await fs.writeFile(path.join(root, 'terragrunt.hcl'), body);
+			return spawnSync(process.execPath, [cli, 'hcl', 'validate', '--working-dir', root], {cwd: root, encoding: 'utf8'});
+		};
+
+		const warned = await validate('remote_state {\n  backend = "s3"\n  config = {\n    bukcet = "state"\n  }\n}\n');
+		expect(warned.status).to.equal(0, warned.stderr);
+		expect(warned.stderr).to.equal('');
+
+		const failed = await validate('remote_state {\n  backend = "s3"\n  bad_property = false\n  config = {}\n}\n');
+		expect(failed.status).to.equal(1, failed.stderr);
+		expect(failed.stderr).to.contain('bad_property');
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
 	it('does not borrow validate mocks or misreport the render command', async () => {
 		const cli = path.resolve('dist/cli.cjs');
 		const body = dependencyBlock(['  mock_outputs = {', '    answer = "invented"', '  }'], '["validate"]');
