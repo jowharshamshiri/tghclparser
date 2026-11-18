@@ -4186,13 +4186,17 @@
 		},
 		{
 			"name": "mark_glob_as_read",
-			"description": "Expands a gobwas-compatible glob and marks every matching file as read. Relative patterns resolve from the current working directory. Expansion is confined to the enclosing Git repository unless a leading --terragrunt-boundary argument explicitly changes the boundary.",
+			"description": "Expands a gobwas-compatible glob and marks every matching file as read. Relative patterns resolve from the current working directory. Expansion is confined to the enclosing Git repository unless a leading --terragrunt-boundary argument explicitly changes the boundary, given inline (\"--terragrunt-boundary=<directory>\", pattern) or as the next argument (\"--terragrunt-boundary\", directory, pattern); a relative boundary resolves from the current working directory.",
 			"parameters": [
-				{ "name": "boundary_or_pattern", "types": ["string"], "required": true },
-				{ "name": "pattern", "types": ["string"], "required": false }
+				{ "name": "boundary_or_pattern", "types": ["string"], "required": true, "description": "The pattern, or the boundary: --terragrunt-boundary=<directory>, or --terragrunt-boundary followed by the directory" },
+				{ "name": "directory_or_pattern", "types": ["string"], "required": false, "description": "The pattern after --terragrunt-boundary=<directory>, or the boundary directory after --terragrunt-boundary" },
+				{ "name": "pattern", "types": ["string"], "required": false, "description": "The pattern after --terragrunt-boundary and its directory" }
 			],
 			"returnType": { "types": ["array"], "description": "Absolute paths matched by the glob." },
-			"examples": ["locals {\n  configs = mark_glob_as_read(\"${get_terragrunt_dir()}/config/{*.yaml,**/*.yaml}\")\n}"],
+			"examples": [
+				"locals {\n  configs = mark_glob_as_read(\"${get_terragrunt_dir()}/config/{*.yaml,**/*.yaml}\")\n}",
+				"locals {\n  shared = mark_glob_as_read(\"--terragrunt-boundary\", \"/\", \"${get_terragrunt_dir()}/../../shared/*.yaml\")\n}"
+			],
 			"deprecated": false
 		},
 		{

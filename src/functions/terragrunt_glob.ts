@@ -160,18 +160,34 @@ async function filesBelow(directory: string): Promise<string[]> {
 	return files;
 }
 
+const boundaryFlag = '--terragrunt-boundary';
+
+// A leading argument that starts with the flag sets the boundary, inline
+// ("--terragrunt-boundary=<directory>") or as the next argument
+// ("--terragrunt-boundary", "<directory>"), resolved against the working
+// directory; the arguments after it are the pattern's.
+function parseBoundary(args: string[], workingDirectory: string): { boundary?: string; rest: string[] } {
+	if (args.length === 0 || !args[0].startsWith(boundaryFlag)) return { rest: args };
+	let configuredBoundary: string;
+	let rest: string[];
+	if (args[0] === boundaryFlag) {
+		if (args.length < 2) throw new Error(`${boundaryFlag} requires a directory value`);
+		configuredBoundary = args[1];
+		rest = args.slice(2);
+	} else if (args[0].startsWith(`${boundaryFlag}=`)) {
+		configuredBoundary = args[0].slice(boundaryFlag.length + 1);
+		rest = args.slice(1);
+	} else throw new Error(`unrecognized flag ${JSON.stringify(args[0])} for mark_glob_as_read`);
+	if (!configuredBoundary) throw new Error(`${boundaryFlag} requires a non-empty directory value`);
+	return { boundary: path.resolve(workingDirectory, configuredBoundary), rest };
+}
+
 export async function expandTerragruntGlob(args: string[], workingDirectory: string): Promise<string[]> {
-	if (args.length < 1 || args.length > 2) throw new Error('mark_glob_as_read requires a pattern and an optional leading --terragrunt-boundary argument');
-	let boundary = await gitBoundary(workingDirectory);
-	let pattern = args[0];
-	if (args.length === 2) {
-		if (!args[0].startsWith('--terragrunt-boundary=')) throw new Error('mark_glob_as_read boundary must use --terragrunt-boundary=<directory>');
-		const configuredBoundary = args[0].slice('--terragrunt-boundary='.length);
-		if (!configuredBoundary) throw new Error('mark_glob_as_read boundary cannot be empty');
-		boundary = path.resolve(workingDirectory, configuredBoundary);
-		pattern = args[1];
-	}
-	if (!pattern) throw new Error('mark_glob_as_read pattern cannot be empty');
+	const { boundary: configuredBoundary, rest } = parseBoundary(args, workingDirectory);
+	if (rest.length !== 1) throw new Error(`Expected 1 params for function mark_glob_as_read, but got ${rest.length}`);
+	const boundary = configuredBoundary ?? await gitBoundary(workingDirectory);
+	// An empty pattern names the working directory, which is no file.
+	const pattern = rest[0];
 	const matches = new Set<string>();
 	for (const expandedPattern of expandBraces(path.isAbsolute(pattern) ? path.normalize(pattern) : path.resolve(workingDirectory, pattern))) {
 		const root = walkRoot(expandedPattern);
