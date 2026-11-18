@@ -1,7 +1,7 @@
 {
 	"name": "tghclparser",
 	"type": "module",
-	"version": "1.286.1571",
+	"version": "1.287.1583",
 	"description": "A drop-in replacement for the terragrunt CLI, and the HCL parser and language server behind it. Runs OpenTofu/Terraform through Terragrunt configurations — includes, dependencies, generate blocks, stacks — and matches terragrunt's own behaviour, checked against it rather than against the documentation.",
 	"author": {
 		"name": "Bahram Shamshiri",
@@ -67,7 +67,6 @@
 	],
 	"scripts": {
 		"build": "tsdown",
-		"format": "prettier --write \"src/**/*.ts\"",
 		"lint": "eslint --fix",
 		"lint:ci": "eslint",
 		"parser": "peggy --cache --trace --format 'es' --dts --dependency \"{Schema}:./Schema.ts\" --dependency \"{scanJsBody}:./js-body.ts\" --output src/parser.js grammar.peggy",
@@ -110,24 +109,13 @@
 		"eslint": "^9.39.0",
 		"eslint-formatter-gha": "2.0.1",
 		"globals": "^17.12.0",
-		"lint-staged": "^16.2.0",
 		"mocha": "^12.0.1",
 		"peggy": "^4.2.0",
-		"prettier": "^3.3.3",
 		"publint": "^0.3.25",
-		"simple-git-hooks": "2.11.1",
 		"tsdown": "^0.23.0",
 		"tsx": "^4.23.15",
 		"typescript": "^5.9.0",
 		"typescript-eslint": "^8.46.0"
-	},
-	"lint-staged": {
-		"*.{js,jsx,ts,tsx}": [
-			"prettier --ignore-path ./.gitignore --write "
-		],
-		"*.{js,ts,cjs,mjs}": [
-			"eslint --fix"
-		]
 	},
 	"overrides": {
 		"mocha": {
