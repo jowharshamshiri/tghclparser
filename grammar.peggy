@@ -571,7 +571,11 @@ DoubleStringChar =
   [^"\\]
 
 EscapeSequence = "\\" . { return text(); }
-EscapedChar = "\\" escaped:. {
+// `\u` takes four hexadecimal digits and `\U` eight, naming a code point. One with fewer digits, or naming no
+// character, is reported where the literal is checked, so it is read here as its selector alone.
+EscapedChar = "\\" "u" code:$(HexDigit|4|) { return String.fromCodePoint(parseInt(code, 16)); }
+  / "\\" "U" code:$(HexDigit|8|) &{ return parseInt(code, 16) <= 0x10FFFF; } { return String.fromCodePoint(parseInt(code, 16)); }
+  / "\\" escaped:. {
   switch (escaped) {
     case "n": return "\n";
     case "r": return "\r";
@@ -582,6 +586,8 @@ EscapedChar = "\\" escaped:. {
     default: return escaped;
   }
 }
+HexDigit = [0-9a-fA-F]
+
 InterpolatedExpr = (
   DirectiveInterpolation /
   TemplateInterpolation

@@ -3,6 +3,7 @@ import * as path from 'node:path';
 
 import { URI } from 'vscode-uri';
 
+import { makeStringValue } from '../functions/utils';
 import type { RuntimeValue, ValueType } from '../model';
 
 import type { TerraformState } from './model';
@@ -103,7 +104,7 @@ export class StateManager {
 		}
 		switch (type) {
 			case 'string': {
-				return { type: 'string', value: String(value) };
+				return makeStringValue(String(value));
 			}
 			case 'number': {
 				return { type: 'number', value: Number(value) };
