@@ -1,8 +1,10 @@
 import type { RuntimeValue, ValueType } from '../model';
 
+// A string value is NFC-normalized as it is made, as go-cty normalizes every string on entry, so two spellings of
+// one character are one string wherever strings are compared, counted or written out.
 export const makeStringValue = (value: string): RuntimeValue<'string'> => ({
     type: 'string',
-    value
+    value: value.normalize('NFC')
 });
 
 export const makeNumberValue = (value: number): RuntimeValue<'number'> => ({
@@ -25,12 +27,41 @@ export const makeArrayValue = (value: RuntimeValue<ValueType>[]): RuntimeValue<'
     value
 });
 
+// An object's attribute names are NFC-normalized as go-cty normalizes them; the map is kept when they already are.
 export const makeObjectValue = (value: Map<string, RuntimeValue<ValueType>>): RuntimeValue<'object'> => ({
     type: 'object',
-    value
+    value: [...value.keys()].every(key => key === key.normalize('NFC'))
+        ? value
+        : new Map([...value].map(([key, entry]) => [key.normalize('NFC'), entry]))
 });
 
-export const makeSensitiveValue = (value: RuntimeValue<ValueType>): RuntimeValue<ValueType> => ({
+/**
+ * The name go-cty gives a value's type in a message, such as `bool` or `tuple`. A list or an object written in
+ * configuration is a tuple or an object to go-cty, and those are the names given to every list and object here.
+ *
+ * @param value the value, not sensitive.
+ * @returns the type's name.
+ */
+export function friendlyTypeName(value: RuntimeValue<ValueType>): string {
+    switch (value.type) {
+        case 'string':
+        case 'number':
+            return value.type;
+        case 'boolean':
+            return 'bool';
+        case 'array':
+            return 'tuple';
+        case 'object':
+        case 'block':
+            return 'object';
+        case 'null':
+            return 'dynamic';
+        default:
+            throw new Error(`Value of type ${String(value.type)} has no type name`);
+    }
+}
+
+export const makeSensitiveValue =(value: RuntimeValue<ValueType>): RuntimeValue<ValueType> => ({
     type: 'sensitive' as unknown as ValueType,
     value
 });

@@ -182,16 +182,157 @@ describe('semantic configuration evaluation', () => {
 		});
 
 		it('rejects an offset or a length that is not a whole number', async () => {
-			for (const [args, parameter] of [['"hello", 1.5, 2', 'offset'], ['"hello", 1, 2.5', 'length'], ['"hello", -0.5, -1', 'offset']]) {
+			for (const args of ['"hello", 1.5, 2', '"hello", 1, 2.5', '"hello", -0.5, -1']) {
 				const result = await evaluator.evaluateUnit(configPath, `inputs = {\n  x = substr(${args})\n}\n`, process.cwd());
 				assert.equal(result.valid, false, args);
-				assert.match(result.error ?? '', new RegExp(`substr ${parameter} must be a whole number`), args);
+				assert.equal(result.error, 'value must be a whole number, between -9223372036854775808 and 9223372036854775807', args);
 			}
 		});
 
 		it('counts grapheme clusters', async () => {
-			assert.equal(await substr('"🇬🇧éx", 1, 1'), 'é');
+			assert.equal(await substr('"\u{1F1EC}\u{1F1E7}e\u0301x", 1, 1'), '\u00e9');
 			assert.equal(await substr('"a👍🏽b", -2, 1'), '👍🏽');
+		});
+	});
+
+	// Every expected value and message below is what Terragrunt 1.2.2 renders for the same expression.
+	describe('strings and functions as Terragrunt evaluates them', () => {
+		const render = async (expression: string): Promise<unknown> => {
+			const result = await evaluator.evaluateUnit(configPath, `inputs = {\n  x = ${expression}\n}\n`, process.cwd());
+			assert.equal(result.error, undefined, expression);
+			return (runtimeValueToPlain(result.inputs!) as Record<string, unknown>).x;
+		};
+		const failure = async (expression: string): Promise<string> => {
+			const result = await evaluator.evaluateUnit(configPath, `inputs = {\n  x = ${expression}\n}\n`, process.cwd());
+			assert.equal(result.valid, false, expression);
+			return result.error ?? '';
+		};
+
+		it('reads \\u and \\U escapes in a quoted string as the characters they name', async () => {
+			assert.equal(await render('"caf\\u00e9"'), 'caf\u00e9');
+			assert.equal(await render('"\\U0001F600"'), '\u{1F600}');
+			assert.equal(await render('"%%{x}\\u00e9"'), '%{x}\u00e9');
+			assert.equal(await render('"a\\\\u00e9"'), 'a\\u00e9');
+			assert.deepEqual(await render('{ "caf\\u00e9" = 1 }'), { 'caf\u00e9': 1 });
+		});
+
+		it('normalizes every string to NFC, as written and as functions make it', async () => {
+			assert.equal(await render('"e\\u0301"'), '\u00e9');
+			assert.equal(await render('"e\u0301"'), '\u00e9');
+			assert.equal(await render('"x${"e\\u0301"}"'), 'x\u00e9');
+			assert.equal(await render('"\\u212b"'), '\u00c5');
+			assert.equal(await render('"\\u00e9" == "e\\u0301"'), true);
+			assert.equal(await render('length("e\\u0301")'), 1);
+			assert.equal(await render('join("", ["e", "\\u0301"])'), '\u00e9');
+			assert.equal(await render('upper("e\\u0301")'), '\u00c9');
+			assert.equal(await render('format("%s%s", "e", "\\u0301")'), '\u00e9');
+			assert.deepEqual(await render('{ "e\\u0301" = 1, "\\u00e9" = 2 }'), { '\u00e9': 2 });
+			assert.deepEqual(await render('{ e\u0301 = 1 }'), { '\u00e9': 1 });
+			assert.deepEqual(await render('keys({ "b" = 1, "e\\u0301" = 2, "a" = 3 })'), ['a', 'b', '\u00e9']);
+		});
+
+		it('merges past a null argument, and names the type of any argument that is not an object', async () => {
+			assert.deepEqual(await render('merge(null)'), {});
+			assert.deepEqual(await render('merge(null, null)'), {});
+			assert.deepEqual(await render('merge(null, { a = 1 })'), { a: 1 });
+			assert.deepEqual(await render('merge({ a = 1 }, null, { b = 2 })'), { a: 1, b: 2 });
+			assert.equal(await failure('merge({ a = 1 }, "x")'), 'arguments must be maps or objects, got "string"');
+		});
+
+		it('refuses concat, max, min, setunion and setintersection with no argument', async () => {
+			assert.equal(await failure('concat()'), 'at least one argument is required');
+			assert.equal(await failure('max()'), 'must pass at least one number');
+			assert.equal(await failure('min()'), 'must pass at least one number');
+			for (const name of ['setunion', 'setintersection']) {
+				assert.equal(await failure(`${name}()`), `Not enough function arguments: Function "${name}" expects at least 1 argument(s). Missing value for "first_set".`);
+			}
+			assert.deepEqual(await render('concat(["a"])'), ['a']);
+			assert.equal(await render('max(1)'), 1);
+			assert.equal(await render('min(1)'), 1);
+			assert.deepEqual(await render('setunion(["a"])'), ['a']);
+			assert.deepEqual(await render('setintersection(["a"])'), ['a']);
+		});
+
+		it('formats each verb as go-cty does', async () => {
+			const cases: Array<[string, string]> = [
+				['"%d|%5d|%-5d|%05d|%+d|% d|%.3d|%x|%X|%#x|%o|%#o|%b|%#b", 42, 42, 42, 42, 42, 42, 42, 255, 255, 255, 8, 8, 5, 5', '42|   42|42   |00042|+42| 42|042|ff|FF|0xff|10|010|101|0b101'],
+				['"%d|%x|%5.3d", -42, -255, -7', '-42|-ff| -007'],
+				['"%e|%E|%.2e|%10.3e|%-12e|%+e|%012.2e", 1234.5678, 1234.5678, 1234.5678, 1234.5678, 1234.5678, 1234.5678, -1234.5678', '1.234568e+03|1.234568E+03|1.23e+03| 1.235e+03|1.234568e+03|+1.234568e+03|-0001.23e+03'],
+				['"%f|%.2f|%8.3f|%-8.1f|%+.1f|% .1f|%08.2f|%.0f|%.0f|%.0f", 3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159, -3.14159, 2.5, 3.5, 0.5', '3.141590|3.14|   3.142|3.1     |+3.1| 3.1|-0003.14|2|4|0'],
+				['"%.2f|%.2f|%.1f|%.1f|%.0f", 1.005, 2.675, 0.25, 0.35, 0.6', '1.00|2.67|0.2|0.3|1'],
+				['"%g|%g|%g|%g|%g|%.3g|%G|%g", 1234567, 1000000, 100000, 0.0001, 0.00001, 3.14159, 0.00001, 1.5', '1.234567e+06|1e+06|100000|0.0001|1e-05|3.14|1E-05|1.5'],
+				['"%v|%v|%v|%v|%v|%v|%v", 1234567, 1000000, 0.00001, 1.5, "str", true, null', '1.234567e+06|1e+06|1e-05|1.5|str|true|null'],
+				['"%v|%#v|%#v|%v|%v", [1, "a"], "str", 1.5, { a = 1 }, ["x"]', '[1,"a"]|"str"|1.5|{"a":1}|["x"]'],
+				['"%q|%10q|%-6q|%s|%5s|%-5s|%05s|%.2s|%.0s|%s|%s", "a\\"b", "hi", "hi", 1.5, "ab", "ab", "ab", "hello", "hello", true, 100000000000000000000', '"a\\"b"|      "hi"|"hi"  |1.5|   ab|ab   |000ab|he|hello|true|100000000000000000000'],
+				['"%t|%t|%t|%t", true, false, "true", "0"', 'true|false|true|false'],
+				['"%d", "12"', '12'],
+				['"%5.1f|%-8.3s|%8s", 3.14159, "abcdef", "\u{1F600}ab"', '  3.1|abc     |     \u{1F600}ab'],
+				['"%.3s|%3s", "e\\u0301e\\u0301e\\u0301x", "e\\u0301"', '\u00e9\u00e9\u00e9|  \u00e9'],
+				['"%.f|%.e|%.g", 2.5, 2.5, 25', '2|2e+00|2e+01'],
+				['"%f", 1e21', '1000000000000000000000.000000'],
+				['"%v|%g|%e", 1e21, 1e21, 0', '1e+21|1e+21|0.000000e+00'],
+				['"%v|%f|%d", 0.1, 0.1, 0', '0.1|0.100000|0'],
+				['"%#e|%#g|%#f", 1.5, 1.5, 1.5', '1.500000e+00|1.5|1.500000'],
+				['"%+s|%+v|% s", "a", "b", "c"', 'a|b|c'],
+				['"%3t|%-3v|%03v|%03s", true, true, 7, "a"', 'true|true|007|00a']
+			];
+			for (const [args, expected] of cases) assert.equal(await render(`format(${args})`), expected, args);
+		});
+
+		it('refuses what go-cty cannot format, with its messages', async () => {
+			const cases: Array<[string, string]> = [
+				['"%d", 1.5', 'unsupported value for "%d" at 0: an integer is required'],
+				['"%t", "yes"', 'unsupported value for "%t" at 0: a bool is required'],
+				['"%t", 1', 'unsupported value for "%t" at 0: bool required, but have number'],
+				['"%d", "abc"', 'unsupported value for "%d" at 0: a number is required'],
+				['"%d", true', 'unsupported value for "%d" at 0: number required, but have bool'],
+				['"%s", [1]', 'unsupported value for "%s" at 0: string required, but have tuple'],
+				['"%s", null', 'unsupported value for "%s" at 0: null value cannot be formatted'],
+				['"%d", null', 'unsupported value for "%d" at 0: null value cannot be formatted'],
+				['"%y", 1', 'unsupported format verb \'y\' in "%y" at offset 0'],
+				['"%!", 1', 'unrecognized format character \'!\' at offset 1'],
+				['"abc %", 1', 'invalid format string starting at offset 5'],
+				['"%[2]s %s %[1]s", "a", "b"', 'not enough arguments for "%s" at 6: need index 3 but have 2 total'],
+				['"%d %d", 1', 'not enough arguments for "%d" at 3: need index 2 but have 1 total'],
+				['"%d", 1, 2', 'too many arguments; only 1 used by format string'],
+				['"no verbs", 1', 'too many arguments; no verbs in format string']
+			];
+			for (const [args, message] of cases) assert.equal(await failure(`format(${args})`), message, args);
+		});
+
+		it('formats a list from list arguments of one length, using any other argument in every string', async () => {
+			assert.deepEqual(await render('formatlist("%s-%s", ["a", "b"], "x")'), ['a-x', 'b-x']);
+			assert.deepEqual(await render('formatlist("%s-%s", "x", ["a", "b"])'), ['x-a', 'x-b']);
+			assert.deepEqual(await render('formatlist("%s-%s", ["a", "b"], ["c", "d"])'), ['a-c', 'b-d']);
+			assert.deepEqual(await render('formatlist("%s", "x")'), ['x']);
+			assert.deepEqual(await render('formatlist("%s %s", "x", "y")'), ['x y']);
+			assert.deepEqual(await render('formatlist("%s", [])'), []);
+			assert.deepEqual(await render('formatlist("%s %s", [], "x")'), []);
+			assert.deepEqual(await render('formatlist("%v", null)'), ['null']);
+			assert.deepEqual(await render('formatlist("%v", { a = 1 })'), ['{"a":1}']);
+			assert.deepEqual(await render('formatlist("plain")'), ['plain']);
+			const failures: Array<[string, string]> = [
+				['"%s-%s", ["a", "b"], ["c"]', 'argument 2 has length 1, which is inconsistent with argument 1 of length 2'],
+				['"%s-%s", ["a"], ["c", "d"]', 'argument 2 has length 2, which is inconsistent with argument 1 of length 1'],
+				['"%s %s", [], ["a"]', 'argument 2 has length 1, which is inconsistent with argument 1 of length 0'],
+				['"%s", null', 'error on format iteration 0: unsupported value for "%s" at 0: null value cannot be formatted'],
+				['"%d", [1, 1.5]', 'error on format iteration 1: unsupported value for "%d" at 0: an integer is required'],
+				['"%s", [["a"]]', 'error on format iteration 0: unsupported value for "%s" at 0: string required, but have tuple'],
+				['"%s=%s", { a = 1 }, ["x"]', 'error on format iteration 0: unsupported value for "%s" at 0: string required, but have object']
+			];
+			for (const [args, message] of failures) assert.equal(await failure(`formatlist(${args})`), message, args);
+		});
+
+		it('refuses an index or a size that is not a whole number', async () => {
+			const whole = 'value must be a whole number, between -9223372036854775808 and 9223372036854775807';
+			assert.equal(await failure('slice(["a", "b", "c"], 0.5, 2)'), `invalid start index: ${whole}`);
+			assert.equal(await failure('slice(["a", "b", "c"], 0, 1.5)'), `invalid end index: ${whole}`);
+			assert.equal(await failure('chunklist(["a", "b"], 1.5)'), `invalid size: ${whole}`);
+			assert.equal(await failure('element(["a", "b"], 1.5)'), `invalid index: ${whole}`);
+			assert.deepEqual(await render('slice(["a", "b", "c"], 1, 3)'), ['b', 'c']);
+			assert.deepEqual(await render('chunklist(["a", "b", "c"], 2)'), [['a', 'b'], ['c']]);
+			assert.equal(await render('element(["a", "b"], 3)'), 'b');
+			assert.equal(await render('element(["a", "b"], -1)'), 'b');
 		});
 	});
 

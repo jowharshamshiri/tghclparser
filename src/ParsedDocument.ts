@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { CompletionItem, Diagnostic, DocumentLink, LocationLink, MarkupContent, Position } from 'vscode-languageserver';
 import { URI } from 'vscode-uri';
 
+import { makeStringValue } from './functions/utils';
 import { readInlineFunction, synthesizeDefinition, tokenToNode } from './inline-functions';
 import type { FunctionContext, FunctionDefinition, ResolvedReference, RuntimeValue, TerragruntConfig, TokenType, ValueType } from './model';
 import { Token } from './model';
@@ -658,26 +659,17 @@ export class ParsedDocument {
 						parts.push(this.coerceToString(evaluated));
 					}
 				}
-				return {
-					type: 'string',
-					value: parts.join('')
-				};
+				return makeStringValue(parts.join(''));
 			}
 
 			case 'interpolation': {
 				if (node.children.length > 0) {
 					const evaluated = await this.evaluateValue(node.children[0]);
 					if (evaluated) {
-						return {
-							type: 'string',
-							value: this.coerceToString(evaluated)
-						};
+						return makeStringValue(this.coerceToString(evaluated));
 					}
 				}
-				return {
-					type: 'string',
-					value: ''
-				};
+				return makeStringValue('');
 			}
 			case 'ternary_expression': {
 				const [condition, trueExpr, falseExpr] = node.children;
@@ -701,10 +693,7 @@ export class ParsedDocument {
 				return this.evaluateComparison(leftValue, rightValue, op.value);
 			}
 			case 'string_lit': {
-				return {
-					type: 'string',
-					value: String(node.value ?? '')
-				};
+				return makeStringValue(String(node.value ?? ''));
 			}
 
 			default: {
@@ -716,10 +705,7 @@ export class ParsedDocument {
 	private evaluateLiteral(node: Token): RuntimeValue<ValueType> | undefined {
 		switch (node.type) {
 			case 'string_lit': {
-				return {
-					type: 'string',
-					value: String(node.value ?? '')
-				};
+				return makeStringValue(String(node.value ?? ''));
 			}
 			case 'number_lit': {
 				return {
@@ -913,10 +899,7 @@ export class ParsedDocument {
 			}
 		}
 
-		return {
-			type: 'string',
-			value: parts.join('')
-		};
+		return makeStringValue(parts.join(''));
 	}
 	private evaluateComparison(
 		left: RuntimeValue<ValueType> | undefined,
@@ -982,7 +965,7 @@ export class ParsedDocument {
 						}
 					};
 
-					const args = parts.slice(1).map(part => ({ type: 'string' as const, value: part }));
+					const args = parts.slice(1).map(makeStringValue);
 					const result = await registry.evaluateFunction(parts[0], args, context);
 					if (result) {
 						return { value: result, source: this.uri, found: true };

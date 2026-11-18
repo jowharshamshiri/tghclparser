@@ -551,7 +551,7 @@
 						"object"
 					],
 					"required": false,
-					"description": "Maps or objects to merge. With none, the result is an empty object",
+					"description": "Maps or objects to merge. A null adds nothing; with none, the result is an empty object",
 					"variadic": true
 				}
 			],
@@ -1298,7 +1298,7 @@
 						"number"
 					],
 					"required": true,
-					"description": "Size of each chunk",
+					"description": "Size of each chunk, a whole number",
 					"validation": {
 						"min": 1
 					}
@@ -1669,7 +1669,7 @@
 						"number"
 					],
 					"required": true,
-					"description": "Index to retrieve",
+					"description": "Index to retrieve, a whole number",
 					"validation": {
 						"min": 0
 					}
@@ -2171,7 +2171,7 @@
 					],
 					"required": false,
 					"variadic": true,
-					"description": "Lists of values to format"
+					"description": "Values to format. A list gives one of its elements to each string, and every list must be as long as the others; any other value is used in every string"
 				}
 			],
 			"returnType": {
@@ -2910,7 +2910,7 @@
 						"number"
 					],
 					"required": true,
-					"description": "Starting index"
+					"description": "Starting index, a whole number"
 				},
 				{
 					"name": "end_index",
@@ -2918,7 +2918,7 @@
 						"number"
 					],
 					"required": true,
-					"description": "Ending index (exclusive)"
+					"description": "Ending index (exclusive), a whole number"
 				}
 			],
 			"returnType": {
