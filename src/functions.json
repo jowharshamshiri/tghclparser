@@ -2509,9 +2509,8 @@
 					"types": [
 						"number"
 					],
-					"required": false,
-					"description": "Base to parse in (default 10)",
-					"defaultValue": 10,
+					"required": true,
+					"description": "Base to parse in",
 					"validation": {
 						"min": 2,
 						"max": 62
@@ -2563,7 +2562,7 @@
 		},
 		{
 			"name": "range",
-			"description": "Generates a list of numbers from start to end (inclusive).\n\n* Creates a sequence of numbers with optional step value.\n* Can count up or down based on start and end values.",
+			"description": "Generates a list of numbers from a start up to, but not including, a limit.\n\n* `range(limit)` counts from 0, `range(start, limit)` from start, both by 1 or by -1 when the limit is below the start.\n* `range(start, limit, step)` counts by step, which must move towards the limit.\n* Generates at most 1024 numbers.",
 			"parameters": [
 				{
 					"name": "start",
@@ -2571,15 +2570,15 @@
 						"number"
 					],
 					"required": true,
-					"description": "First number in range"
+					"description": "First number in the range; when it is the only argument, the limit, and the range starts at 0"
 				},
 				{
-					"name": "end",
+					"name": "limit",
 					"types": [
 						"number"
 					],
-					"required": true,
-					"description": "Last number in range"
+					"required": false,
+					"description": "Number the range stops before"
 				},
 				{
 					"name": "step",
@@ -2587,11 +2586,7 @@
 						"number"
 					],
 					"required": false,
-					"description": "Increment between numbers",
-					"defaultValue": 1,
-					"validation": {
-						"min": 0.000001
-					}
+					"description": "Increment between numbers: 1, or -1 when the limit is below the start, unless given"
 				}
 			],
 			"returnType": {
@@ -3051,7 +3046,7 @@
 		},
 		{
 			"name": "substr",
-			"description": "Extracts a substring from a string.\n\n* Returns part of a string based on offset and length.\n* If length is not specified, returns rest of string from offset.\n* Offset can be negative to count from end of string.",
+			"description": "Extracts a substring from a string.\n\n* Returns part of a string based on offset and length.\n* A negative length returns the rest of the string from offset.\n* Offset can be negative to count from end of string.",
 			"parameters": [
 				{
 					"name": "string",
@@ -3074,11 +3069,8 @@
 					"types": [
 						"number"
 					],
-					"required": false,
-					"description": "Length of substring to extract",
-					"validation": {
-						"min": 0
-					}
+					"required": true,
+					"description": "Length of substring to extract; a negative length takes the rest of the string"
 				}
 			],
 			"returnType": {
@@ -3263,7 +3255,7 @@
 		},
 		{
 			"name": "textdecodebase64",
-			"description": "Decodes a Base64-encoded string into UTF-8 text.\n\n* Decodes base64 string into UTF-8 text.\n* Returns error if input is not valid base64 or UTF-8.\n* Useful for decoding stored credentials or certificates.",
+			"description": "Decodes a Base64-encoded string into text in the given character encoding.\n\n* Decodes the bytes as UTF-8 or UTF-16.\n* Returns error if input is not valid base64 or the encoding is not supported.\n* Useful for decoding stored credentials or certificates.",
 			"parameters": [
 				{
 					"name": "str",
@@ -3279,8 +3271,8 @@
 				{
 					"name": "encoding",
 					"types": ["string"],
-					"required": false,
-					"description": "Character encoding; UTF-8 is the supported encoding."
+					"required": true,
+					"description": "Character encoding of the decoded bytes: UTF-8 or UTF-16"
 				}
 			],
 			"returnType": {
@@ -3290,13 +3282,13 @@
 				"description": "Decoded UTF-8 text"
 			},
 			"examples": [
-				"locals { text = textdecodebase64(var.encoded_data) }"
+				"locals { text = textdecodebase64(var.encoded_data, \"UTF-16\") }"
 			],
 			"deprecated": false
 		},
 		{
 			"name": "textencodebase64",
-			"description": "Encodes UTF-8 text as a Base64 string.\n\n* Encodes UTF-8 text into base64 string.\n* Useful for storing text in formats that require base64.\n* Returns error if input is not valid UTF-8.",
+			"description": "Encodes text in the given character encoding as a Base64 string.\n\n* Encodes the text as UTF-8 or UTF-16 bytes, then as base64.\n* Useful for storing text in formats that require base64.\n* Returns error if the encoding is not supported.",
 			"parameters": [
 				{
 					"name": "str",
@@ -3304,13 +3296,13 @@
 						"string"
 					],
 					"required": true,
-					"description": "UTF-8 text to encode"
+					"description": "Text to encode"
 				},
 				{
 					"name": "encoding",
 					"types": ["string"],
-					"required": false,
-					"description": "Character encoding; UTF-8 is the supported encoding."
+					"required": true,
+					"description": "Character encoding of the encoded bytes: UTF-8 or UTF-16"
 				}
 			],
 			"returnType": {
@@ -3323,7 +3315,7 @@
 				}
 			},
 			"examples": [
-				"locals { encoded = textencodebase64(\"Hello, World!\") }"
+				"locals { encoded = textencodebase64(\"Hello, World!\", \"UTF-16\") }"
 			],
 			"deprecated": false
 		},
@@ -3433,7 +3425,7 @@
 		},
 		{
 			"name": "trim",
-			"description": "Removes specified characters from start and end of string.\n\n* Removes all instances of specified characters from both ends.\n* If no characters specified, removes whitespace.\n* Case-sensitive matching.",
+			"description": "Removes specified characters from start and end of string.\n\n* Removes all instances of specified characters from both ends.\n* Case-sensitive matching.",
 			"parameters": [
 				{
 					"name": "string",
@@ -3448,9 +3440,8 @@
 					"types": [
 						"string"
 					],
-					"required": false,
-					"description": "Characters to trim (defaults to whitespace)",
-					"defaultValue": " \t\n\r"
+					"required": true,
+					"description": "Characters to trim, each taken separately"
 				}
 			],
 			"returnType": {
@@ -3460,7 +3451,7 @@
 				"description": "Trimmed string"
 			},
 			"examples": [
-				"locals { cleaned = trim(\"  Hello!  \") }"
+				"locals { cleaned = trim(\"?!Hello!?\", \"!?\") }"
 			],
 			"deprecated": false
 		},

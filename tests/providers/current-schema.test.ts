@@ -98,6 +98,67 @@ generate "provider" {
 		});
 	});
 
+	describe('argument counts', () => {
+		const evaluate = (content: string) => new ConfigEvaluator({ environmentVariables: {}, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true })
+			.evaluateUnit('/repo/app/terragrunt.hcl', content, '/repo/app');
+
+		it('accepts range with one, two or three arguments', async () => {
+			const content = 'inputs = {\n  one   = range(4)\n  two   = range(1, 4)\n  three = range(10, 1, -3)\n}';
+			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', content)).to.deep.equal([]);
+			const result = await evaluate(content);
+			expect(result.error).to.equal(undefined);
+			expect(runtimeValueToPlain(result.inputs!)).to.deep.equal({ one: [0, 1, 2, 3], two: [1, 2, 3], three: [10, 7, 4] });
+		});
+
+		it('refuses range with no arguments or more than three', async () => {
+			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', 'inputs = { x = range() }'))
+				.to.deep.equal(['Function "range" requires at least 1 argument']);
+			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', 'inputs = { x = range(1, 2, 3, 4) }'))
+				.to.deep.equal(['Function "range" accepts at most 3 arguments']);
+			for (const call of ['range()', 'range(1, 2, 3, 4)']) {
+				const result = await evaluate(`inputs = { x = ${call} }`);
+				expect(result.valid, call).to.equal(false);
+				expect(result.error, call).to.include('range must have one, two, or three arguments');
+			}
+		});
+
+		it('counts range down when the limit is below the start, and refuses a step away from the limit', async () => {
+			const result = await evaluate('inputs = {\n  negative = range(-3)\n  down     = range(4, 1)\n  half     = range(0, 2, 0.5)\n  empty    = range(1, 1, 0)\n}');
+			expect(result.error).to.equal(undefined);
+			expect(runtimeValueToPlain(result.inputs!)).to.deep.equal({ negative: [0, -1, -2], down: [4, 3, 2], half: [0, 0.5, 1, 1.5], empty: [] });
+			const failures: Array<[string, string]> = [
+				['range(1, 4, -1)', 'range end must be less than start when step is negative'],
+				['range(4, 1, 1)', 'range end must be greater than start when step is positive'],
+				['range(4, 1, 0)', 'range end must be greater than start when step is positive'],
+				['range(1, 4, 0)', 'more than 1024 values were generated; either decrease the difference between start and end or use a smaller step'],
+				['range(1025)', 'more than 1024 values were generated; either decrease the difference between start and end or use a smaller step']
+			];
+			for (const [call, message] of failures) {
+				const failed = await evaluate(`inputs = { x = ${call} }`);
+				expect(failed.valid, call).to.equal(false);
+				expect(failed.error, call).to.include(message);
+			}
+			const limit = await evaluate('inputs = { x = range(1024) }');
+			expect(limit.error).to.equal(undefined);
+			expect((runtimeValueToPlain(limit.inputs!) as { x: number[] }).x).to.have.length(1024);
+		});
+
+		it('requires every argument of parseint, substr, trim, textencodebase64 and textdecodebase64', () => {
+			const short: Array<[string, string]> = [
+				['parseint("10")', 'Function "parseint" requires at least 2 arguments'],
+				['substr("abc", 1)', 'Function "substr" requires at least 3 arguments'],
+				['trim("xx")', 'Function "trim" requires at least 2 arguments'],
+				['textencodebase64("a")', 'Function "textencodebase64" requires at least 2 arguments'],
+				['textdecodebase64("YQ==")', 'Function "textdecodebase64" requires at least 2 arguments']
+			];
+			for (const [call, message] of short) {
+				expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', `inputs = { x = ${call} }`), call).to.deep.equal([message]);
+			}
+			const complete = 'inputs = {\n  a = parseint("10", 2)\n  b = substr("abc", 1, 1)\n  c = trim("xax", "x")\n  d = textencodebase64("a", "UTF-8")\n  e = textdecodebase64("YQ==", "UTF-8")\n}';
+			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', complete)).to.deep.equal([]);
+		});
+	});
+
 	it('accepts explicit stacks, component path references, and autoinclude dependencies', () => {
 		const messages = diagnosticsFor('file:///repo/terragrunt.stack.hcl', `locals {
   environment = "production"

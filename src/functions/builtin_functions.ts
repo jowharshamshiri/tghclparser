@@ -588,17 +588,22 @@ export const builtinFunctionGroup = {
 			return stringValue(value);
 		},
 		pow: async (args: RuntimeValue<ValueType>[]) => numberValue(Math.pow(numberArgument(args, 0, 'pow'), numberArgument(args, 1, 'pow'))),
+		// As go-cty's RangeFunc: without a step it counts by 1, or by -1 towards a lower limit. A zero step is not
+		// refused, since go-cty compares it to zero by identity; it counts upwards and meets the 1024 limit.
 		range: async (args: RuntimeValue<ValueType>[]) => {
-			const start = numberArgument(args, 0, 'range');
-			const limit = args.length >= 2 ? numberArgument(args, 1, 'range') : start;
-			const actualStart = args.length >= 2 ? start : 0;
-			const step = args.length >= 3 ? numberArgument(args, 2, 'range') : 1;
-			if (step === 0) throw new Error('range step cannot be zero');
+			if (args.length < 1 || args.length > 3) throw new Error('range must have one, two, or three arguments');
+			const numbers = args.map((_, index) => numberArgument(args, index, 'range'));
+			const [start, limit] = numbers.length === 1 ? [0, numbers[0]] : [numbers[0], numbers[1]];
+			const step = numbers.length === 3 ? numbers[2] : (limit < start ? -1 : 1);
+			const down = step < 0;
+			if (down && limit > start) throw new Error('range end must be less than start when step is negative');
+			if (!down && limit < start) throw new Error('range end must be greater than start when step is positive');
 			const values: RuntimeValue<ValueType>[] = [];
-			if (step > 0) {
-				for (let value = actualStart; value < limit; value += step) values.push(numberValue(value));
-			} else {
-				for (let value = actualStart; value > limit; value += step) values.push(numberValue(value));
+			for (let value = start; down ? value > limit : value < limit; value += step) {
+				if (values.length >= 1024) {
+					throw new Error('range failed: more than 1024 values were generated; either decrease the difference between start and end or use a smaller step');
+				}
+				values.push(numberValue(value));
 			}
 			return arrayValue(values);
 		},
