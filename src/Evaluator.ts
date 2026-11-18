@@ -268,6 +268,8 @@ interface FileResult {
 	inputs: Map<string, RuntimeValue<ValueType>> | null;
 	unresolvedInputs: Map<string, {file: string; reason: string}>;
 	hasInputs: boolean;
+	/** Merged input names that only an included configuration sets, not the file itself or its autoinclude. */
+	includedOnlyInputs: Set<string>;
 }
 
 interface Scope {
@@ -756,11 +758,24 @@ export class ConfigEvaluator {
 	}
 
 	async evaluateRenderedConfig(configPath: string, content: string, workDir: string): Promise<RuntimeValue<ValueType>> {
+		return (await this.renderUnit(configPath, content, workDir)).config;
+	}
+
+	/**
+	 * Renders a configuration as {@link evaluateRenderedConfig} does, and says which of its inputs come only from the
+	 * configurations it includes.
+	 *
+	 * @param configPath the configuration file.
+	 * @param content its content.
+	 * @param workDir the directory the workspace root is found from.
+	 * @returns the rendered configuration, and the merged input names neither the file nor its autoinclude sets.
+	 */
+	async renderUnit(configPath: string, content: string, workDir: string): Promise<{config: RuntimeValue<ValueType>; includedOnlyInputs: string[]}> {
 		this.assertTrusted('Rendered configuration evaluation');
 		const workspaceRoot = await this.resolveWorkspaceRoot(workDir);
 		this.renderUnresolved.length = 0;
 		const result = await this.evaluateFile(configPath, content, workspaceRoot);
-		return this.readConfigObject(result);
+		return {config: await this.readConfigObject(result), includedOnlyInputs: [...result.includedOnlyInputs]};
 	}
 
 	async evaluateAtPosition(
@@ -1161,6 +1176,7 @@ export class ConfigEvaluator {
 			mergedInputs.delete(key);
 			mergedUnresolved.set(key, issue);
 		}
+		const ownNames = new Set([...mergedInputs.keys(), ...mergedUnresolved.keys()]);
 		for (const name of [...scope.includes.keys()].reverse()) {
 			const include = scope.includes.get(name)!;
 			const includeInputs = include.result.inputs;
@@ -1183,6 +1199,7 @@ export class ConfigEvaluator {
 			}
 		}
 		for (const name of mergedUnresolved.keys()) mergedInputs.delete(name);
+		const includedOnlyInputs = new Set([...mergedInputs.keys(), ...mergedUnresolved.keys()].filter(name => !ownNames.has(name)));
 
 		if (ownInputs === null && mergedInputs.size === 0 && mergedUnresolved.size === 0) mergedInputs = null;
 
@@ -1193,7 +1210,8 @@ export class ConfigEvaluator {
 			scope,
 			inputs: mergedInputs,
 			unresolvedInputs: mergedUnresolved,
-			hasInputs: inputsAssignment !== undefined
+			hasInputs: inputsAssignment !== undefined,
+			includedOnlyInputs
 		};
 	}
 

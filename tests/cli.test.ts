@@ -1386,6 +1386,145 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(root, {recursive: true, force: true});
 	});
 
+	it('checks inputs against the module a unit sources with --inputs', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-validate-inputs-')));
+		await fs.mkdir(path.join(root, '.git'));
+		await fs.mkdir(path.join(root, 'modules', 'app'), {recursive: true});
+		await fs.writeFile(path.join(root, 'modules', 'app', 'variables.tf'), 'variable "name" {}\nvariable "size" {\n  default = 1\n}\n');
+		const unitDir = path.join(root, 'live', 'app');
+		await fs.mkdir(unitDir, {recursive: true});
+		const unit = path.join(unitDir, 'terragrunt.hcl');
+		const validate = async (inputs: string, flags: string[], env: Record<string, string> = {}, terraform = '') => {
+			await fs.writeFile(unit, `terraform {\n  source = "../../modules/app"\n${terraform}}\ninputs = ${inputs}\n`);
+			return spawnSync(process.execPath, [cli, 'hcl', 'validate', ...flags, '--working-dir', root], {cwd: root, encoding: 'utf8', env: {...process.env, ...env}});
+		};
+		const undeclared = `${unit}: HCL validation warning: Input "extra" is not declared by module ../../modules/app\n`;
+
+		const unchecked = await validate('{\n  extra = 1\n}', []);
+		expect(unchecked.status).to.equal(0, unchecked.stderr);
+		expect(unchecked.stderr).to.equal('');
+
+		const warned = await validate('{\n  name  = "app"\n  extra = 1\n}', ['--inputs']);
+		expect(warned.status).to.equal(0, warned.stderr);
+		expect(warned.stderr).to.equal(undeclared);
+
+		const strict = await validate('{\n  name  = "app"\n  extra = 1\n}', ['--inputs', '--strict']);
+		expect(strict.status).to.equal(1, strict.stderr);
+		expect(strict.stderr).to.equal(undeclared);
+
+		const missing = await validate('{\n  size = 2\n}', ['--inputs']);
+		expect(missing.status).to.equal(1, missing.stderr);
+		expect(missing.stderr).to.equal(`${unit}: HCL validation error: Missing required module inputs: name\n`);
+
+		const json = await validate('{\n  extra = 1\n}', ['--inputs', '--json']);
+		expect(json.status).to.equal(1, json.stderr);
+		expect(JSON.parse(json.stdout).map((item: {severity: string; detail: string}) => [item.severity, item.detail])).to.deep.equal([
+			['warning', 'Input "extra" is not declared by module ../../modules/app'],
+			['error', 'Missing required module inputs: name']
+		]);
+
+		expect((await validate('{\n  name  = "app"\n  extra = 1\n}', ['--inputs', '--show-config-path'])).stdout).to.equal('');
+		expect((await validate('{\n  name  = "app"\n  extra = 1\n}', ['--inputs', '--strict', '--show-config-path'])).stdout).to.equal(`${unit}\n`);
+
+		const clean = await validate('{\n  name = "app"\n}', ['--inputs', '--strict']);
+		expect(clean.status).to.equal(0, clean.stderr);
+		expect(clean.stderr).to.equal('');
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
+	it('counts the variables Terragrunt passes outside inputs with --inputs', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-validate-passed-')));
+		await fs.mkdir(path.join(root, '.git'));
+		await fs.mkdir(path.join(root, 'modules', 'app'), {recursive: true});
+		await fs.writeFile(path.join(root, 'modules', 'app', 'variables.tf'), 'variable "name" {}\n');
+		const unitDir = path.join(root, 'live', 'app');
+		await fs.mkdir(unitDir, {recursive: true});
+		await fs.writeFile(path.join(unitDir, 'common.tfvars'), 'name = "app"\n');
+		const unit = path.join(unitDir, 'terragrunt.hcl');
+		const validate = async (terraform: string, env: Record<string, string> = {}, flags: string[] = []) => {
+			await fs.writeFile(unit, `terraform {\n  source = "../../modules/app"\n${terraform}}\n`);
+			return spawnSync(process.execPath, [cli, 'hcl', 'validate', '--inputs', '--strict', ...flags, '--working-dir', root], {cwd: root, encoding: 'utf8', env: {...process.env, ...env}});
+		};
+		const block = (attribute: string) => `  extra_arguments "vars" {\n    commands = ["apply"]\n    ${attribute}\n  }\n`;
+
+		expect((await validate('')).status).to.equal(1);
+		for (const [terraform, env, flags] of [
+			['', {TF_VAR_name: 'app'}],
+			[block('env_vars = { TF_VAR_name = "app" }')],
+			[block('arguments = ["-var=name=app"]')],
+			[block('arguments = ["-var-file=common.tfvars"]')],
+			[block('required_var_files = ["${get_terragrunt_dir()}/common.tfvars"]')],
+			['', {}, ['-var=name=app']],
+			['', {}, ['-var-file=live/app/common.tfvars']]
+		] as [string, Record<string, string>?, string[]?][]) {
+			const result = await validate(terraform, env, flags);
+			expect(result.status).to.equal(0, `${terraform} ${JSON.stringify(env)} ${JSON.stringify(flags)}: ${result.stderr}`);
+		}
+
+		const quoted = await validate(block('arguments = ["-var=\'name\'=app"]'));
+		expect(quoted.status).to.equal(1);
+		expect(quoted.stderr).to.equal(
+			`${unit}: HCL validation warning: Input "'name'" is not declared by module ../../modules/app\n`
+			+ `${unit}: HCL validation error: Missing required module inputs: name\n`
+		);
+
+		await fs.copyFile(path.join(unitDir, 'common.tfvars'), path.join(unitDir, 'terraform.tfvars'));
+		const automatic = await validate('');
+		expect(automatic.status).to.equal(0, automatic.stderr);
+
+		const unused = await validate('', {TF_VAR_extra: '1'});
+		expect(unused.status).to.equal(1);
+		expect(unused.stderr).to.equal(`${unit}: HCL validation warning: Input "extra" is not declared by module ../../modules/app\n`);
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
+	it('leaves out undeclared inputs only an include sets with --ignore-included-inputs', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-validate-included-')));
+		await fs.mkdir(path.join(root, '.git'));
+		await fs.mkdir(path.join(root, 'modules', 'app'), {recursive: true});
+		await fs.writeFile(path.join(root, 'modules', 'app', 'variables.tf'), 'variable "name" {}\n');
+		await fs.writeFile(path.join(root, 'root.hcl'), 'inputs = {\n  name   = "app"\n  shared = 1\n  both   = 1\n}\n');
+		const unitDir = path.join(root, 'live', 'app');
+		await fs.mkdir(unitDir, {recursive: true});
+		const unit = path.join(unitDir, 'terragrunt.hcl');
+		await fs.writeFile(unit, 'include "root" {\n  path = find_in_parent_folders("root.hcl")\n}\nterraform {\n  source = "../../modules/app"\n}\ninputs = {\n  both = 2\n  own  = 1\n}\n');
+		const validate = (flags: string[], env: Record<string, string> = {}) =>
+			spawnSync(process.execPath, [cli, 'hcl', 'validate', '--inputs', ...flags, '--working-dir', root], {cwd: root, encoding: 'utf8', env: {...process.env, ...env}});
+		const undeclared = (...names: string[]) => names.map(name => `${unit}: HCL validation warning: Input "${name}" is not declared by module ../../modules/app\n`).join('');
+
+		expect(validate([]).stderr).to.equal(undeclared('both', 'own', 'shared'));
+		const ignored = validate(['--ignore-included-inputs']);
+		expect(ignored.status).to.equal(0, ignored.stderr);
+		expect(ignored.stderr).to.equal(undeclared('both', 'own'));
+		expect(validate(['--ignore-included-inputs'], {TF_VAR_shared: '1'}).stderr).to.equal(undeclared('both', 'own', 'shared'));
+
+		const alone = spawnSync(process.execPath, [cli, 'hcl', 'validate', '--ignore-included-inputs', '--working-dir', root], {cwd: root, encoding: 'utf8'});
+		expect(alone.status).to.equal(1);
+		expect(alone.stderr).to.contain('specifying --ignore-included-inputs without --inputs is invalid');
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
+	it('fails --inputs on a module it cannot read, and refuses --strict without it', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-validate-unread-')));
+		await fs.writeFile(path.join(root, 'terragrunt.hcl'), 'terraform {\n  source = "./missing"\n}\n');
+		const validate = (...flags: string[]) =>
+			spawnSync(process.execPath, [cli, 'hcl', 'validate', ...flags, '--working-dir', root], {cwd: root, encoding: 'utf8'});
+
+		expect(validate().status).to.equal(0);
+		const unread = validate('--inputs');
+		expect(unread.status).to.equal(1);
+		expect(unread.stderr).to.equal(`${path.join(root, 'terragrunt.hcl')}: HCL validation error: Local module source not found: ${path.join(root, 'missing')}\n`);
+
+		const strict = validate('--strict');
+		expect(strict.status).to.equal(1);
+		expect(strict.stderr).to.contain('specifying --strict without --inputs is invalid');
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
 	it('does not borrow validate mocks or misreport the render command', async () => {
 		const cli = path.resolve('dist/cli.cjs');
 		const body = dependencyBlock(['  mock_outputs = {', '    answer = "invented"', '  }'], '["validate"]');

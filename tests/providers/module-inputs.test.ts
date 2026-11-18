@@ -303,6 +303,68 @@ ${unit('"../../modules/app"', '  region = "eu-west-2"')}`);
 		]);
 	});
 
+	describe('variables set outside inputs, as Terragrunt counts them', () => {
+		it('counts terraform.tfvars and *.auto.tfvars in the unit and the module', async () => {
+			await fs.mkdir(path.join(directory, 'live', 'app'), { recursive: true });
+			await fs.writeFile(path.join(directory, 'live', 'app', 'terraform.tfvars'), 'name = "api"\n');
+			expect(moduleMessages(await openUnit(unit('"../../modules/app"', '')))).to.deep.equal([]);
+
+			await fs.rm(path.join(directory, 'live', 'app', 'terraform.tfvars'));
+			await fs.writeFile(path.join(directory, 'modules', 'app', 'defaults.auto.tfvars.json'), '{"name": "api"}');
+			expect(moduleMessages(await openUnit(unit('"../../modules/app"', '')))).to.deep.equal([]);
+		});
+
+		it('counts env_vars, -var, -var-file and var files in extra_arguments, by block name across includes', async () => {
+			await fs.mkdir(path.join(directory, 'live', 'app'), { recursive: true });
+			await fs.writeFile(path.join(directory, 'live', 'app', 'common.tfvars'), 'name = "api"\n');
+			await fs.writeFile(path.join(directory, 'root.hcl'), `terraform {
+  extra_arguments "vars" {
+    commands  = ["plan"]
+    arguments = ["-var=name=api"]
+  }
+}`);
+			const terraform = (extra: string) => `include "root" {
+  path = find_in_parent_folders("root.hcl")
+}
+
+terraform {
+  source = "../../modules/app"
+${extra}
+}`;
+			const block = (attribute: string) => `  extra_arguments "vars" {\n    commands = ["plan"]\n    ${attribute}\n  }`;
+
+			expect(moduleMessages(await openUnit(terraform('')))).to.deep.equal([]);
+			expect(moduleMessages(await openUnit(terraform(block('arguments = []'))))).to.deep.equal(['Missing required module inputs: name']);
+			expect(moduleMessages(await openUnit(terraform(block('env_vars = { TF_VAR_name = "api" }'))))).to.deep.equal([]);
+			expect(moduleMessages(await openUnit(terraform(block('arguments = ["-var-file=${get_terragrunt_dir()}/common.tfvars"]'))))).to.deep.equal([]);
+			expect(moduleMessages(await openUnit(terraform(block('required_var_files = ["common.tfvars"]'))))).to.deep.equal([]);
+			expect(moduleMessages(await openUnit(terraform(block('optional_var_files = ["absent.tfvars"]'))))).to.deep.equal(['Missing required module inputs: name']);
+		});
+
+		it('does not report coverage when an extra_arguments value cannot be read statically', async () => {
+			const document = await openUnit(`terraform {
+  source = "../../modules/app"
+  extra_arguments "vars" {
+    commands  = ["plan"]
+    arguments = local.args
+  }
+}`);
+			expect(moduleMessages(document)).to.deep.equal([]);
+		});
+
+		it('says why required inputs are not checked when a var file cannot be read', async () => {
+			const document = await openUnit(`terraform {
+  source = "../../modules/app"
+  extra_arguments "vars" {
+    commands           = ["plan"]
+    required_var_files = ["absent.tfvars"]
+  }
+}`);
+			expect(moduleMessages(document)).to.have.length(1);
+			expect(moduleMessages(document)[0]).to.match(/^Required module inputs are not checked: var file absent\.tfvars could not be read: ENOENT/);
+		});
+	});
+
 	it('leaves a merged inputs value alone', async () => {
 		const document = await openUnit(unit('"../../modules/app"', '').replace(/inputs = \{\n\n\}/, 'inputs = merge({}, { extra = 1 })'));
 		expect(moduleMessages(document)).to.deep.equal([]);

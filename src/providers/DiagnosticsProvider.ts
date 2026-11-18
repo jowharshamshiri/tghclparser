@@ -9,8 +9,25 @@ import type { AttributeDefinition, BlockDefinition, FunctionDefinition, Token, V
 import { plainStringMember } from '../model';
 import type { ModuleType } from '../module-variables';
 import { untrustedReason } from '../module-variables';
-import type { ParsedDocument } from '../ParsedDocument';
+import type { ModuleVariablesState, ParsedDocument } from '../ParsedDocument';
 import type { Schema } from '../Schema';
+
+/**
+ * Why a unit's module inputs are not checked, as the editor and `hcl validate --inputs` say it.
+ *
+ * @param state the unit's module state, other than loaded.
+ * @returns the message.
+ */
+export function moduleNotLoadedMessage(state: Exclude<ModuleVariablesState, { status: 'loaded' }>): string {
+	switch (state.status) {
+		case 'unavailable': return `Module inputs are not checked: ${state.reason}`;
+		case 'missing': return `Local module source not found: ${state.moduleDir}`;
+		case 'loading': return `Module source ${state.sourceText} is still being fetched`;
+		case 'untrusted': return `Remote module source is not fetched: ${untrustedReason}`;
+		case 'unsupported': return `Module source is not fetched: ${state.reason}`;
+		case 'fetchFailed': return `Module source could not be fetched: ${state.reason}`;
+	}
+}
 
 export class DiagnosticsProvider {
 	constructor(private readonly schema: Schema) {}
@@ -58,31 +75,15 @@ export class DiagnosticsProvider {
 			?? inputsKey ?? document.getIncludeBlockTokens()[0] ?? document.getTokens()[0]?.children[0];
 		if (!anchor) throw new Error(`Module state is set on ${document.getUri()}, which has no token to report it on`);
 
-		if (state.status === 'unavailable') {
-			diagnostics.push(this.diagnostic(anchor, `Module inputs are not checked: ${state.reason}`, DiagnosticSeverity.Warning));
-			return;
-		}
-		if (state.status === 'missing') {
-			diagnostics.push(this.diagnostic(anchor, `Local module source not found: ${state.moduleDir}`, DiagnosticSeverity.Warning));
-			return;
-		}
 		if (state.status === 'loading') return;
-		if (state.status === 'untrusted') {
-			diagnostics.push(this.diagnostic(anchor, `Remote module source is not fetched: ${untrustedReason}`, DiagnosticSeverity.Hint));
-			return;
-		}
-		if (state.status === 'unsupported') {
-			diagnostics.push(this.diagnostic(anchor, `Module source is not fetched: ${state.reason}`, DiagnosticSeverity.Hint));
-			return;
-		}
-		if (state.status === 'fetchFailed') {
+		if (state.status !== 'loaded') {
+			const severity = state.status === 'untrusted' || state.status === 'unsupported' ? DiagnosticSeverity.Hint : DiagnosticSeverity.Warning;
+			const diagnostic = this.diagnostic(anchor, moduleNotLoadedMessage(state), severity);
 			// The code, and the host when there is one to act on, let an editor offer a fix: a token for the registry,
 			// or asking again about the host.
-			diagnostics.push({
-				...this.diagnostic(anchor, `Module source could not be fetched: ${state.reason}`, DiagnosticSeverity.Warning),
-				code: state.code,
-				...(state.host === undefined ? {} : { data: { host: state.host } })
-			});
+			diagnostics.push(state.status === 'fetchFailed'
+				? { ...diagnostic, code: state.code, ...(state.host === undefined ? {} : { data: { host: state.host } }) }
+				: diagnostic);
 			return;
 		}
 

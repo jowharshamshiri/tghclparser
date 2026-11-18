@@ -17,6 +17,7 @@ import { RemoteModuleStore } from './remote-modules';
 import { ParsedDocument } from './ParsedDocument';
 import { Schema } from './Schema';
 import { unlessUnresolved } from './unresolved';
+import { automaticVarFiles, varFileNames, varFlags } from './var-files';
 import { expandTerragruntGlob } from './functions/terragrunt_glob';
 
 /** @returns true for an error from the filesystem, such as a directory that cannot be listed or a file that cannot be read. */
@@ -875,7 +876,7 @@ export class Workspace {
 			variables: module.variables,
 			files: module.files,
 			unparsed: module.unparsed,
-			...this.inheritedInputs(doc, configurations, unitDir)
+			...await this.suppliedInputs(doc, configurations, unitDir, resolution.moduleDir)
 		};
 	}
 
@@ -908,29 +909,123 @@ export class Workspace {
 	}
 
 	/**
-	 * The `inputs` keys the configurations merged into a unit already set, which count towards the module's
-	 * required variables.
+	 * The variables a unit's module is given other than by the unit's own `inputs`, which count towards its required
+	 * variables: the `inputs` keys of the configurations merged into the unit, what their `extra_arguments` set
+	 * through `env_vars`, `-var`, `-var-file`, `required_var_files` and `optional_var_files`, and the automatic var
+	 * files in the module and the unit directory, which Terragrunt copies into the module. An `extra_arguments`
+	 * block is taken from the configuration of highest priority that names it, as Terragrunt merges them by name.
+	 * `TF_VAR_` variables in the environment are not counted, since the editor's environment is not the one a plan
+	 * runs in.
+	 *
+	 * @param doc the unit.
+	 * @param configurations the configurations merged into the unit, highest priority first.
+	 * @param unitDir directory of the unit.
+	 * @param moduleDir directory of the module the unit sources.
+	 * @returns the names, whether every source of them could be read, and why not when that is a failure.
 	 */
-	private inheritedInputs(doc: ParsedDocument, configurations: ParsedDocument[], unitDir: string): {
+	private async suppliedInputs(doc: ParsedDocument, configurations: ParsedDocument[], unitDir: string, moduleDir: string): Promise<{
 		inheritedInputKeys: Set<string>;
 		inheritedInputsKnown: boolean;
 		inheritedInputsProblem?: string;
-	} {
+	}> {
 		const inheritedInputKeys = new Set<string>();
 		let inheritedInputsKnown = true;
 		let inheritedInputsProblem: string | undefined;
+		const unknown = (problem?: string) => {
+			inheritedInputsKnown = false;
+			if (problem !== undefined) inheritedInputsProblem ??= problem;
+		};
+		const varFiles: { file: string; optional: boolean }[] = [];
+		const blockLabels = new Set<string>();
 		for (const configuration of configurations) {
-			if (configuration === doc) continue;
 			if (configuration.getAST() === null) {
-				inheritedInputsKnown = false;
-				inheritedInputsProblem ??= `${this.displayPath(configuration.getUri(), unitDir)} does not parse, so the inputs it sets are unknown`;
+				if (configuration !== doc) unknown(`${this.displayPath(configuration.getUri(), unitDir)} does not parse, so the inputs it sets are unknown`);
 				continue;
 			}
-			const keys = configuration.getOwnInputKeys();
-			if (keys === undefined) inheritedInputsKnown = false;
-			else for (const key of keys) inheritedInputKeys.add(key);
+			if (configuration !== doc) {
+				const keys = configuration.getOwnInputKeys();
+				if (keys === undefined) unknown();
+				else for (const key of keys) inheritedInputKeys.add(key);
+			}
+			for (const block of configuration.getExtraArgumentsBlocks()) {
+				const label = block.children.find(child => child.type === 'parameter');
+				if (label === undefined) continue;
+				if (blockLabels.has(String(label.value))) continue;
+				blockLabels.add(String(label.value));
+				const set = await this.extraArgumentsInputs(block, configuration.getUri(), unitDir);
+				if (set === undefined) {
+					unknown();
+					continue;
+				}
+				for (const name of set.vars) inheritedInputKeys.add(name);
+				varFiles.push(...set.varFiles);
+			}
+		}
+		for (const dir of new Set([moduleDir, unitDir])) {
+			for (const file of await automaticVarFiles(dir)) varFiles.push({ file, optional: false });
+		}
+		for (const { file, optional } of varFiles) {
+			try {
+				for (const name of await varFileNames(file)) inheritedInputKeys.add(name);
+			} catch (error) {
+				if (optional && (error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+				unknown(`var file ${path.relative(unitDir, file) || file} could not be read: ${error instanceof Error ? error.message : String(error)}`);
+			}
 		}
 		return { inheritedInputKeys, inheritedInputsKnown, inheritedInputsProblem };
+	}
+
+	/**
+	 * The variables one `extra_arguments` block sets: `TF_VAR_` keys of `env_vars`, `-var` and `-var-file` in
+	 * `arguments`, and `required_var_files` and `optional_var_files`. A relative var file is resolved against the
+	 * unit directory.
+	 *
+	 * @param block the `extra_arguments` block token.
+	 * @param sourceUri URI of the file the block is written in.
+	 * @param unitDir directory of the unit.
+	 * @returns the names and var files, or undefined when a value is not a literal list or object of strings the path
+	 *   helpers can evaluate.
+	 */
+	private async extraArgumentsInputs(block: Token, sourceUri: string, unitDir: string): Promise<{
+		vars: string[];
+		varFiles: { file: string; optional: boolean }[];
+	} | undefined> {
+		const value = (name: string) => block.children
+			.find(child => child.type === 'attribute' && child.value === name)
+			?.children.find(child => child.type !== 'attribute_identifier');
+		const strings = async (name: string): Promise<string[] | undefined> => {
+			const list = value(name);
+			if (list === undefined) return [];
+			if (list.type !== 'array_lit') return undefined;
+			const read: string[] = [];
+			for (const element of list.children) {
+				try {
+					read.push(await this.resolvePathToken(element, unitDir, sourceUri));
+				} catch {
+					return undefined;
+				}
+			}
+			return read;
+		};
+		const args = await strings('arguments');
+		const required = await strings('required_var_files');
+		const optional = await strings('optional_var_files');
+		const env = value('env_vars');
+		if (args === undefined || required === undefined || optional === undefined) return undefined;
+		if (env !== undefined && (env.type !== 'object' || env.children.some(child => child.type !== 'attribute'))) return undefined;
+		const flags = varFlags(args);
+		const envNames = (env?.children ?? [])
+			.map(child => child.children.find(part => part.type === 'attribute_identifier')?.getDisplayText() ?? '')
+			.filter(key => key.startsWith('TF_VAR_'))
+			.map(key => key.slice('TF_VAR_'.length));
+		const file = (written: string) => path.resolve(unitDir, written);
+		return {
+			vars: [...envNames, ...flags.vars],
+			varFiles: [
+				...[...flags.varFiles, ...required].map(written => ({ file: file(written), optional: false })),
+				...optional.map(written => ({ file: file(written), optional: true }))
+			]
+		};
 	}
 
 	/**
@@ -1010,7 +1105,7 @@ export class Workspace {
 			files: module.files,
 			unparsed: module.unparsed,
 			remote: { label: checkout.label, entryDir: checkout.entryDir, resolved: checkout.resolved },
-			...this.inheritedInputs(unit.doc, configurations, unit.unitDir)
+			...await this.suppliedInputs(unit.doc, configurations, unit.unitDir, checkout.moduleDir)
 		};
 	}
 

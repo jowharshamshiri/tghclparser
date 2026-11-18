@@ -53,13 +53,16 @@ export type ModuleVariablesState =
 		files: string[];
 		/** The module files that did not parse; while any are listed, `variables` may be missing some. */
 		unparsed: ModuleFileError[];
-		/** Keys set by literal `inputs` objects the unit merges in, which count towards required variables. */
+		/**
+		 * Variables set other than by the unit's own `inputs`, which count towards required variables: keys of literal
+		 * `inputs` objects the unit merges in, what `extra_arguments` set, and the automatic var files.
+		 */
 		inheritedInputKeys: Set<string>;
-		/** False when a merged configuration's `inputs` could not be enumerated, which switches coverage off. */
+		/** False when one of those sources could not be enumerated, which switches coverage off. */
 		inheritedInputsKnown: boolean;
 		/**
-		 * Why a merged configuration's `inputs` are unknown when that is a failure, such as a configuration that does
-		 * not parse, rather than a value this does not enumerate, such as `merge(...)`.
+		 * Why one of those sources is unknown when that is a failure, such as a configuration that does not parse or a
+		 * var file that cannot be read, rather than a value this does not enumerate, such as `merge(...)`.
 		 */
 		inheritedInputsProblem?: string;
 		/** Set when the module was fetched from a remote source into the cache rather than read in place. */
@@ -1109,6 +1112,13 @@ export class ParsedDocument {
 		const block = root?.children.find(child => child.type === 'block' && child.value === 'terraform');
 		const attribute = block?.children.find(child => child.type === 'attribute' && child.value === 'source');
 		return attribute?.children.find(child => child.type !== 'attribute_identifier');
+	}
+
+	/** @returns the `extra_arguments` blocks of this document's root `terraform` block, in the order they are written. */
+	public getExtraArgumentsBlocks(): Token[] {
+		const root = this.getTokens()[0];
+		const block = root?.children.find(child => child.type === 'block' && child.value === 'terraform');
+		return block?.children.filter(child => child.type === 'block' && child.value === 'extra_arguments') ?? [];
 	}
 
 	/** @returns the root `include` block tokens of this document, in the order they are written. */

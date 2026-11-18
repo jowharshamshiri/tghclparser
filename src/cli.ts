@@ -16,16 +16,20 @@ import type { RuntimeValue, ValueType } from './model';
 import type { FunctionDefinition } from './model';
 import { ambientCredentials } from './credentials';
 import { isArchiveSource } from './module-source';
-import { isLocalSource, splitModuleSource } from './module-variables';
+import { isLocalSource, readModuleVariables, splitModuleSource } from './module-variables';
+import type { ModuleVariable } from './module-variables';
 import { formatHcl } from './hcl-format';
 import { HclSyntaxError } from './hcl-syntax';
 import { ParsedDocument } from './ParsedDocument';
+import { moduleNotLoadedMessage } from './providers/DiagnosticsProvider';
 import { filterFiles, FilterSyntaxError, parseFilter } from './terragrunt-filter';
 import type { Filter } from './terragrunt-filter';
 import { unifiedDiff } from './unified-diff';
 import { createRegistryResolver } from './registry';
 import { RemoteModuleStore } from './remote-modules';
 import { parseHclSyntax } from './syntax';
+import { automaticVarFiles, varFileNames, varFlags } from './var-files';
+import type { VarFlags } from './var-files';
 import { LocatedWorkspaceError, Workspace } from './Workspace';
 
 export interface CLIOptions {
@@ -39,6 +43,9 @@ export interface CLIOptions {
 	dependencies: boolean;
 	dag: boolean;
 	offline: boolean;
+	inputs: boolean;
+	strict: boolean;
+	ignoreIncludedInputs: boolean;
 }
 
 /**
@@ -98,7 +105,7 @@ interface DiagnosticOutput {
 	};
 	summary: string;
 	detail: string;
-	severity: 'error';
+	severity: 'error' | 'warning';
 }
 
 const fileNames = new Set([
@@ -137,6 +144,16 @@ function usage(): string {
 		'  --offline              Read a sops file that cannot be decrypted as',
 		'                         written, for CI with no keys. Does not check',
 		'                         that secrets decrypt or what is computed from them.',
+		'  --inputs               Check that each unit\'s inputs align with the',
+		'                         variables of its module, fetching remote modules',
+		'  --strict               With --inputs, fail on inputs the module does',
+		'                         not declare',
+		'  -var=NAME=VALUE        With --inputs, count NAME as passed to every unit',
+		'  -var-file=PATH         With --inputs, count the variables PATH sets as',
+		'                         passed to every unit',
+		'  --ignore-included-inputs',
+		'                         With --inputs, do not report undeclared inputs',
+		'                         that only an included configuration sets',
 		'  --help                 Show this help'
 	].join('\n');
 }
@@ -269,6 +286,43 @@ function inspectUsage(): string {
 }
 
 /**
+ * The root an editor would open for a directory: the nearest enclosing git checkout, else the directory itself.
+ *
+ * @param dir the directory to start from.
+ * @returns the workspace root.
+ */
+function enclosingWorkspaceRoot(dir: string): string {
+	for (let current = dir; ; current = path.dirname(current)) {
+		if (fsSync.existsSync(path.join(current, '.git'))) return current;
+		if (path.dirname(current) === current) return dir;
+	}
+}
+
+/**
+ * A workspace that loads the modules units source, fetching remote ones with the ambient credentials, as a
+ * trusted editor workspace does.
+ *
+ * @param workspaceRoot the directory the workspace is rooted at.
+ * @returns the configured workspace.
+ */
+function moduleWorkspace(workspaceRoot: string): Workspace {
+	const workspace = new Workspace();
+	workspace.setWorkspaceRoot(pathToFileURL(workspaceRoot).toString());
+	const insecureHosts = (process.env.TGHCLP_INSECURE_REGISTRY_HOSTS ?? '').split(',').map(host => host.trim()).filter(Boolean);
+	workspace.configureRemoteModules(
+		{ trusted: true },
+		{
+			env: process.env,
+			credentials: ambientCredentials({ env: process.env, homeDir: os.homedir() }),
+			approveHost: async () => true,
+			allowedHosts: insecureHosts,
+			registry: createRegistryResolver({ allowInsecureHosts: insecureHosts })
+		}
+	);
+	return workspace;
+}
+
+/**
  * Reproduces what the language service sees for one configuration: a ParsedDocument added to a Workspace, then its
  * diagnostics, module variables, inline functions, links and relationships. A failure while adding the document,
  * such as an include that does not exist, is reported alongside the state the document still has, and the command
@@ -326,28 +380,9 @@ async function inspectDocument(argv: string[]): Promise<number> {
 	const realConfig = await fs.realpath(configPath);
 	const relative = path.relative(root, realConfig);
 	if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error(`Inspect configuration is outside the working directory: ${configPath}`);
-	if (!workspaceRoot) {
-		workspaceRoot = root;
-		for (let current = root; ; current = path.dirname(current)) {
-			if (fsSync.existsSync(path.join(current, '.git'))) { workspaceRoot = current; break; }
-			if (path.dirname(current) === current) break;
-		}
-	}
-
 	const uri = pathToFileURL(realConfig).toString();
-	const workspace = new Workspace();
-	workspace.setWorkspaceRoot(pathToFileURL(workspaceRoot).toString());
-	const insecureHosts = (process.env.TGHCLP_INSECURE_REGISTRY_HOSTS ?? '').split(',').map(host => host.trim()).filter(Boolean);
-	workspace.configureRemoteModules(
-		{ trusted: true },
-		{
-			env: process.env,
-			credentials: ambientCredentials({ env: process.env, homeDir: os.homedir() }),
-			approveHost: async () => true,
-			allowedHosts: insecureHosts,
-			registry: createRegistryResolver({ allowInsecureHosts: insecureHosts })
-		}
-	);
+	workspaceRoot ??= enclosingWorkspaceRoot(root);
+	const workspace = moduleWorkspace(workspaceRoot);
 	const document = new ParsedDocument(workspace, uri, await fs.readFile(realConfig, 'utf8'));
 	let workspaceError: string | undefined;
 	// Where the expression that caused the error is, when the workspace can say.
@@ -597,7 +632,7 @@ function discoveryUsage(command: string): string {
  * than to look.
  */
 export function parseArgs(argv: string[]): CLIOptions | 'help' {
-	const options: CLIOptions = { json: false, showConfigPath: false, experiments: [], workingDir: process.cwd(), paths: [], noHidden: false, dependencies: false, dag: false, offline: false };
+	const options: CLIOptions = { json: false, showConfigPath: false, experiments: [], workingDir: process.cwd(), paths: [], noHidden: false, dependencies: false, dag: false, offline: false, inputs: false, strict: false, ignoreIncludedInputs: false };
 	for (let index = 0; index < argv.length; index++) {
 		const argument = argv[index];
 		if (argument.startsWith('--format=')) {
@@ -622,6 +657,9 @@ export function parseArgs(argv: string[]): CLIOptions | 'help' {
 			case '--dependencies': options.dependencies = true; break;
 			case '--dag': options.dag = true; break;
 			case '--offline': options.offline = true; break;
+			case '--inputs': options.inputs = true; break;
+			case '--strict': options.strict = true; break;
+			case '--ignore-included-inputs': options.ignoreIncludedInputs = true; break;
 			case '--format': {
 				const value = argv[++index] as CLIOptions['format'];
 				if (!value || !['text', 'json', 'tree', 'dot'].includes(value)) throw new Error(`Unsupported format ${value ?? ''}`);
@@ -2363,6 +2401,167 @@ async function inheritedInlineFunctions(
 	}
 }
 
+/** A unit added to a workspace that loads modules, for `hcl validate --inputs`. */
+interface LoadedUnit {
+	/** The document the workspace holds for the unit. */
+	document: ParsedDocument;
+	/** Why the workspace could not add the unit, when it could not. */
+	error?: string;
+}
+
+/**
+ * Adds every unit to one workspace that loads the modules they source, and waits for remote modules to be fetched.
+ *
+ * @param units the `terragrunt.hcl` files being validated.
+ * @param workingDir the directory validation runs from; the workspace is rooted at its git checkout.
+ * @returns each unit as loaded, by path.
+ */
+async function loadUnits(units: string[], workingDir: string): Promise<Map<string, LoadedUnit>> {
+	const workspace = moduleWorkspace(enclosingWorkspaceRoot(workingDir));
+	const loaded = new Map<string, LoadedUnit>();
+	for (const file of units) {
+		const document = new ParsedDocument(workspace, pathToFileURL(file).toString(), await fs.readFile(file, 'utf8'));
+		const unit: LoadedUnit = { document };
+		loaded.set(file, unit);
+		try {
+			await workspace.addDocument(document);
+		} catch (error) {
+			unit.error = error instanceof Error ? error.message : String(error);
+		}
+	}
+	await workspace.remoteModulesSettled();
+	return loaded;
+}
+
+/**
+ * The variables Terragrunt passes a unit's module other than by `inputs`, as `hcl validate --inputs` counts them:
+ * `TF_VAR_` variables in the environment and in `extra_arguments` `env_vars`, `-var` and `-var-file` in
+ * `extra_arguments` `arguments`, its `required_var_files` and the `optional_var_files` that exist, and the automatic
+ * var files in the module and the unit directory, and `-var` and `-var-file` given to `hcl validate` itself. Every
+ * `extra_arguments` block counts, whatever its commands.
+ *
+ * @param rendered the unit's rendered configuration.
+ * @param unitDir directory of the unit; relative var files in the configuration are resolved against it.
+ * @param moduleDir directory of the unit's module.
+ * @param commandLine the `-var` and `-var-file` flags given to `hcl validate`, with each var file absolute.
+ * @returns the names.
+ * @throws when a var file cannot be read or parsed.
+ */
+async function passedOutsideInputs(rendered: Record<string, unknown>, unitDir: string, moduleDir: string, commandLine: VarFlags): Promise<Set<string>> {
+	const names = new Set<string>(commandLine.vars);
+	const fromEnv = (env: Record<string, unknown>) => {
+		for (const key of Object.keys(env)) if (key.startsWith('TF_VAR_')) names.add(key.slice('TF_VAR_'.length));
+	};
+	fromEnv(process.env);
+	const varFiles: string[] = [...commandLine.varFiles];
+	for (const block of Object.values(asRecord(asRecord(rendered.terraform).extra_arguments))) {
+		const extra = asRecord(block);
+		const strings = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+		fromEnv(asRecord(extra.env_vars));
+		const flags = varFlags(strings(extra.arguments));
+		for (const name of flags.vars) names.add(name);
+		varFiles.push(...flags.varFiles, ...strings(extra.required_var_files));
+		for (const file of strings(extra.optional_var_files)) if (await pathExists(path.resolve(unitDir, file))) varFiles.push(file);
+	}
+	for (const dir of new Set([moduleDir, unitDir])) varFiles.push(...await automaticVarFiles(dir));
+	for (const file of varFiles) {
+		const resolved = path.resolve(unitDir, file);
+		try {
+			for (const name of await varFileNames(resolved)) names.add(name);
+		} catch (error) {
+			throw new Error(`var file ${resolved} could not be read: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+	return names;
+}
+
+/**
+ * @param value a rendered value.
+ * @returns the value when it is an object, else an empty one.
+ */
+function asRecord(value: unknown): Record<string, unknown> {
+	return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+/** How `hcl validate --inputs` checks each unit. */
+interface InputCheckOptions {
+	/** Experiments the evaluation enables. */
+	experiments: string[];
+	/** Read a sops file that cannot be decrypted as written, as `--offline` asks. */
+	readEncryptedSops: boolean;
+	/**
+	 * Do not report an undeclared name that only an included configuration's `inputs` sets, as
+	 * `--ignore-included-inputs` asks. Such names still count towards required variables.
+	 */
+	ignoreIncludedInputs: boolean;
+	/** The `-var` and `-var-file` flags given to `hcl validate`, with each var file absolute. */
+	commandLine: VarFlags;
+}
+
+/**
+ * Checks a unit's inputs against the variables of the module it sources, as Terragrunt's `hcl validate --inputs`
+ * does. A required variable nothing sets is an error, as is a module that cannot be read, since its variables are
+ * then unknown. A name passed that the module does not declare is a warning.
+ *
+ * @param filePath the unit.
+ * @param workDir the directory validation runs from.
+ * @param unit the unit as loaded into a workspace that loads modules.
+ * @param options how the check runs.
+ * @returns the findings, empty when the inputs align.
+ */
+async function checkInputs(filePath: string, workDir: string, unit: LoadedUnit, options: InputCheckOptions): Promise<DiagnosticOutput[]> {
+	const { experiments, readEncryptedSops, ignoreIncludedInputs, commandLine } = options;
+	const finding = (detail: string, severity: DiagnosticOutput['severity']): DiagnosticOutput => ({
+		range: { filename: filePath, start: { line: 1, column: 1, byte: 0 }, end: { line: 1, column: 1, byte: 0 } },
+		summary: severity === 'error' ? 'HCL validation error' : 'HCL validation warning',
+		detail,
+		severity
+	});
+	if (unit.error !== undefined) return [finding(`Module inputs are not checked: ${unit.error}`, 'error')];
+	const unitDir = path.dirname(filePath);
+	const state = unit.document.getModuleVariables();
+	let moduleDir = unitDir;
+	let moduleName = '.';
+	let variables: ModuleVariable[];
+	if (state === undefined) {
+		const module = await readModuleVariables(unitDir);
+		if (module.unparsed.length > 0) return [finding(`Module file ${path.basename(module.unparsed[0].file)} does not parse: ${module.unparsed[0].message}`, 'error')];
+		variables = module.variables;
+	} else if (state.status !== 'loaded') {
+		return [finding(moduleNotLoadedMessage(state), 'error')];
+	} else {
+		const unparsed = state.unparsed[0];
+		if (unparsed !== undefined) return [finding(`Module file ${path.basename(unparsed.file)} does not parse: ${unparsed.message}`, 'error')];
+		moduleDir = state.moduleDir;
+		moduleName = state.remote?.label ?? (path.relative(unitDir, state.moduleDir) || '.');
+		variables = state.variables;
+	}
+
+	const content = await fs.readFile(filePath, 'utf8');
+	const evaluator = evaluatorFor({experiments, terraformCommand: 'validate', skipOutputs: true, readEncryptedSops, partialRender: true});
+	let names: Set<string>;
+	let ignored = new Set<string>();
+	try {
+		const render = await evaluator.renderUnit(filePath, content, workDir);
+		const rendered = asRecord(runtimeValueToPlain(render.config));
+		const unresolved = evaluator.unresolvedRenderFields()
+			.filter(entry => entry.field.startsWith('inputs.'))
+			.map(entry => entry.field.slice('inputs.'.length));
+		const outside = await passedOutsideInputs(rendered, unitDir, moduleDir, commandLine);
+		names = new Set([...Object.keys(asRecord(rendered.inputs)), ...unresolved, ...outside]);
+		if (ignoreIncludedInputs) ignored = new Set(render.includedOnlyInputs.filter(name => !outside.has(name)));
+	} catch (error) {
+		return [finding(`Module inputs are not checked: ${error instanceof Error ? error.message : String(error)}`, 'error')];
+	}
+
+	const declared = new Set(variables.map(variable => variable.name));
+	const findings = [...names].filter(name => !declared.has(name) && !ignored.has(name)).sort()
+		.map(name => finding(`Input "${name}" is not declared by module ${moduleName}`, 'warning'));
+	const missing = variables.filter(variable => !variable.hasDefault && !names.has(variable.name)).map(variable => variable.name).sort();
+	if (missing.length > 0) findings.push(finding(`Missing required module inputs: ${missing.join(', ')}`, 'error'));
+	return findings;
+}
+
 /**
  * `terraformCommand` is required rather than defaulted.
  *
@@ -2608,15 +2807,34 @@ async function main(argv: string[]): Promise<number> {
 		return 0;
 	}
 	if (argv[0] !== 'hcl' || argv[1] !== 'validate') throw new Error('Unsupported command; use "tghclp hcl validate", "find", "list", "dag graph", or "info print"');
-	const parsed = parseArgs(argv.slice(2));
+	const isVarFlag = (argument: string) => argument.startsWith('-var=') || argument.startsWith('-var-file=');
+	const parsed = parseArgs(argv.slice(2).filter(argument => !isVarFlag(argument)));
 	if (parsed === 'help') { console.log(usage()); return 0; }
+	const commandLineFlags = varFlags(argv.slice(2).filter(isVarFlag));
+	const commandLine = { vars: commandLineFlags.vars, varFiles: commandLineFlags.varFiles.map(file => path.resolve(file)) };
+	if (parsed.strict && !parsed.inputs) throw new Error('specifying --strict without --inputs is invalid');
+	if (parsed.ignoreIncludedInputs && !parsed.inputs) throw new Error('specifying --ignore-included-inputs without --inputs is invalid');
 	const roots = parsed.paths.length > 0 ? parsed.paths.map(target => path.resolve(parsed.workingDir, target)) : [parsed.workingDir];
 	const files = (await Promise.all(roots.map(collectFiles))).flat().sort();
 	if (files.length === 0) throw new Error(`No Terragrunt HCL files found under ${parsed.workingDir}`);
-	const diagnostics = (await Promise.all(files.map(file => validateFile(file, parsed.workingDir, parsed.experiments, 'validate', true, parsed.offline)))).flat();
+	const errors = await Promise.all(files.map(file => validateFile(file, parsed.workingDir, parsed.experiments, 'validate', true, parsed.offline)));
+	const diagnostics = errors.flat();
+	if (parsed.inputs) {
+		const units = files.filter((file, index) => path.basename(file) === 'terragrunt.hcl' && errors[index].length === 0);
+		const loaded = await loadUnits(units, parsed.workingDir);
+		for (const unit of units) {
+			diagnostics.push(...await checkInputs(unit, parsed.workingDir, loaded.get(unit)!, {
+				experiments: parsed.experiments,
+				readEncryptedSops: parsed.offline,
+				ignoreIncludedInputs: parsed.ignoreIncludedInputs,
+				commandLine
+			}));
+		}
+	}
+	const failures = diagnostics.filter(item => item.severity === 'error' || parsed.strict);
 	if (parsed.showConfigPath) {
-		if (diagnostics.length > 0) {
-			const paths = [...new Set(diagnostics.map(item => item.range.filename))];
+		if (failures.length > 0) {
+			const paths = [...new Set(failures.map(item => item.range.filename))];
 			if (parsed.json) process.stdout.write(`${JSON.stringify(paths)}\n`);
 			else for (const file of paths) process.stdout.write(`${file}\n`);
 		}
@@ -2625,7 +2843,7 @@ async function main(argv: string[]): Promise<number> {
 	} else if (diagnostics.length > 0) {
 		for (const item of diagnostics) process.stderr.write(`${item.range.filename}: ${item.summary}: ${item.detail}\n`);
 	}
-	return diagnostics.length === 0 ? 0 : 1;
+	return failures.length === 0 ? 0 : 1;
 }
 
 /**
