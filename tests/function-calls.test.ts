@@ -37,6 +37,13 @@ describe('function calls as Terragrunt evaluates them', () => {
 		return result.error ?? '';
 	};
 
+	describe('argument values', () => {
+		it('hands a function an infinite number as it is', async () => {
+			assert.equal(await value('format("%f", 1/0)'), '+Inf');
+			assert.equal(await value('format("%f", -1/0)'), '-Inf');
+		});
+	});
+
 	describe('argument counts', () => {
 		it('refuses more arguments than a function has parameters', async () => {
 			assert.equal(await failure('upper("a", "b")'), 'Too many function arguments; Function "upper" expects only 1 argument(s).');

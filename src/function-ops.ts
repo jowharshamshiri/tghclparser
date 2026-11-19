@@ -6,13 +6,23 @@ export const FUNCTION_ARGS_KEY = 'tghclp.function.args';
 export const FUNCTION_NAME_KEY = 'tghclp.function.name';
 export const FUNCTION_CONTEXT_KEY = 'tghclp.function.context';
 
-// The dry context holds JSON, where a negative zero is written as 0, so the serialized form states its sign.
+// The dry context holds JSON, which writes a negative zero as 0 and has no infinity, so the serialized form names
+// such a number instead.
 type SerializedRuntimeValue = {
 	type: ValueType | 'sensitive';
 	value: unknown;
 	encrypted?: true;
-	negativeZero?: true;
+	number?: string;
 };
+
+const unwrittenNumbers = new Map<string, number>([['-0', -0], ['+Inf', Infinity], ['-Inf', -Infinity]]);
+
+function unwrittenNumberName(value: number): string | undefined {
+	if (Object.is(value, -0)) return '-0';
+	if (value === Infinity) return '+Inf';
+	if (value === -Infinity) return '-Inf';
+	return undefined;
+}
 
 export type FunctionOperationHandler = (
 	dry: DryContext,
@@ -34,7 +44,10 @@ function serializeRuntimeValue(value: RuntimeValue<ValueType>): SerializedRuntim
 	if ((value.type as string) === 'sensitive') {
 		return { type: 'sensitive', value: serializeRuntimeValue(value.value as RuntimeValue<ValueType>) };
 	}
-	if (value.type === 'number' && Object.is(value.value, -0)) return { type: value.type, value: 0, negativeZero: true };
+	if (value.type === 'number') {
+		const name = unwrittenNumberName(value.value as number);
+		if (name !== undefined) return { type: value.type, value: null, number: name };
+	}
 	return value.encrypted ? { type: value.type, value: value.value, encrypted: true } : { type: value.type, value: value.value };
 }
 
@@ -54,7 +67,11 @@ function deserializeRuntimeValue(value: SerializedRuntimeValue): RuntimeValue<Va
 	if (value.type === 'sensitive') {
 		return { type: 'sensitive' as ValueType, value: deserializeRuntimeValue(value.value as SerializedRuntimeValue) as never };
 	}
-	if (value.negativeZero) return { type: 'number', value: -0 as never };
+	if (value.number !== undefined) {
+		const number = unwrittenNumbers.get(value.number);
+		if (number === undefined) throw new Error(`Invalid serialized function argument: unknown number ${value.number}`);
+		return { type: 'number', value: number as never };
+	}
 	return value.encrypted ? { type: value.type, value: value.value as never, encrypted: true } : { type: value.type, value: value.value as never };
 }
 
