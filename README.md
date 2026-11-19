@@ -57,7 +57,7 @@ A `tg` binding reaches the surrounding configuration:
 | `tg.call(name, ...)` | Invoke any function, built-in or inline |
 | `tg.local.<name>` | A local of the declaring file |
 | `tg.include.<name>` | An exposed include, following the usual `expose` rule |
-| `tg.context` | `terragruntDir`, `repoRoot`, `workingDirectory`, `environmentVariables` |
+| `tg.context` | `terragruntDir`, `repoRoot` (what `get_repo_root` answers, or `null` where it finds no repository), `workingDirectory`, `environmentVariables` |
 
 Declarations are inherited through `include`, so shared helpers live in `root.hcl` alongside shared locals. A file's own declaration overrides an inherited one of the same name, and shadowing a built-in is an error. Bodies resolve `tg.local` and `tg.include` against the file that declares them, never the caller, so a function means the same thing wherever it is called. Recursion is supported and bounded.
 

@@ -2,7 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { goQuoted } from '../go-quote';
-import { isWithin, resolveForCompare, walkDirectory } from './file_walk';
+import { goStatFailures, isWithin, walkDirectory } from './file_walk';
+import { goRepoRoot, RepoRootError } from './git_repo_root';
 
 function isEscaped(value: string, index: number): boolean {
 	let slashes = 0;
@@ -119,32 +120,20 @@ function splitRoot(pattern: string): { root: string; hasMeta: boolean } {
 	return { root: fromSlash(prefix), hasMeta: true };
 }
 
-// The enclosing Git repository's root, found from the working directory with
-// its symbolic links resolved, as Terragrunt finds it.
-async function gitBoundary(startDirectory: string): Promise<string | undefined> {
-	let directory = await resolveForCompare(startDirectory);
-	while (true) {
-		try {
-			await fs.access(path.join(directory, '.git'));
-			return directory;
-		} catch (error) {
-			const code = (error as NodeJS.ErrnoException).code;
-			if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
-		}
-		const parent = path.dirname(directory);
-		if (parent === directory) return undefined;
-		directory = parent;
+// The enclosing Git repository's root, or no boundary when the walk finds
+// none or fails, as Terragrunt treats it.
+async function gitBoundary(
+	workingDirectory: string,
+	environment: Record<string, string | undefined>,
+	repoRoots: Map<string, string> | undefined
+): Promise<string | undefined> {
+	try {
+		return await goRepoRoot(workingDirectory, environment, repoRoots);
+	} catch (error) {
+		if (error instanceof RepoRootError) return undefined;
+		throw error;
 	}
 }
-
-// Go's text for the failures a stat of a named path can meet.
-const statFailures: Record<string, string> = {
-	EACCES: 'permission denied',
-	ELOOP: 'too many levels of symbolic links',
-	ENAMETOOLONG: 'file name too long',
-	ENOTDIR: 'not a directory',
-	EPERM: 'operation not permitted'
-};
 
 const boundaryFlag = '--terragrunt-boundary';
 
@@ -168,10 +157,15 @@ function parseBoundary(args: string[], workingDirectory: string): { boundary?: s
 	return { boundary: path.resolve(workingDirectory, configuredBoundary), rest };
 }
 
-export async function expandTerragruntGlob(args: string[], workingDirectory: string): Promise<string[]> {
+export async function expandTerragruntGlob(
+	args: string[],
+	workingDirectory: string,
+	environment: Record<string, string | undefined>,
+	repoRoots?: Map<string, string>
+): Promise<string[]> {
 	const { boundary: configuredBoundary, rest } = parseBoundary(args, workingDirectory);
 	if (rest.length !== 1) throw new Error(`Expected 1 params for function mark_glob_as_read, but got ${rest.length}`);
-	const boundary = configuredBoundary ?? await gitBoundary(workingDirectory);
+	const boundary = configuredBoundary ?? await gitBoundary(workingDirectory, environment, repoRoots);
 	const raw = rest[0];
 	// An empty pattern names the working directory, which is no file.
 	const pattern = cleanSlashPath(path.isAbsolute(raw) ? raw : `${toSlash(workingDirectory)}/${raw}`);
@@ -188,8 +182,8 @@ export async function expandTerragruntGlob(args: string[], workingDirectory: str
 		} catch (error) {
 			const code = (error as NodeJS.ErrnoException).code ?? '';
 			if (code === 'ENOENT') return [];
-			if (statFailures[code] === undefined) throw error;
-			throw new Error(`could not expand glob ${goQuoted(raw)}: stat ${root}: ${statFailures[code]}`);
+			if (goStatFailures[code] === undefined) throw error;
+			throw new Error(`could not expand glob ${goQuoted(raw)}: stat ${root}: ${goStatFailures[code]}`);
 		}
 	}
 	const matchers = expandBraces(pattern).map(globRegex);

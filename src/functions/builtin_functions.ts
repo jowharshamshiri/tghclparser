@@ -665,7 +665,9 @@ export const builtinFunctionGroup = {
 		},
 		mark_glob_as_read: async (args: RuntimeValue<ValueType>[], context: FunctionContext) => arrayValue((await expandTerragruntGlob(
 			args.map((_, index) => stringArgument(args, index, 'mark_glob_as_read')),
-			context.workingDirectory
+			context.workingDirectory,
+			context.environmentVariables,
+			context.repoRoots
 		)).map(stringValue)),
 		matchkeys: async (args: RuntimeValue<ValueType>[]) => {
 			const values = arrayArgument(args, 0, 'matchkeys');
