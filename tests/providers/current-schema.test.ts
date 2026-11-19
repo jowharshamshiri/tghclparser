@@ -143,6 +143,20 @@ generate "provider" {
 			expect((runtimeValueToPlain(limit.inputs!) as { x: number[] }).x).to.have.length(1024);
 		});
 
+		it('accepts join with any number of lists and try with any number of expressions after the first', () => {
+			const content = 'inputs = {\n  a = join(",", ["a"], ["b"], ["c"])\n  b = try(1)\n  c = try(1, 2, 3)\n}';
+			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', content)).to.deep.equal([]);
+			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', 'inputs = { x = try() }'))
+				.to.deep.equal(['Function "try" requires at least 1 argument']);
+		});
+
+		it('counts a final argument expanded with ... as any number of arguments', () => {
+			const content = 'inputs = {\n  a = upper(["a"]...)\n  b = upper("a", []...)\n  c = substr(["abc", 0, 1]...)\n}';
+			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', content)).to.deep.equal([]);
+			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', 'inputs = { x = upper("a", "b", []...) }'))
+				.to.deep.equal(['Function "upper" accepts at most 1 argument']);
+		});
+
 		it('requires every argument of parseint, substr, trim, textencodebase64 and textdecodebase64', () => {
 			const short: Array<[string, string]> = [
 				['parseint("10")', 'Function "parseint" requires at least 2 arguments'],

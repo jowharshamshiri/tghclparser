@@ -411,12 +411,15 @@ export class DiagnosticsProvider {
 
 	private validateFunctionArguments(token: Token, definition: FunctionDefinition, diagnostics: Diagnostic[]): void {
 		const arguments_ = token.children.filter(child => child.type !== 'function_identifier');
+		// A final argument expanded with `...` stands for as many arguments as its value has elements, which may be none.
+		const expanded = arguments_.at(-1)?.type === 'variadic_arguments';
+		const written = expanded ? arguments_.length - 1 : arguments_.length;
 		const required = definition.parameters.filter(parameter => parameter.required).length;
 		const variadic = definition.parameters.at(-1)?.variadic === true;
-		if (arguments_.length < required) {
+		if (!expanded && written < required) {
 			diagnostics.push(this.diagnostic(token, `Function "${definition.name}" requires at least ${required} argument${required === 1 ? '' : 's'}`));
 		}
-		if (!variadic && arguments_.length > definition.parameters.length) {
+		if (!variadic && written > definition.parameters.length) {
 			const most = definition.parameters.length;
 			diagnostics.push(this.diagnostic(token, `Function "${definition.name}" accepts at most ${most} argument${most === 1 ? '' : 's'}`));
 		}

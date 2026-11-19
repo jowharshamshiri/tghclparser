@@ -8,6 +8,7 @@ import type { FunctionContext, RuntimeValue, ValueType } from '../model';
 import { renderTemplate } from './template';
 import {
 	convertToRuntimeValue,
+	expectParams,
 	makeBooleanValue,
 	makeStringValue,
 	markEncrypted
@@ -86,6 +87,7 @@ export const fileFunctionGroup = {
             args: RuntimeValue<ValueType>[],
             context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
+            expectParams(args, [1, 2], 'read_terragrunt_config');
             assertTrusted(context, 'read_terragrunt_config');
             const configPath = stringArgument(args, 0, 'read_terragrunt_config');
             if (!context.readTerragruntConfig) {
@@ -100,6 +102,7 @@ export const fileFunctionGroup = {
             args: RuntimeValue<ValueType>[],
             context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
+            expectParams(args, [1], 'read_tfvars_file');
             assertTrusted(context, 'read_tfvars_file');
             const tfvarsPath = stringArgument(args, 0, 'read_tfvars_file');
             if (!context.readTFVarsFile) {
@@ -113,6 +116,7 @@ export const fileFunctionGroup = {
 			args: RuntimeValue<ValueType>[],
 			context: FunctionContext
 		): Promise<RuntimeValue<ValueType>> => {
+			expectParams(args, [1], 'sops_decrypt_file');
 			assertTrusted(context, 'sops_decrypt_file');
 			const source = stringArgument(args, 0, 'sops_decrypt_file');
 			const filePath = resolveFilePath(source, context);

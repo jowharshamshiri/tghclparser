@@ -43,6 +43,39 @@ export const unwrapSensitive = (value: RuntimeValue<ValueType>): RuntimeValue<Va
 };
 
 /**
+ * Refuses a call to a Terragrunt function with a number of arguments it does not take, in Terragrunt's own words. Its
+ * go-cty parameter is variadic, so HCL counts nothing and the function counts for itself.
+ *
+ * @param args the call's arguments.
+ * @param counts the numbers of arguments the function takes, in increasing order.
+ * @param name the function.
+ */
+export function expectParams(args: RuntimeValue<ValueType>[], counts: number[], name: string): void {
+    if (counts.includes(args.length)) return;
+    const expected = counts.length < 3 ? counts.join(' or ') : `${counts.slice(0, -1).join(', ')}, or ${counts.at(-1)}`;
+    throw new Error(`Expected ${expected} params for function ${name}, but got ${args.length}`);
+}
+
+/**
+ * Orders two strings as Go compares them, and so as go-cty orders an object's attributes and a map's keys: by their
+ * UTF-8 bytes, which is the order of their code points. JavaScript compares UTF-16 code units instead, which puts a
+ * character above U+FFFF, stored as a surrogate pair, before one from U+E000 to U+FFFF.
+ */
+export function compareStrings(left: string, right: string): number {
+    const length = Math.min(left.length, right.length);
+    for (let index = 0; index < length; index++) {
+        const leftUnit = left.charCodeAt(index);
+        const rightUnit = right.charCodeAt(index);
+        if (leftUnit === rightUnit) continue;
+        const leftSurrogate = leftUnit >= 0xd800 && leftUnit <= 0xdfff;
+        const rightSurrogate = rightUnit >= 0xd800 && rightUnit <= 0xdfff;
+        if (leftSurrogate !== rightSurrogate) return leftSurrogate ? 1 : -1;
+        return leftUnit - rightUnit;
+    }
+    return left.length - right.length;
+}
+
+/**
  * Marks the values of a document read from a file sops could not decrypt: every string sops stored encrypted, which
  * it writes as `ENC[...]`, so an editor can show that the value is there without showing it.
  *
@@ -138,7 +171,7 @@ export function runtimeToPlain(value: RuntimeValue<ValueType>): unknown {
         case 'block': {
             const map = value.value as Map<string, RuntimeValue<ValueType>>;
             const out: Record<string, unknown> = {};
-            for (const key of [...map.keys()].sort()) out[key] = runtimeToPlain(map.get(key)!);
+            for (const key of [...map.keys()].sort(compareStrings)) out[key] = runtimeToPlain(map.get(key)!);
             return out;
         }
         default: {

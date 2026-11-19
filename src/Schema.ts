@@ -6,7 +6,7 @@ import { builtinFunctionGroup } from './functions/builtin_functions';
 import { coreFunctionGroup } from './functions/core_functions';
 import { fileFunctionGroup } from './functions/file_functions';
 import { FunctionRegistry } from './FunctionsRegistry';
-import type { AttributeDefinition, BlockDefinition, FunctionDefinition, TerragruntFileKind, ValueType } from './model';
+import type { AttributeDefinition, BlockDefinition, BuiltinFunctionDefinition, FunctionDefinition, TerragruntFileKind, ValueType } from './model';
 
 const functionDefinitions = functionsDefinitionsJson as { functions: FunctionDefinition[] };
 const schemaDefinitions = blocks as unknown as { blocks: BlockDefinition[]; globalAttributes: AttributeDefinition[] };
@@ -20,9 +20,23 @@ const unsupportedRuntimeFunctions = new Set([
 	'type', 'urldecode'
 ]);
 
-const currentFunctionDefinitions = functionDefinitions.functions.filter(
-	definition => !unsupportedRuntimeFunctions.has(definition.name)
-);
+const currentFunctionDefinitions: BuiltinFunctionDefinition[] = functionDefinitions.functions
+	.filter(definition => !unsupportedRuntimeFunctions.has(definition.name))
+	.map(builtinFunctionDefinition);
+
+/** A definition of functions.json, which must state its function's go-cty parameters. */
+function builtinFunctionDefinition(definition: FunctionDefinition): BuiltinFunctionDefinition {
+	const { arity } = definition as Partial<BuiltinFunctionDefinition>;
+	if (
+		!arity
+		|| !Array.isArray(arity.params)
+		|| arity.params.some(param => typeof param !== 'string')
+		|| typeof arity.variadic !== 'boolean'
+	) {
+		throw new Error(`functions.json: function "${definition.name}" must have an arity of go-cty parameter names and whether it is variadic`);
+	}
+	return definition as BuiltinFunctionDefinition;
+}
 
 export class Schema {
 	private static instance: Schema;
@@ -149,11 +163,11 @@ export class Schema {
 		return collect(schemaDefinitions.blocks);
 	}
 
-	getAllFunctions(): FunctionDefinition[] {
+	getAllFunctions(): BuiltinFunctionDefinition[] {
 		return currentFunctionDefinitions;
 	}
 
-	getFunctionDefinition(name: string): FunctionDefinition | undefined {
+	getFunctionDefinition(name: string): BuiltinFunctionDefinition | undefined {
 		return currentFunctionDefinitions.find(f => f.name === name);
 	}
 

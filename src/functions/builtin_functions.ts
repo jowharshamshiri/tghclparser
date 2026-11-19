@@ -3,11 +3,13 @@ import { gzipSync } from 'node:zlib';
 import path from 'node:path';
 import bcrypt from 'bcryptjs';
 
-import { graphemeClusters } from '../grapheme-clusters';
+import { graphemeClusters, graphemeCount } from '../grapheme-clusters';
 import type { FunctionContext, RuntimeValue, ValueType } from '../model';
 import { expandTerragruntGlob } from './terragrunt_glob';
 import {
+	compareStrings,
 	convertToRuntimeValue,
+	expectParams,
 	makeNullValue,
 	makeSensitiveValue,
 	markEncrypted,
@@ -288,6 +290,49 @@ function csvDecode(content: string): RuntimeValue<'array'> {
 	return arrayValue(records);
 }
 
+/** A string as Go's encoding/json writes it for go-cty: as JSON does, and with <, >, &, U+2028 and U+2029 escaped. */
+function jsonString(text: string): string {
+	return JSON.stringify(text).replace(/[<>&  ]/g, character => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
+/** A number as go-cty writes it into JSON: every digit in full with no exponent, and a negative zero as -0. */
+function jsonNumber(value: number): string {
+	if (!Number.isFinite(value)) throw new Error('cannot serialize infinity as JSON');
+	if (Object.is(value, -0)) return '-0';
+	// The shortest digits that give the number back, and where the decimal point goes among them.
+	const [mantissa, exponent] = Math.abs(value).toExponential().split('e');
+	const digits = mantissa.replace('.', '');
+	const point = Number(exponent) + 1;
+	const sign = value < 0 ? '-' : '';
+	if (point <= 0) return `${sign}0.${'0'.repeat(-point)}${digits}`;
+	if (point >= digits.length) return `${sign}${digits}${'0'.repeat(point - digits.length)}`;
+	return `${sign}${digits.slice(0, point)}.${digits.slice(point)}`;
+}
+
+/** A value as go-cty's jsonencode writes it: with no spaces, and an object's keys in the order of their bytes. */
+function jsonEncode(value: RuntimeValue<ValueType>): string {
+	const current = unwrapSensitive(value);
+	switch (current.type) {
+		case 'null':
+			return 'null';
+		case 'boolean':
+			return current.value ? 'true' : 'false';
+		case 'number':
+			return jsonNumber(Number(current.value));
+		case 'string':
+			return jsonString(String(current.value));
+		case 'array':
+			return `[${(current.value as RuntimeValue<ValueType>[]).map(jsonEncode).join(',')}]`;
+		case 'object':
+		case 'block': {
+			const map = current.value as Map<string, RuntimeValue<ValueType>>;
+			return `{${[...map.keys()].sort(compareStrings).map(key => `${jsonString(key)}:${jsonEncode(map.get(key)!)}`).join(',')}}`;
+		}
+		default:
+			throw new Error(`jsonencode cannot encode ${current.type}`);
+	}
+}
+
 function yamlEncode(value: RuntimeValue<ValueType>, indent = ''): string {
 	const current = value;
 	if (current.type === 'string') return JSON.stringify(String(current.value));
@@ -503,10 +548,14 @@ export const builtinFunctionGroup = {
 			const lines = stringArgument(args, 1, 'indent').split('\n');
 			return stringValue(lines.map((line, index) => (index === 0 ? line : spaces + line)).join('\n'));
 		},
-		join: async (args: RuntimeValue<ValueType>[]) => stringValue(arrayArgument(args, 1, 'join').map((value, index) => {
-			if (value.type !== 'string') throw new Error(`join list element ${index + 1} must be a string`);
-			return String(value.value);
-		}).join(stringArgument(args, 0, 'join'))),
+		join: async (args: RuntimeValue<ValueType>[]) => {
+			const separator = stringArgument(args, 0, 'join');
+			if (args.length < 2) throw new Error('at least one list is required');
+			return stringValue(args.slice(1).flatMap((_, list) => arrayArgument(args, list + 1, 'join').map((value, index) => {
+				if (value.type !== 'string') throw new Error(`join list element ${index + 1} must be a string`);
+				return String(value.value);
+			})).join(separator));
+		},
 		jsondecode: async (args: RuntimeValue<ValueType>[]) => {
 			let parsed: unknown;
 			try {
@@ -517,17 +566,18 @@ export const builtinFunctionGroup = {
 			const decoded = convertToRuntimeValue(parsed);
 			return args[0].encrypted ? markEncrypted(decoded) : decoded;
 		},
-		jsonencode: async (args: RuntimeValue<ValueType>[]) => stringValue(JSON.stringify(runtimeToPlain(requireArgument(args, 0, 'jsonencode')))),
-		keys: async (args: RuntimeValue<ValueType>[]) => arrayValue([...objectArgument(args, 0, 'keys').keys()].sort().map(stringValue)),
+		jsonencode: async (args: RuntimeValue<ValueType>[]) => stringValue(jsonEncode(requireArgument(args, 0, 'jsonencode'))),
+		keys: async (args: RuntimeValue<ValueType>[]) => arrayValue([...objectArgument(args, 0, 'keys').keys()].sort(compareStrings).map(stringValue)),
 		length: async (args: RuntimeValue<ValueType>[]) => {
 			const value = requireArgument(args, 0, 'length');
-			if (value.type === 'string') return numberValue([...String(value.value)].length);
+			if (value.type === 'string') return numberValue(graphemeCount(String(value.value)));
 			if (value.type === 'array' && Array.isArray(value.value)) return numberValue(value.value.length);
 			if (value.type === 'object' && value.value instanceof Map) return numberValue(value.value.size);
 			throw new Error('length requires a string, list, or object');
 		},
 		log: async (args: RuntimeValue<ValueType>[]) => numberValue(Math.log(numberArgument(args, 0, 'log')) / Math.log(numberArgument(args, 1, 'log'))),
 		lookup: async (args: RuntimeValue<ValueType>[]) => {
+			if (args.length > 3) throw new Error(`lookup() takes two or three arguments, got ${args.length}`);
 			const map = objectArgument(args, 0, 'lookup');
 			const key = stringArgument(args, 1, 'lookup');
 			const value = map.get(key);
@@ -537,6 +587,7 @@ export const builtinFunctionGroup = {
 		},
 		lower: async (args: RuntimeValue<ValueType>[]) => stringValue(stringArgument(args, 0, 'lower').toLocaleLowerCase()),
 		mark_as_read: async (args: RuntimeValue<ValueType>[]) => {
+			expectParams(args, [1], 'mark_as_read');
 			const value = stringArgument(args, 0, 'mark_as_read');
 			return stringValue(value);
 		},
@@ -613,6 +664,7 @@ export const builtinFunctionGroup = {
 		reverse: async (args: RuntimeValue<ValueType>[]) => arrayValue([...arrayArgument(args, 0, 'reverse')].reverse()),
 		sensitive: async (args: RuntimeValue<ValueType>[]) => makeSensitiveValue(requireArgument(args, 0, 'sensitive')),
 		bcrypt: async (args: RuntimeValue<ValueType>[]) => {
+			if (args.length > 2) throw new Error('bcrypt() takes no more than two arguments');
 			const password = stringArgument(args, 0, 'bcrypt');
 			const cost = args[1] ? numberArgument(args, 1, 'bcrypt') : 10;
 			if (!Number.isInteger(cost) || cost < 4 || cost > 31) throw new Error('bcrypt cost must be an integer between 4 and 31');
@@ -798,7 +850,7 @@ export const builtinFunctionGroup = {
 		uuidv5: async (args: RuntimeValue<ValueType>[]) => stringValue(uuidv5(stringArgument(args, 0, 'uuidv5'), stringArgument(args, 1, 'uuidv5'))),
 		values: async (args: RuntimeValue<ValueType>[]) => {
 			const map = objectArgument(args, 0, 'values');
-			return arrayValue([...map.keys()].sort().map(key => map.get(key)!));
+			return arrayValue([...map.keys()].sort(compareStrings).map(key => map.get(key)!));
 		},
 		toset: async (args: RuntimeValue<ValueType>[]) => {
 			const items = arrayArgument(args, 0, 'toset');

@@ -74,6 +74,8 @@ export type TokenType =
 	| 'list_comprehension'
 	| 'map_comprehension'
 	| 'function_call'
+	// A call's final argument expanded with `...` into the elements of a list, set or tuple
+	| 'variadic_arguments'
 
 	// Inline function definitions
 	| 'inline_function'
@@ -356,6 +358,21 @@ export interface FunctionDefinition {
 	examples?: string[];
 	deprecated?: boolean;
 	deprecationMessage?: string;
+}
+
+/**
+ * The parameters go-cty declares for a function, which are all HCL reads to count a call's arguments: their names, in
+ * order, and whether a variadic parameter takes any after them. A function may refuse a count these allow, as range
+ * does, in its own words; {@link FunctionDefinition.parameters} describes the calls it accepts.
+ */
+export interface FunctionArity {
+	params: string[];
+	variadic: boolean;
+}
+
+/** A function Terragrunt itself defines. */
+export interface BuiltinFunctionDefinition extends FunctionDefinition {
+	arity: FunctionArity;
 }
 
 

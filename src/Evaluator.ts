@@ -9,16 +9,18 @@ import { checkTypeConstraint, readInlineFunction, readTypeConstraint, synthesize
 import { parseHclSyntax } from './syntax';
 import { Schema } from './Schema';
 import { encryptedSopsDocument } from './sops';
-import type { FunctionContext, FunctionDefinition, RuntimeValue, ValueType } from './model';
+import type { FunctionArity, FunctionContext, FunctionDefinition, RuntimeValue, ValueType } from './model';
 import {
 	coerceToBool,
 	coerceToString,
+	compareStrings,
 	convertToRuntimeValue,
 	makeArrayValue,
 	makeBooleanValue,
 	makeNullValue,
 	makeNumberValue,
 	makeObjectValue,
+	makeSensitiveValue,
 	makeStringValue,
 	runtimeToPlain,
 	unwrapSensitive
@@ -1281,7 +1283,9 @@ export class ConfigEvaluator {
 				}
 			},
 			evaluateFunction: async (name: string, args: RuntimeValue<ValueType>[]) => {
-					if (!this.schema.getFunctionDefinition(name)) throw new Error(`Unknown function ${name}`);
+					const definition = this.schema.getFunctionDefinition(name);
+					if (!definition) throw new Error(`Unknown function ${name}`);
+					checkArgumentCount(name, definition.arity, args.length);
 					if (!this.schema.getFunctionRegistry().hasFunction(name)) {
 					throw new Error(`Function ${name} has no evaluator`);
 				}
@@ -2195,11 +2199,26 @@ export class ConfigEvaluator {
 
 	private async evalFunctionCall(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
 		const name = String(node.value ?? '');
-		const args = (node.children ?? []).filter(child => child.type !== 'function_identifier');
+
+		// Inline functions resolve before built-ins. A name may not be both:
+		// definition-time shadow checking rejects that, so the order below can
+		// never mask a built-in.
+		// An inline function computes from its arguments in a body this evaluator does not see into, so it is given no
+		// value sops left encrypted.
+		const inline = this.findInlineFunction(scope, name);
+		if (inline) {
+			const args = await this.evalCallArguments(await this.callArguments(node, scope), scope);
+			return this.callInlineFunction(inline, args.map(computable));
+		}
+
+		const definition = this.schema.getFunctionDefinition(name);
+		if (!definition) throw new Error(`Unknown function "${name}"`);
+		const args = await this.callArguments(node, scope);
+		checkArgumentCount(name, definition.arity, args.length);
 
 		if (name === 'can') {
 			try {
-				await this.evalNode(args[0], scope);
+				await this.evalCallArgument(args[0], scope);
 				return makeBooleanValue(true);
 			} catch (error) {
 				if (error instanceof UnresolvedRenderValueError) throw error;
@@ -2208,26 +2227,19 @@ export class ConfigEvaluator {
 		}
 
 		if (name === 'try') {
+			if (args.length === 0) throw new Error('at least one argument is required');
+			const failures: string[] = [];
 			for (const arg of args) {
 				try {
-					return await this.evalNode(arg, scope);
+					return await this.evalCallArgument(arg, scope);
 				} catch (error) {
 					if (error instanceof UnresolvedRenderValueError) throw error;
-					// fall through to the next candidate
+					failures.push(error instanceof Error ? error.message : String(error));
 				}
 			}
-			return makeNullValue();
+			throw new Error(`no expression succeeded:\n${failures.map(failure => `- ${failure}\n`).join('')}At least one expression must produce a successful result.`);
 		}
 
-		// Inline functions resolve before built-ins. A name may not be both:
-		// definition-time shadow checking rejects that, so the order below can
-		// never mask a built-in.
-		// An inline function computes from its arguments in a body this evaluator does not see into, so it is given no
-		// value sops left encrypted.
-		const inline = this.findInlineFunction(scope, name);
-		if (inline) return this.callInlineFunction(inline, (await this.evalOperands(args, scope)).map(computable));
-
-		if (!this.schema.getFunctionDefinition(name)) throw new Error(`Unknown function "${name}"`);
 		if (name === 'deep_merge' && !this.options.experiments?.includes('deep-merge')) {
 			throw new Error('deep_merge requires the deep-merge experiment to be enabled');
 		}
@@ -2235,9 +2247,42 @@ export class ConfigEvaluator {
 			throw new Error(`Function "${name}" has no evaluator`);
 		}
 
-		const evaluatedArgs = functionArguments(name, await this.evalOperands(args, scope));
+		const evaluatedArgs = functionArguments(name, await this.evalCallArguments(args, scope));
 		const context = await this.makeContext(scope);
 		return this.schema.getFunctionRegistry().evaluateFunction(name, evaluatedArgs, context);
+	}
+
+	/**
+	 * A call's arguments as HCL counts them: the expressions written in it, and, for a final argument expanded with
+	 * `...`, each element of the list, set or tuple it evaluates to, carrying the collection's sensitivity.
+	 */
+	private async callArguments(node: TNode, scope: Scope): Promise<CallArgument[]> {
+		const written: CallArgument[] = (node.children ?? [])
+			.filter(child => child.type !== 'function_identifier')
+			.map(expression => ({ expression }));
+		const final = written.at(-1);
+		if (!final || !('expression' in final) || final.expression.type !== 'variadic_arguments') return written;
+
+		const collection = await this.evalNode(final.expression.children?.[0], scope);
+		const sensitive = (collection.type as string) === 'sensitive';
+		const expanded = unwrapSensitive(collection);
+		if (expanded.type === 'null') {
+			throw new Error('Invalid expanding argument value; The expanding argument (indicated by ...) must not be null.');
+		}
+		if (expanded.type !== 'array') {
+			throw new Error('Invalid expanding argument value; The expanding argument (indicated by ...) must be of a tuple, list, or set type.');
+		}
+		const elements = (expanded.value as RuntimeValue<ValueType>[])
+			.map(value => ({ value: sensitive ? makeSensitiveValue(value) : value }));
+		return [...written.slice(0, -1), ...elements];
+	}
+
+	private async evalCallArgument(argument: CallArgument, scope: Scope): Promise<RuntimeValue<ValueType>> {
+		return 'value' in argument ? argument.value : this.evalNode(argument.expression, scope);
+	}
+
+	private async evalCallArguments(args: CallArgument[], scope: Scope): Promise<RuntimeValue<ValueType>[]> {
+		return this.settleOperands(args.map(argument => () => this.evalCallArgument(argument, scope)));
 	}
 
 	/**
@@ -2539,7 +2584,7 @@ function makeRootScope(filePath: string, content: string, workspaceRoot = path.d
 
 /**
  * The elements of a for expression's collection, in the order HCL visits them: a list by index, an object by key in
- * lexical order, as `keys` and `values` give them.
+ * the order of their bytes, as `keys` and `values` give them.
  */
 function iterateValue(value: RuntimeValue<ValueType>): Array<[string, RuntimeValue<ValueType>]> {
 	const items: Array<[string, RuntimeValue<ValueType>]> = [];
@@ -2547,7 +2592,7 @@ function iterateValue(value: RuntimeValue<ValueType>): Array<[string, RuntimeVal
 		(value.value as RuntimeValue<ValueType>[]).forEach((item, index) => items.push([String(index), item]));
 	} else if (value.type === 'object' || value.type === 'block') {
 		const map = value.value as Map<string, RuntimeValue<ValueType>>;
-		for (const key of [...map.keys()].sort()) items.push([key, map.get(key)!]);
+		for (const key of [...map.keys()].sort(compareStrings)) items.push([key, map.get(key)!]);
 	} else {
 		throw new Error(`Comprehension collection must be a list or object, got ${value.type}`);
 	}
@@ -2769,6 +2814,29 @@ function computable(value: RuntimeValue<ValueType>): RuntimeValue<ValueType> {
  * @throws EncryptedSopsValueError when the function would compute from an encrypted value: any function given one
  *   other than the decoders, and a selector given one as a plain argument rather than inside a collection.
  */
+/** An argument of a function call: an expression written in it, or an element of its expanded final argument. */
+type CallArgument = { expression: TNode } | { value: RuntimeValue<ValueType> };
+
+/**
+ * Refuses a call whose argument count go-cty's parameters do not allow, as HCL does before it evaluates any argument.
+ *
+ * @param name the function.
+ * @param arity its go-cty parameters.
+ * @param count the call's arguments, an expanded final argument counted as its elements.
+ * @throws when there are fewer arguments than parameters, or more and no variadic parameter takes them.
+ */
+function checkArgumentCount(name: string, arity: FunctionArity, count: number): void {
+	if (count < arity.params.length) {
+		throw new Error(
+			`Not enough function arguments; Function "${name}" expects${arity.variadic ? ' at least' : ''} ${arity.params.length} argument(s). `
+			+ `Missing value for "${arity.params[count]}".`
+		);
+	}
+	if (!arity.variadic && count > arity.params.length) {
+		throw new Error(`Too many function arguments; Function "${name}" expects only ${arity.params.length} argument(s).`);
+	}
+}
+
 function functionArguments(name: string, args: RuntimeValue<ValueType>[]): RuntimeValue<ValueType>[] {
 	if (ENCRYPTED_DOCUMENT_DECODERS.has(name)) return args;
 	if (COLLECTION_SELECTORS.has(name)) {
