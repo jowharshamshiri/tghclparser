@@ -1,10 +1,13 @@
 import { constants, createHash, privateDecrypt, randomUUID } from 'node:crypto';
-import { gzipSync } from 'node:zlib';
+import { gunzipSync, gzipSync } from 'node:zlib';
 import path from 'node:path';
 import bcrypt from 'bcryptjs';
 
 import { graphemeClusters, graphemeCount } from '../grapheme-clusters';
 import type { FunctionContext, RuntimeValue, ValueType } from '../model';
+import { assumeFunctions, markedLike } from './assume_functions';
+import { addressRange, contains, type IP, type IPNet, parseCIDR, parseIP, to4 } from './ipaddr';
+import { renderTemplate } from './template';
 import { expandTerragruntGlob } from './terragrunt_glob';
 import {
 	compareStrings,
@@ -389,9 +392,101 @@ function parseCsvRow(row: string): string[] {
 	return cells;
 }
 
+/** A string argument as go-cty converts one, refused when it is null or not a primitive. */
+function convertedString(argument: RuntimeValue<ValueType>, parameter: string): string {
+	const value = unwrapSensitive(argument);
+	if (value.type === 'null') throw new Error(`Invalid value for "${parameter}" parameter: argument must not be null.`);
+	if (value.type !== 'string' && value.type !== 'number' && value.type !== 'boolean') {
+		throw new Error(`Invalid value for "${parameter}" parameter: string required.`);
+	}
+	return String(value.value);
+}
+
+/** Go's base64.StdEncoding.DecodeString: padded standard base64, where only line breaks are skipped. */
+function decodeStandardBase64(text: string): Buffer | undefined {
+	const encoded = text.replace(/[\r\n]/gu, '');
+	if (encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(encoded)) return undefined;
+	return Buffer.from(encoded, 'base64');
+}
+
+const isHex = (character: string | undefined): boolean => character !== undefined && /^[0-9A-Fa-f]$/u.test(character);
+
+/** Go's url.QueryUnescape: "+" is a space and each "%XX" a byte, and a malformed escape is refused. */
+function queryUnescape(text: string): string {
+	for (let index = 0; index < text.length; index++) {
+		if (text[index] !== '%') continue;
+		if (index + 2 >= text.length || !isHex(text[index + 1]) || !isHex(text[index + 2])) {
+			const escape = text.slice(index, index + 3);
+			throw new Error(`failed to decode URL '': invalid URL escape ${JSON.stringify(escape)}`);
+		}
+		index += 2;
+	}
+	const bytes: number[] = [];
+	for (let index = 0; index < text.length; index++) {
+		const character = text[index];
+		if (character === '%') {
+			bytes.push(parseInt(text.slice(index + 1, index + 3), 16));
+			index += 2;
+		} else if (character === '+') {
+			bytes.push(0x20);
+		} else {
+			const codePoint = text.codePointAt(index)!;
+			const encoded = String.fromCodePoint(codePoint);
+			bytes.push(...Buffer.from(encoded, 'utf8'));
+			index += encoded.length - 1;
+		}
+	}
+	return Buffer.from(bytes).toString('utf8');
+}
+
 export const builtinFunctionGroup = {
 	namespace: 'opentofu',
 	functions: {
+		...assumeFunctions,
+		base64gunzip: async (args: RuntimeValue<ValueType>[]) => {
+			const text = convertedString(args[0], 'str');
+			const sensitive = (args[0].type as string) === 'sensitive';
+			const compressed = decodeStandardBase64(text);
+			if (!compressed) throw new Error(`failed to decode base64 data ${sensitive ? '(sensitive value)' : text}`);
+			let decompressed: Buffer;
+			try {
+				decompressed = gunzipSync(compressed);
+			} catch (error) {
+				throw new Error(`failed to gunzip bytestream: ${error instanceof Error ? error.message : String(error)}`);
+			}
+			return markedLike(stringValue(decompressed.toString('utf8')), args.slice(0, 1));
+		},
+		cidrcontains: async (args: RuntimeValue<ValueType>[]) => {
+			const prefix = convertedString(args[0], 'containing_prefix');
+			const address = convertedString(args[1], 'contained_ip_or_prefix');
+			const containing = parseCIDR(prefix);
+			let start = parseIP(address);
+			let end: IP | undefined;
+			if (!start) {
+				let contained: IPNet;
+				try {
+					contained = parseCIDR(address);
+				} catch {
+					throw new Error(`invalid IP address or prefix: ${address}`);
+				}
+				[start, end] = addressRange(contained);
+			}
+			if ((to4(start) === undefined) !== (to4(containing.ip) === undefined)) {
+				throw new Error(`address family mismatch: ${prefix} vs. ${address}`);
+			}
+			const result = contains(containing, start) && (end === undefined || contains(containing, end));
+			return markedLike(booleanValue(result), args);
+		},
+		templatestring: async (args: RuntimeValue<ValueType>[], context: FunctionContext) => {
+			const template = convertedString(args[0], 'data');
+			const vars = unwrapSensitive(args[1]);
+			if (vars.type !== 'object' && vars.type !== 'block') {
+				throw new Error('Invalid value for "vars" parameter: invalid vars value: must be a map.');
+			}
+			const rendered = await renderTemplate(template, vars, context);
+			return (rendered.type as string) === 'sensitive' ? rendered : markedLike(rendered, args);
+		},
+		urldecode: async (args: RuntimeValue<ValueType>[]) => markedLike(stringValue(queryUnescape(convertedString(args[0], 'str'))), args),
 		abspath: async (args: RuntimeValue<ValueType>[], context: FunctionContext) => stringValue(path.resolve(context.workingDirectory, stringArgument(args, 0, 'abspath'))),
 		abs: async (args: RuntimeValue<ValueType>[]) => numberValue(Math.abs(numberArgument(args, 0, 'abs'))),
 		alltrue: async (args: RuntimeValue<ValueType>[]) => booleanValue(arrayArgument(args, 0, 'alltrue').every(item => {

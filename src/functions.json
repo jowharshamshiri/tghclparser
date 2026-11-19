@@ -292,46 +292,6 @@
 			"deprecated": false
 		},
 		{
-			"name": "regex_replace",
-			"description": "Performs regular expression replacement on a string.\n\n* Replaces all matches of a regular expression with a replacement string.\n* Useful for string manipulation and formatting.",
-			"parameters": [
-				{
-					"name": "string",
-					"types": [
-						"string"
-					],
-					"required": true,
-					"description": "The input string to perform replacement on"
-				},
-				{
-					"name": "pattern",
-					"types": [
-						"string"
-					],
-					"required": true,
-					"description": "The regular expression pattern to match"
-				},
-				{
-					"name": "replacement",
-					"types": [
-						"string"
-					],
-					"required": true,
-					"description": "The string to replace matches with"
-				}
-			],
-			"returnType": {
-				"types": [
-					"string"
-				],
-				"description": "String with replacements applied"
-			},
-			"examples": [
-				"locals {\n  cleaned_path = regex_replace(path_relative_to_include(), \"/\", \"-\")\n}"
-			],
-			"deprecated": false
-		},
-		{
 			"name": "yamldecode",
 			"description": "Decodes a YAML string into a value.\n\n* Parses a YAML-formatted string and returns the resulting value.\n* Useful for reading YAML configuration files.",
 			"parameters": [
@@ -1151,6 +1111,31 @@
 			},
 			"examples": [
 				"locals { compressed = base64gzip(\"Hello World\") }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "base64gzip_compat",
+			"description": "Compresses a string with gzip and base64-encodes the result exactly as `base64gzip` did in Terragrunt v1.1.3 and earlier.\n\n* Produces the same bytes as the older `base64gzip`, for configurations that compare or store its output.\n* Requires the `base64gzip-compat` experiment; without it every call fails.",
+			"parameters": [
+				{
+					"name": "str",
+					"types": [
+						"string"
+					],
+					"required": true,
+					"description": "String to compress"
+				}
+			],
+			"arity": { "params": ["str"], "variadic": false },
+			"returnType": {
+				"types": [
+					"string"
+				],
+				"description": "Base64-encoded gzip stream"
+			},
+			"examples": [
+				"locals { compressed = base64gzip_compat(file(\"policy.json\")) }"
 			],
 			"deprecated": false
 		},
@@ -3744,45 +3729,6 @@
 			"deprecated": false
 		},
 		{
-			"name": "type",
-			"description": "Returns the type of a value.\n\n* Returns a string describing the type.\n* Useful for conditional logic based on value types.\n* Possible return values include: string, number, bool, list, map, null.",
-			"parameters": [
-				{
-					"name": "value",
-					"types": [
-						"string",
-						"number",
-						"boolean",
-						"array",
-						"object",
-						"null"
-					],
-					"required": true,
-					"description": "Value to check type of"
-				}
-			],
-			"returnType": {
-				"types": [
-					"string"
-				],
-				"description": "Type of the value",
-				"validation": {
-					"allowedValues": [
-						"string",
-						"number",
-						"bool",
-						"list",
-						"map",
-						"null"
-					]
-				}
-			},
-			"examples": [
-				"locals { value_type = type(var.input) }"
-			],
-			"deprecated": false
-		},
-		{
 			"name": "upper",
 			"description": "Converts all characters in a string to uppercase.\n\n* Converts string to uppercase.\n* Works with Unicode characters.\n* Returns empty string if given empty string.",
 			"parameters": [
@@ -4049,24 +3995,6 @@
 			"deprecated": false
 		},
 		{
-			"name": "plantimestamp",
-			"description": "Returns a UTC timestamp for use in plan-time references.\n\n* Returns timestamp string that remains consistent during plan.\n* Useful for avoiding unnecessary resource updates.\n* Format is RFC 3339.",
-			"parameters": [],
-			"returnType": {
-				"types": [
-					"string"
-				],
-				"description": "Plan-time timestamp string",
-				"validation": {
-					"pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
-				}
-			},
-			"examples": [
-				"locals { plan_time = plantimestamp() }"
-			],
-			"deprecated": false
-		},
-		{
 			"name": "sensitive",
 			"description": "Marks a value as sensitive, preventing it from appearing in logs and output.\n\n* Wraps the given value and marks it as sensitive.\n* The value can still be used normally in expressions.\n* Terraform/OpenTofu will hide this value in logs and terminal output.",
 			"parameters": [
@@ -4165,6 +4093,542 @@
 				"locals { is_secret = issensitive(var.value) }"
 			],
 			"deprecated": false
+		},
+		{
+			"name": "ephemeralasnull",
+			"description": "Returns a value with each ephemeral part replaced by null.\n\n* Terragrunt has no ephemeral values, so the value is returned unchanged, sensitive or not.",
+			"parameters": [
+				{
+					"name": "value",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object",
+						"null"
+					],
+					"required": true,
+					"description": "Value whose ephemeral parts become null"
+				}
+			],
+			"arity": { "params": ["value"], "variadic": false },
+			"returnType": {
+				"types": [
+					"string",
+					"number",
+					"boolean",
+					"array",
+					"object",
+					"null"
+				],
+				"description": "The value, with no ephemeral part"
+			},
+			"examples": [
+				"locals { token = ephemeralasnull(local.session_token) }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "assumeequal",
+			"description": "Asserts that a value equals the value assumed for it, and returns the assumed value.\n\n* Converts the actual value to the assumed value's type first, and fails when it cannot or when the two differ.\n* The result is the assumed value: whether the actual value was sensitive does not carry over.",
+			"parameters": [
+				{
+					"name": "actual_value",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object",
+						"null"
+					],
+					"required": true,
+					"description": "Value to make the assumption about"
+				},
+				{
+					"name": "expected_value",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object",
+						"null"
+					],
+					"required": true,
+					"description": "Value the first argument is assumed to equal"
+				}
+			],
+			"arity": { "params": ["actual_value", "expected_value"], "variadic": false },
+			"returnType": {
+				"types": [
+					"string",
+					"number",
+					"boolean",
+					"array",
+					"object",
+					"null"
+				],
+				"description": "The assumed value"
+			},
+			"examples": [
+				"locals { region = assumeequal(local.config.region, \"eu-west-1\") }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "assumenotnull",
+			"description": "Asserts that a value is not null, and returns it.\n\n* Fails on a null value. The `null` keyword has no type, so it fails for that reason: give it one by converting it first.",
+			"parameters": [
+				{
+					"name": "value",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object"
+					],
+					"required": true,
+					"description": "Value assumed not to be null"
+				}
+			],
+			"arity": { "params": ["value"], "variadic": false },
+			"returnType": {
+				"types": [
+					"string",
+					"number",
+					"boolean",
+					"array",
+					"object"
+				],
+				"description": "The value"
+			},
+			"examples": [
+				"locals { account = assumenotnull(local.accounts[\"prod\"]) }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "assumestringprefix",
+			"description": "Asserts that a string begins with a prefix, and returns the string.\n\n* Compares with the prefix less its last character, unless that character is a delimiter such as `/`, `:` or `-`, because a later character could combine with it.\n* A string shorter than the prefix passes when it begins the prefix, and a null string passes.",
+			"parameters": [
+				{
+					"name": "value",
+					"types": [
+						"string",
+						"null"
+					],
+					"required": true,
+					"description": "String to make the assumption about"
+				},
+				{
+					"name": "prefix",
+					"types": [
+						"string"
+					],
+					"required": true,
+					"description": "Prefix the string is assumed to have"
+				}
+			],
+			"arity": { "params": ["value", "prefix"], "variadic": false },
+			"returnType": {
+				"types": [
+					"string",
+					"null"
+				],
+				"description": "The string"
+			},
+			"examples": [
+				"locals { role = assumestringprefix(local.role_arn, \"arn:aws:iam::\") }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "assumelistlength",
+			"description": "Asserts that a list's length lies between two bounds, inclusive, and returns the list.\n\n* Converts the value to a list first, so its elements take one type.\n* The bounds must be whole numbers. A negative minimum is no bound; a negative maximum is never met.",
+			"parameters": [
+				{
+					"name": "value",
+					"types": [
+						"array"
+					],
+					"required": true,
+					"description": "List to make the assumption about"
+				},
+				{
+					"name": "min_length",
+					"types": [
+						"number"
+					],
+					"required": true,
+					"description": "The minimum possible list length"
+				},
+				{
+					"name": "max_length",
+					"types": [
+						"number"
+					],
+					"required": true,
+					"description": "The maximum possible list length"
+				}
+			],
+			"arity": { "params": ["value", "min_length", "max_length"], "variadic": false },
+			"returnType": {
+				"types": [
+					"array"
+				],
+				"description": "The list"
+			},
+			"examples": [
+				"locals { azs = assumelistlength(local.availability_zones, 2, 3) }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "assumelistlengthmin",
+			"description": "Asserts that a list has at least a given number of elements, and returns the list.\n\n* Converts the value to a list first, so its elements take one type.\n* The bound must be a whole number. A negative one is no bound.",
+			"parameters": [
+				{
+					"name": "value",
+					"types": [
+						"array"
+					],
+					"required": true,
+					"description": "List to make the assumption about"
+				},
+				{
+					"name": "min_length",
+					"types": [
+						"number"
+					],
+					"required": true,
+					"description": "The minimum possible list length"
+				}
+			],
+			"arity": { "params": ["value", "min_length"], "variadic": false },
+			"returnType": {
+				"types": [
+					"array"
+				],
+				"description": "The list"
+			},
+			"examples": [
+				"locals { subnets = assumelistlengthmin(local.subnet_ids, 1) }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "assumelistlengthmax",
+			"description": "Asserts that a list has at most a given number of elements, and returns the list.\n\n* Converts the value to a list first, so its elements take one type.\n* The bound must be a whole number. A negative one is never met.",
+			"parameters": [
+				{
+					"name": "value",
+					"types": [
+						"array"
+					],
+					"required": true,
+					"description": "List to make the assumption about"
+				},
+				{
+					"name": "max_length",
+					"types": [
+						"number"
+					],
+					"required": true,
+					"description": "The maximum possible list length"
+				}
+			],
+			"arity": { "params": ["value", "max_length"], "variadic": false },
+			"returnType": {
+				"types": [
+					"array"
+				],
+				"description": "The list"
+			},
+			"examples": [
+				"locals { nameservers = assumelistlengthmax(local.dns_servers, 4) }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "assumesetlength",
+			"description": "Asserts that a set's length lies between two bounds, inclusive, and returns the set.\n\n* Converts the value to a set first, so an element written twice counts once.\n* The bounds must be whole numbers. A negative minimum is no bound; a negative maximum is never met.",
+			"parameters": [
+				{
+					"name": "value",
+					"types": [
+						"array"
+					],
+					"required": true,
+					"description": "Set to make the assumption about"
+				},
+				{
+					"name": "min_length",
+					"types": [
+						"number"
+					],
+					"required": true,
+					"description": "The minimum possible set length"
+				},
+				{
+					"name": "max_length",
+					"types": [
+						"number"
+					],
+					"required": true,
+					"description": "The maximum possible set length"
+				}
+			],
+			"arity": { "params": ["value", "min_length", "max_length"], "variadic": false },
+			"returnType": {
+				"types": [
+					"array"
+				],
+				"description": "The set"
+			},
+			"examples": [
+				"locals { regions = assumesetlength(toset(local.regions), 1, 3) }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "assumesetlengthmin",
+			"description": "Asserts that a set has at least a given number of elements, and returns the set.\n\n* Converts the value to a set first, so an element written twice counts once.\n* The bound must be a whole number. A negative one is no bound.",
+			"parameters": [
+				{
+					"name": "value",
+					"types": [
+						"array"
+					],
+					"required": true,
+					"description": "Set to make the assumption about"
+				},
+				{
+					"name": "min_length",
+					"types": [
+						"number"
+					],
+					"required": true,
+					"description": "The minimum possible set length"
+				}
+			],
+			"arity": { "params": ["value", "min_length"], "variadic": false },
+			"returnType": {
+				"types": [
+					"array"
+				],
+				"description": "The set"
+			},
+			"examples": [
+				"locals { owners = assumesetlengthmin(toset(local.owners), 1) }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "assumesetlengthmax",
+			"description": "Asserts that a set has at most a given number of elements, and returns the set.\n\n* Converts the value to a set first, so an element written twice counts once.\n* The bound must be a whole number. A negative one is never met.",
+			"parameters": [
+				{
+					"name": "value",
+					"types": [
+						"array"
+					],
+					"required": true,
+					"description": "Set to make the assumption about"
+				},
+				{
+					"name": "max_length",
+					"types": [
+						"number"
+					],
+					"required": true,
+					"description": "The maximum possible set length"
+				}
+			],
+			"arity": { "params": ["value", "max_length"], "variadic": false },
+			"returnType": {
+				"types": [
+					"array"
+				],
+				"description": "The set"
+			},
+			"examples": [
+				"locals { tags = assumesetlengthmax(toset(local.tag_keys), 50) }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "assumemaplength",
+			"description": "Asserts that a map's number of elements lies between two bounds, inclusive, and returns the map.\n\n* Converts the value to a map first, so its values take one type.\n* The bounds must be whole numbers. A negative minimum is no bound; a negative maximum is never met.",
+			"parameters": [
+				{
+					"name": "value",
+					"types": [
+						"object"
+					],
+					"required": true,
+					"description": "Map to make the assumption about"
+				},
+				{
+					"name": "min_length",
+					"types": [
+						"number"
+					],
+					"required": true,
+					"description": "The minimum possible map length"
+				},
+				{
+					"name": "max_length",
+					"types": [
+						"number"
+					],
+					"required": true,
+					"description": "The maximum possible map length"
+				}
+			],
+			"arity": { "params": ["value", "min_length", "max_length"], "variadic": false },
+			"returnType": {
+				"types": [
+					"object"
+				],
+				"description": "The map"
+			},
+			"examples": [
+				"locals { tags = assumemaplength(local.tags, 1, 50) }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "assumemaplengthmin",
+			"description": "Asserts that a map has at least a given number of elements, and returns the map.\n\n* Converts the value to a map first, so its values take one type.\n* The bound must be a whole number. A negative one is no bound.",
+			"parameters": [
+				{
+					"name": "value",
+					"types": [
+						"object"
+					],
+					"required": true,
+					"description": "Map to make the assumption about"
+				},
+				{
+					"name": "min_length",
+					"types": [
+						"number"
+					],
+					"required": true,
+					"description": "The minimum possible map length"
+				}
+			],
+			"arity": { "params": ["value", "min_length"], "variadic": false },
+			"returnType": {
+				"types": [
+					"object"
+				],
+				"description": "The map"
+			},
+			"examples": [
+				"locals { accounts = assumemaplengthmin(local.accounts, 1) }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "assumemaplengthmax",
+			"description": "Asserts that a map has at most a given number of elements, and returns the map.\n\n* Converts the value to a map first, so its values take one type.\n* The bound must be a whole number. A negative one is never met.",
+			"parameters": [
+				{
+					"name": "value",
+					"types": [
+						"object"
+					],
+					"required": true,
+					"description": "Map to make the assumption about"
+				},
+				{
+					"name": "max_length",
+					"types": [
+						"number"
+					],
+					"required": true,
+					"description": "The maximum possible map length"
+				}
+			],
+			"arity": { "params": ["value", "max_length"], "variadic": false },
+			"returnType": {
+				"types": [
+					"object"
+				],
+				"description": "The map"
+			},
+			"examples": [
+				"locals { labels = assumemaplengthmax(local.labels, 64) }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "list",
+			"description": "Removed in Terraform v0.12: every call fails.\n\n* Write a list with `tolist([ ... ])` instead.",
+			"parameters": [
+				{
+					"name": "vals",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object",
+						"null"
+					],
+					"required": false,
+					"description": "Elements of the list",
+					"variadic": true
+				}
+			],
+			"arity": { "params": [], "variadic": true },
+			"returnType": {
+				"types": [
+					"array"
+				],
+				"description": "Never returns"
+			},
+			"examples": [
+				"locals { zones = tolist([\"a\", \"b\"]) }"
+			],
+			"deprecated": true,
+			"deprecationMessage": "The list function is not available in OpenTofu; use tolist([ ... ]) syntax to write a literal list."
+		},
+		{
+			"name": "map",
+			"description": "Removed in Terraform v0.12: every call fails.\n\n* Write a map with `tomap({ ... })` instead.",
+			"parameters": [
+				{
+					"name": "vals",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object",
+						"null"
+					],
+					"required": false,
+					"description": "Alternating keys and values of the map",
+					"variadic": true
+				}
+			],
+			"arity": { "params": [], "variadic": true },
+			"returnType": {
+				"types": [
+					"object"
+				],
+				"description": "Never returns"
+			},
+			"examples": [
+				"locals { tags = tomap({ team = \"platform\" }) }"
+			],
+			"deprecated": true,
+			"deprecationMessage": "The map function is not available in OpenTofu; use tomap({ ... }) syntax to write a literal map."
 		},
 		{
 			"name": "templatefile",

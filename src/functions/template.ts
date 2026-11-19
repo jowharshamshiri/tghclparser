@@ -1,6 +1,9 @@
 import type { FunctionContext, RuntimeValue, ValueType } from '../model';
 import { coerceToBool, coerceToString, makeBooleanValue, makeNullValue, makeNumberValue, makeStringValue } from './utils';
 
+/** An HCL identifier, as the scanner reads one: the names a template's variables may have. */
+const templateVariableName = /^[\p{ID_Start}_][\p{ID_Continue}-]*$/u;
+
 // Template rendering reproduces the template tokenizer and strip-marker
 // semantics of the upstream template language:
 //   - "%{~" / "${~" openers trim trailing whitespace from the previous literal
@@ -9,19 +12,27 @@ import { coerceToBool, coerceToString, makeBooleanValue, makeNullValue, makeNumb
 // constructs; expressions inside ${...} and %{ ... } are parsed by a
 // self-contained evaluator because bare identifiers are not part of the HCL
 // expression grammar.
+//
+// A template that is one interpolation and nothing else gives that interpolation's value as it is, not as a string,
+// as HCL wraps such a template: "${x}" with a number x renders the number.
 export async function renderTemplate(
 	template: string,
 	vars: RuntimeValue<ValueType>,
 	context: FunctionContext
-): Promise<string> {
+): Promise<RuntimeValue<ValueType>> {
 	if (vars.type !== 'object' && vars.type !== 'block') throw new Error('Template variables must be an object');
 	const tokens = tokenizeTemplate(template);
 	const tree = buildTemplateTree(tokens);
 	const scope = new Map<string, RuntimeValue<ValueType>>();
 	for (const [key, value] of (vars.value as Map<string, RuntimeValue<ValueType>>).entries()) {
+		if (!templateVariableName.test(key)) {
+			throw new Error(`Invalid value for "vars" parameter: invalid template variable name ${JSON.stringify(key)}: must start with a letter, followed by zero or more letters, digits, and underscores.`);
+		}
 		scope.set(key, value);
 	}
-	return renderTemplateNodes(tree, scope, context);
+	const [only] = tree;
+	if (tree.length === 1 && only.kind === 'interp') return evaluateTemplateExpression(only.expr, scope, context);
+	return makeStringValue(await renderTemplateNodes(tree, scope, context));
 }
 
 type TemplateToken =

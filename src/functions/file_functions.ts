@@ -138,7 +138,7 @@ export const fileFunctionGroup = {
             const filePath = resolveFilePath(templatePath, context);
             await assertPathAllowed(context, filePath);
             const content = await fs.readFile(filePath, 'utf8');
-            return makeStringValue(await renderTemplate(content, vars, context));
+            return renderTemplate(content, vars, context);
         },
         yamldecode: async (
             args: RuntimeValue<ValueType>[], 

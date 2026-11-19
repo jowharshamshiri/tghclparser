@@ -11,18 +11,8 @@ import type { AttributeDefinition, BlockDefinition, BuiltinFunctionDefinition, F
 const functionDefinitions = functionsDefinitionsJson as { functions: FunctionDefinition[] };
 const schemaDefinitions = blocks as unknown as { blocks: BlockDefinition[]; globalAttributes: AttributeDefinition[] };
 
-// These names belong to language runtimes newer than the configuration runtime
-// supported by the current Terragrunt regime. Keeping them in the source JSON
-// would expose completions and diagnostics for functions the runtime rejects.
-const unsupportedRuntimeFunctions = new Set([
-	'base64gunzip', 'cidrcontains', 'issensitive',
-	'plantimestamp', 'regex_replace', 'templatestring',
-	'type', 'urldecode'
-]);
-
-const currentFunctionDefinitions: BuiltinFunctionDefinition[] = functionDefinitions.functions
-	.filter(definition => !unsupportedRuntimeFunctions.has(definition.name))
-	.map(builtinFunctionDefinition);
+// functions.json holds exactly the functions Terragrunt defines; the parity suite holds it to Terragrunt's own table.
+const currentFunctionDefinitions: BuiltinFunctionDefinition[] = functionDefinitions.functions.map(builtinFunctionDefinition);
 
 /** A definition of functions.json, which must state its function's go-cty parameters. */
 function builtinFunctionDefinition(definition: FunctionDefinition): BuiltinFunctionDefinition {

@@ -1,6 +1,8 @@
 import { expect } from 'chai';
+import { CompletionItemKind } from 'vscode-languageserver';
 
 import { ConfigEvaluator, runtimeValueToPlain } from '../../src/Evaluator';
+import functionsJson from '../../src/functions.json';
 import { ParsedDocument } from '../../src/ParsedDocument';
 import { Schema } from '../../src/Schema';
 import { Workspace } from '../../src/Workspace';
@@ -270,13 +272,38 @@ unit "app" {
 		expect(registry.getFunctionNames().sort()).to.deep.equal(schema.getAllFunctions().map(definition => definition.name).sort());
 	});
 
-	it('does not expose functions rejected by the current runtime', () => {
-		const schema = Schema.getInstance();
-		for (const name of ['base64gunzip', 'cidrcontains', 'issensitive', 'plantimestamp', 'regex_replace', 'templatestring', 'type', 'urldecode']) {
-			expect(schema.getFunctionDefinition(name), `${name} metadata`).to.equal(undefined);
+	// functions.json lists Terragrunt v1.2.2's function table, which the parity suite holds it to; the schema, the
+	// completions and the evaluators must each offer exactly that list.
+	const listedFunctions = functionsJson.functions.map(definition => definition.name).sort();
+
+	it('offers exactly the functions functions.json lists, in the schema and the completions', async () => {
+		expect(Schema.getInstance().getAllFunctions().map(definition => definition.name).sort()).to.deep.equal(listedFunctions);
+		const document = new ParsedDocument(new Workspace(), 'file:///repo/app/terragrunt.hcl', 'inputs = {\n  x = \n}\n');
+		const completions = await document.getCompletionsAtPosition({ line: 1, character: 6 });
+		const offered = completions.filter(item => item.kind === CompletionItemKind.Function).map(item => item.label).sort();
+		expect(offered).to.deep.equal(listedFunctions);
+	});
+
+	it('offers the functions Terragrunt v1.2.2 has that it once hid or lacked', () => {
+		for (const name of [
+			'assumeequal', 'assumelistlength', 'assumelistlengthmax', 'assumelistlengthmin', 'assumemaplength',
+			'assumemaplengthmax', 'assumemaplengthmin', 'assumenotnull', 'assumesetlength', 'assumesetlengthmax',
+			'assumesetlengthmin', 'assumestringprefix', 'base64gunzip', 'base64gzip_compat', 'cidrcontains',
+			'ephemeralasnull', 'issensitive', 'list', 'map', 'templatestring', 'urldecode'
+		]) {
+			expect(listedFunctions, name).to.include(name);
 		}
-		for (const name of ['base64gzip', 'bcrypt', 'rsadecrypt', 'timestamp']) {
-			expect(schema.getFunctionDefinition(name), `${name} metadata`).not.to.equal(undefined);
+	});
+
+	it('refuses the names Terragrunt v1.2.2 does not define as unknown functions', async () => {
+		for (const call of ['type("a")', 'regex_replace("a-b", "-", "_")', 'plantimestamp()']) {
+			const name = call.slice(0, call.indexOf('('));
+			expect(listedFunctions, name).not.to.include(name);
+			const content = `inputs = {\n  x = ${call}\n}\n`;
+			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', content), name).to.include(`Unknown function: ${name}`);
+			const result = await new ConfigEvaluator({ environmentVariables: {}, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true })
+				.evaluateUnit('/repo/app/terragrunt.hcl', content, '/repo/app');
+			expect(result.error, name).to.include(`Unknown function "${name}"`);
 		}
 	});
 });
