@@ -1,11 +1,12 @@
 import { expect } from 'chai';
 import { CompletionItemKind } from 'vscode-languageserver';
 
-import { ConfigEvaluator, runtimeValueToPlain } from '../../src/Evaluator';
+import { ConfigEvaluator } from '../../src/Evaluator';
 import functionsJson from '../../src/functions.json';
 import { ParsedDocument } from '../../src/ParsedDocument';
 import { Schema } from '../../src/Schema';
 import { Workspace } from '../../src/Workspace';
+import { plainValue } from '../plain-values';
 
 const diagnosticsFor = (uri: string, content: string) => {
 	const document = new ParsedDocument(new Workspace(), uri, content);
@@ -59,7 +60,7 @@ generate "provider" {
 			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', content)).to.deep.equal([]);
 			const result = await evaluate(content);
 			expect(result.error).to.equal(undefined);
-			expect(runtimeValueToPlain(result.inputs!)).to.deep.equal({
+			expect(plainValue(result.inputs!)).to.deep.equal({
 				merge: {},
 				deep_merge: {},
 				format: 'plain',
@@ -89,7 +90,7 @@ generate "provider" {
 		it('takes the argument a verb indexes, and the ones after it in turn', async () => {
 			const result = await evaluate('inputs = {\n  x = format("%[2]s %s %[1]s", "a", "b", "c")\n  y = format("%[2]s", "a", "b")\n  z = format("%%")\n}');
 			expect(result.error).to.equal(undefined);
-			expect(runtimeValueToPlain(result.inputs!)).to.deep.equal({ x: 'b c a', y: 'b', z: '%' });
+			expect(plainValue(result.inputs!)).to.deep.equal({ x: 'b c a', y: 'b', z: '%' });
 		});
 
 		it('requires at least two sets for setproduct', async () => {
@@ -109,7 +110,7 @@ generate "provider" {
 			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', content)).to.deep.equal([]);
 			const result = await evaluate(content);
 			expect(result.error).to.equal(undefined);
-			expect(runtimeValueToPlain(result.inputs!)).to.deep.equal({ one: [0, 1, 2, 3], two: [1, 2, 3], three: [10, 7, 4] });
+			expect(plainValue(result.inputs!)).to.deep.equal({ one: [0, 1, 2, 3], two: [1, 2, 3], three: [10, 7, 4] });
 		});
 
 		it('refuses range with no arguments or more than three', async () => {
@@ -127,7 +128,7 @@ generate "provider" {
 		it('counts range down when the limit is below the start, and refuses a step away from the limit', async () => {
 			const result = await evaluate('inputs = {\n  negative = range(-3)\n  down     = range(4, 1)\n  half     = range(0, 2, 0.5)\n  empty    = range(1, 1, 0)\n}');
 			expect(result.error).to.equal(undefined);
-			expect(runtimeValueToPlain(result.inputs!)).to.deep.equal({ negative: [0, -1, -2], down: [4, 3, 2], half: [0, 0.5, 1, 1.5], empty: [] });
+			expect(plainValue(result.inputs!)).to.deep.equal({ negative: [0, -1, -2], down: [4, 3, 2], half: [0, 0.5, 1, 1.5], empty: [] });
 			const failures: Array<[string, string]> = [
 				['range(1, 4, -1)', 'range end must be less than start when step is negative'],
 				['range(4, 1, 1)', 'range end must be greater than start when step is positive'],
@@ -142,7 +143,7 @@ generate "provider" {
 			}
 			const limit = await evaluate('inputs = { x = range(1024) }');
 			expect(limit.error).to.equal(undefined);
-			expect((runtimeValueToPlain(limit.inputs!) as { x: number[] }).x).to.have.length(1024);
+			expect((plainValue(limit.inputs!) as { x: number[] }).x).to.have.length(1024);
 		});
 
 		it('accepts join with any number of lists and try with any number of expressions after the first', () => {

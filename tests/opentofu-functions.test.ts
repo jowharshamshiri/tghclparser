@@ -6,8 +6,9 @@ import path from 'node:path';
 import { expect } from 'chai';
 
 import { safeKnownPrefix } from '../src/cty-strings';
-import { ConfigEvaluator, runtimeValueToPlain } from '../src/Evaluator';
+import { ConfigEvaluator } from '../src/Evaluator';
 import { base64GzipCompat } from '../src/gzip-compat';
+import { plainValue } from './plain-values';
 
 // Every expected value and message here is what Terragrunt v1.2.2 gave for the same configuration.
 
@@ -19,7 +20,7 @@ const inputsOf = async (inputs: Record<string, string>, experiments: string[] = 
 	const body = Object.entries(inputs).map(([name, expression]) => `  ${name} = ${expression}`).join('\n');
 	const result = await evaluate(`inputs = {\n${body}\n}\n`, experiments);
 	expect(result.error).to.equal(undefined);
-	return runtimeValueToPlain(result.inputs!) as Record<string, unknown>;
+	return plainValue(result.inputs!) as Record<string, unknown>;
 };
 
 const failureOf = async (expression: string, experiments: string[] = []) => {
@@ -171,7 +172,7 @@ describe('OpenTofu functions of Terragrunt v1.2.2', () => {
 			const result = await new ConfigEvaluator({ environmentVariables: {}, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true })
 				.evaluateUnit(path.join(directory, 'terragrunt.hcl'), 'inputs = {\n  value = templatefile("count.tpl", { count = 5 })\n  line  = templatefile("line.tpl", { count = 5 })\n}\n', directory);
 			expect(result.error).to.equal(undefined);
-			expect(runtimeValueToPlain(result.inputs!)).to.deep.equal({ value: 5, line: 'count: 5' });
+			expect(plainValue(result.inputs!)).to.deep.equal({ value: 5, line: 'count: 5' });
 		} finally {
 			await fs.rm(directory, { recursive: true, force: true });
 		}

@@ -6,9 +6,10 @@ import { expect } from 'chai';
 import type { CompletionItem, Position } from 'vscode-languageserver';
 import { URI } from 'vscode-uri';
 
-import { ConfigEvaluator, runtimeValueToPlain } from '../../src/Evaluator';
+import { ConfigEvaluator } from '../../src/Evaluator';
 import { ParsedDocument } from '../../src/ParsedDocument';
 import { Workspace } from '../../src/Workspace';
+import { plainValue } from '../plain-values';
 import { ENCRYPTED_SOPS_YAML, withoutSopsKey } from '../sops-fixture';
 
 const cursorIn = (source: string): { text: string; position: Position } => {
@@ -328,7 +329,7 @@ inputs = {
 			const covering = spans.filter(span => span.start === at && span.end === at + 'local.containers'.length);
 			const a = { provider: 'AWS', region: 'EU_WEST_2', network: { cidr: '10.0.0.0/21' } };
 			const b = { provider: 'GCP', priority: 7 };
-			expect(covering.map(span => [span.kind, runtimeValueToPlain(span.value)])).to.deep.equal([
+			expect(covering.map(span => [span.kind, plainValue(span.value)])).to.deep.equal([
 				['expression', { A: a, B: b }],
 				['elements', [a, b]]
 			]);

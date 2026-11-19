@@ -5,7 +5,8 @@ import path from 'node:path';
 
 import { Diagnostic } from 'vscode-languageserver';
 
-import { ConfigEvaluator, runtimeValueToPlain } from '../src/Evaluator';
+import { ConfigEvaluator } from '../src/Evaluator';
+import { plainValue } from './plain-values';
 import { ParsedDocument } from '../src/ParsedDocument';
 import { parse } from '../src/parser';
 import { Workspace } from '../src/Workspace';
@@ -27,7 +28,7 @@ async function evaluateInputs(content: string): Promise<unknown> {
 		await fs.writeFile(configPath, content);
 		const result = await evaluator().evaluateUnit(configPath, content, dir);
 		if (!result.valid) throw new Error(result.error ?? 'evaluation failed');
-		return result.inputs === null ? null : runtimeValueToPlain(result.inputs);
+		return result.inputs === null ? null : plainValue(result.inputs);
 	} finally {
 		await fs.rm(dir, { recursive: true, force: true });
 	}
@@ -58,7 +59,7 @@ async function evaluateWithParent(rootHcl: string, unitHcl: string): Promise<unk
 		await fs.writeFile(configPath, unitHcl);
 		const result = await evaluator().evaluateUnit(configPath, unitHcl, root);
 		if (!result.valid) throw new Error(result.error ?? 'evaluation failed');
-		return result.inputs === null ? null : runtimeValueToPlain(result.inputs);
+		return result.inputs === null ? null : plainValue(result.inputs);
 	} finally {
 		await fs.rm(root, { recursive: true, force: true });
 	}
@@ -611,7 +612,7 @@ describe('inline function failure reporting', () => {
 			}));
 			for (const result of results) {
 				assert.equal(result.valid, true, result.error);
-				assert.deepEqual(runtimeValueToPlain(result.inputs!), { d: 0 });
+				assert.deepEqual(plainValue(result.inputs!), { d: 0 });
 			}
 		} finally {
 			await Promise.all(dirs.map(dir => fs.rm(dir, { recursive: true, force: true })));

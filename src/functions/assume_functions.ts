@@ -1,6 +1,7 @@
+import { CtyNumber } from '../cty-number';
 import { consistentWithPrefix } from '../cty-strings';
 import type { RuntimeValue, ValueType } from '../model';
-import { makeArrayValue, makeBooleanValue, makeNumberValue, makeObjectValue, makeSensitiveValue, makeStringValue, runtimeToPlain, unwrapSensitive } from './utils';
+import { ctyEquals, makeArrayValue, makeBooleanValue, makeNumberValue, makeObjectValue, makeSensitiveValue, makeStringValue, unwrapSensitive } from './utils';
 
 /*
  * The functions of OpenTofu v1.2.2's function table that state an assumption about a value, and the ones that report
@@ -30,8 +31,6 @@ function typeName(value: RuntimeValue<ValueType>): string {
 	}
 }
 
-const numberPattern = /^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?$/u;
-
 /**
  * Converts a value to a primitive type as go-cty does, or answers undefined when go-cty refuses. A null stays null,
  * of the type converted to.
@@ -41,8 +40,10 @@ function convertPrimitive(value: RuntimeValue<ValueType>, target: Primitive): Ru
 	switch (target) {
 		case 'string':
 			return value.type === 'number' || value.type === 'boolean' ? makeStringValue(String(value.value)) : undefined;
-		case 'number':
-			return value.type === 'string' && numberPattern.test(String(value.value)) ? makeNumberValue(Number(value.value)) : undefined;
+		case 'number': {
+			const number = value.type === 'string' ? CtyNumber.tryParse(String(value.value)) : undefined;
+			return number ? makeNumberValue(number) : undefined;
+		}
 		case 'boolean':
 			if (value.type !== 'string') return undefined;
 			if (value.value === 'true' || value.value === '1') return makeBooleanValue(true);
@@ -68,9 +69,7 @@ function unifyElements(elements: RuntimeValue<ValueType>[]): RuntimeValue<ValueT
 	});
 }
 
-function valuesEqual(left: RuntimeValue<ValueType>, right: RuntimeValue<ValueType>): boolean {
-	return JSON.stringify(runtimeToPlain(left)) === JSON.stringify(runtimeToPlain(right));
-}
+const valuesEqual = ctyEquals;
 
 /** go-cty's conversion of a value to the type of another, or undefined when it refuses. */
 function convertLike(value: RuntimeValue<ValueType>, like: RuntimeValue<ValueType>): RuntimeValue<ValueType> | undefined {
@@ -102,9 +101,8 @@ function convertLike(value: RuntimeValue<ValueType>, like: RuntimeValue<ValueTyp
 	return undefined;
 }
 
-// Go's math.MaxInt, which a JavaScript number holds only as the nearest double; the message gives it exactly.
-const maxInt = 2 ** 63 - 1;
-const maxIntText = '9223372036854775807';
+// Go's math.MaxInt.
+const maxInt = 2n ** 63n - 1n;
 
 /**
  * A length bound, refused unless go-cty reads it as a whole number below the largest int. OpenTofu names the
@@ -115,11 +113,11 @@ function lengthBound(argument: RuntimeValue<ValueType>, parameter: string): numb
 	if (value.type === 'null') throw new Error(`Invalid value for "${parameter}" parameter: argument must not be null.`);
 	const bound = convertPrimitive(value, 'number');
 	if (bound === undefined) throw new Error(`Invalid value for "${parameter}" parameter: number required.`);
-	const number = Number(bound.value);
-	if (!Number.isInteger(number) || number >= maxInt) {
-		throw new Error(`Invalid value for "${parameter}" parameter: must be a whole number between 0 and ${maxIntText}.`);
+	const { integer, accuracy } = (bound.value as CtyNumber).truncate();
+	if (accuracy !== 'exact' || integer === undefined || integer >= maxInt) {
+		throw new Error(`Invalid value for "${parameter}" parameter: must be a whole number between 0 and ${maxInt}.`);
 	}
-	return number;
+	return Number(integer);
 }
 
 type CollectionKind = 'list' | 'set' | 'map';
@@ -149,7 +147,7 @@ function convertCollection(argument: RuntimeValue<ValueType>, kind: CollectionKi
 function sortSetElements(items: RuntimeValue<ValueType>[]): RuntimeValue<ValueType>[] {
 	const plain = items.map(unwrapSensitive);
 	if (plain.every(item => item.type === 'number')) {
-		return [...items].sort((left, right) => Number(unwrapSensitive(left).value) - Number(unwrapSensitive(right).value));
+		return [...items].sort((left, right) => (unwrapSensitive(left).value as CtyNumber).compare(unwrapSensitive(right).value as CtyNumber));
 	}
 	if (plain.every(item => item.type === 'string')) {
 		return [...items].sort((left, right) => Buffer.compare(Buffer.from(String(unwrapSensitive(left).value)), Buffer.from(String(unwrapSensitive(right).value))));

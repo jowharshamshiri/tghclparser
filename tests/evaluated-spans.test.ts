@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 
-import { ConfigEvaluator, runtimeValueToPlain } from '../src/Evaluator';
+import { ConfigEvaluator } from '../src/Evaluator';
+import { plainValue } from './plain-values';
 
 describe('evaluated spans', () => {
 	const evaluator = new ConfigEvaluator({
@@ -13,7 +14,7 @@ describe('evaluated spans', () => {
 
 	async function spans(content: string): Promise<Array<{ kind: string; text: string; value: unknown }>> {
 		const found = await evaluator.evaluatedSpans(configPath, content, process.cwd());
-		return found.map(span => ({ kind: span.kind, text: content.slice(span.start, span.end), value: runtimeValueToPlain(span.value) }));
+		return found.map(span => ({ kind: span.kind, text: content.slice(span.start, span.end), value: plainValue(span.value) }));
 	}
 
 	it('marks what had to be worked out and nothing the source already spells out', async () => {

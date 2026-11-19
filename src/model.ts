@@ -1,5 +1,6 @@
 import type { Location, Position } from 'vscode-languageserver';
 
+import type { CtyNumber } from './cty-number';
 import type { LocationRange } from './parser';
 
 export class AnError extends Error {
@@ -395,7 +396,7 @@ export interface SopsRead {
 
 export type RuntimeValueType<T extends ValueType> =
 	T extends 'string' ? string :
-	T extends 'number' ? number :
+	T extends 'number' ? CtyNumber :
 	T extends 'boolean' ? boolean :
 	T extends 'null' ? null :
 	T extends 'array' ? RuntimeValue<ValueType>[] :

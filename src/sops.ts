@@ -3,6 +3,9 @@ import path from 'node:path';
 
 import yaml from 'js-yaml';
 
+import { CtyNumber } from './cty-number';
+import { parseJsonDocument } from './functions/utils';
+
 /** The file extensions sops reads as a YAML or JSON document, which are the formats whose keys stay readable. */
 const STRUCTURED_EXTENSIONS = new Set(['.yaml', '.yml', '.json']);
 
@@ -21,7 +24,7 @@ export async function encryptedSopsDocument(filePath: string): Promise<string | 
 	let parsed: unknown;
 	try {
 		const content = await fs.readFile(filePath, 'utf8');
-		parsed = extension === '.json' ? JSON.parse(content) : yaml.load(content);
+		parsed = extension === '.json' ? parseJsonDocument(content) : yaml.load(content);
 	} catch {
 		return undefined;
 	}
@@ -36,5 +39,5 @@ export async function encryptedSopsDocument(filePath: string): Promise<string | 
  * @returns true when it is a map of keys to values.
  */
 function isMap(value: unknown): value is Record<string, unknown> {
-	return value !== null && typeof value === 'object' && !Array.isArray(value);
+	return value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof CtyNumber);
 }

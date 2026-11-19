@@ -1,13 +1,12 @@
+import type { CtyNumber, FormatSpec } from '../cty-number';
 import { graphemeClusters } from '../grapheme-clusters';
 import type { RuntimeValue, ValueType } from '../model';
-import { friendlyTypeName, unwrapSensitive } from './utils';
+import { convertToNumber, friendlyTypeName, unwrapSensitive } from './utils';
 
 /**
  * The format and formatlist functions as go-cty's stdlib defines them: its formatFSM reads the format string, and
- * each verb formats its argument as formatAppend does, leaning on Go's math/big formatting for numbers. A number
- * here is a float64 where go-cty holds a 512-bit float; it is taken as the shortest decimal that identifies it,
- * which is the number as it was written, and a tie when rounding that decimal is settled as go-cty's 512-bit value
- * of it settles it.
+ * each verb formats its argument as formatAppend does, leaning on Go's math/big formatting for numbers, which
+ * {@link CtyNumber} reproduces.
  */
 
 /** A formatting verb, as formatFSM reads it. */
@@ -160,14 +159,17 @@ function formatVerb(verb: Verb, args: RuntimeValue<ValueType>[]): string {
 	switch (verb.mode) {
 		case 'v':
 			if (!verb.sharp && arg.type === 'string') return padWidth(verb, String(arg.value));
-			if (!verb.sharp && arg.type === 'number') return padWidth(verb, numberText(Number(arg.value), 'g'));
+			if (!verb.sharp && arg.type === 'number') return padWidth(verb, (arg.value as CtyNumber).text('g', -1));
 			return padWidth(verb, ctyJson(arg));
 		case 't':
 			return toBool(arg, unsupported) ? 'true' : 'false';
-		case 'b': case 'd': case 'o': case 'x': case 'X':
-			return formatInteger(verb, toNumber(arg, unsupported), unsupported);
+		case 'b': case 'd': case 'o': case 'x': case 'X': {
+			const number = toNumber(arg, unsupported);
+			if (!number.isInteger()) throw unsupported('an integer is required');
+			return number.formatInteger(verb.mode as 'b' | 'd' | 'o' | 'x' | 'X', formatSpec(verb));
+		}
 		case 'e': case 'E': case 'f': case 'g': case 'G':
-			return formatFloat(verb, toNumber(arg, unsupported));
+			return toNumber(arg, unsupported).format(verb.mode as 'e' | 'E' | 'f' | 'g' | 'G', formatSpec(verb));
 		case 's': case 'q': {
 			let text = toText(arg, unsupported);
 			if (verb.prec > 0) text = graphemeClusters(text).slice(0, verb.prec).join('');
@@ -200,180 +202,34 @@ function toBool(arg: RuntimeValue<ValueType>, unsupported: (reason: string) => E
 	throw unsupported('a bool is required');
 }
 
-/** go-cty's conversion of a value to a number, reading a string as math/big's ParseFloat reads base 10. */
-function toNumber(arg: RuntimeValue<ValueType>, unsupported: (reason: string) => Error): number {
-	if (arg.type === 'number') return Number(arg.value);
-	if (arg.type !== 'string') throw unsupported(`number required, but have ${friendlyTypeName(arg)}`);
-	const match = /^([+-]?)(?:(inf|Inf)|(\d+\.?\d*|\.\d+)(?:([eEpP])([+-]?\d+))?)$/u.exec(String(arg.value));
-	if (!match) throw unsupported('a number is required');
-	const sign = match[1] === '-' ? -1 : 1;
-	if (match[2] !== undefined) return sign * Infinity;
-	const mantissa = Number(match[3]);
-	if (match[4] === undefined) return sign * mantissa;
-	return sign * (/[eE]/u.test(match[4]) ? Number(`${match[3]}e${match[5]}`) : mantissa * 2 ** Number(match[5]));
+/** go-cty's conversion of a value to a number, reading a string as go-cty's ParseNumberVal reads it. */
+function toNumber(arg: RuntimeValue<ValueType>, unsupported: (reason: string) => Error): CtyNumber {
+	try {
+		return convertToNumber(arg);
+	} catch (error) {
+		throw unsupported((error as Error).message);
+	}
 }
 
 /** go-cty's conversion of a value to a string: a number in decimal with no exponent. */
 function toText(arg: RuntimeValue<ValueType>, unsupported: (reason: string) => Error): string {
 	if (arg.type === 'string') return String(arg.value);
-	if (arg.type === 'number') return numberText(Number(arg.value), 'f');
+	if (arg.type === 'number') return (arg.value as CtyNumber).toString();
 	if (arg.type === 'boolean') return arg.value ? 'true' : 'false';
 	throw unsupported(`string required, but have ${friendlyTypeName(arg)}`);
 }
 
-/** An integer verb, as math/big's Int.Format writes it. */
-function formatInteger(verb: Verb, value: number, unsupported: (reason: string) => Error): string {
-	if (!Number.isInteger(value)) throw unsupported('an integer is required');
-	const base = { b: 2, d: 10, o: 8, x: 16, X: 16 }[verb.mode as 'b' | 'd' | 'o' | 'x' | 'X'];
-	let digits = BigInt(Math.abs(value)).toString(base);
-	if (verb.mode === 'X') digits = digits.toUpperCase();
-	const sign = value < 0 ? '-' : verb.plus ? '+' : verb.space ? ' ' : '';
-	const prefix = verb.sharp ? { b: '0b', d: '', o: '0', x: '0x', X: '0X' }[verb.mode as 'b' | 'd' | 'o' | 'x' | 'X'] : '';
-	let zeros = 0;
-	if (verb.prec >= 0) {
-		if (digits.length < verb.prec) zeros = verb.prec - digits.length;
-		else if (digits === '0' && verb.prec === 0) return '';
-	}
-	let left = 0;
-	let right = 0;
-	const length = sign.length + prefix.length + zeros + digits.length;
-	if (verb.width > length) {
-		const pad = verb.width - length;
-		if (verb.minus) right = pad;
-		else if (verb.zero && verb.prec < 0) zeros = pad;
-		else left = pad;
-	}
-	return `${' '.repeat(left)}${sign}${prefix}${'0'.repeat(zeros)}${digits}${' '.repeat(right)}`;
-}
-
-/** A float verb, as math/big's Float.Format writes it: the `0` flag pads with zeros even beside `-`. */
-function formatFloat(verb: Verb, value: number): string {
-	const mode = verb.mode as 'e' | 'E' | 'f' | 'g' | 'G';
-	const prec = verb.prec >= 0 ? verb.prec : mode === 'g' || mode === 'G' ? -1 : 6;
-	const body = Number.isFinite(value) ? decimalText(decimalOf(value), mode, prec) : 'Inf';
-	let sign = value < 0 ? '-' : verb.plus ? '+' : verb.space ? ' ' : '';
-	if (value === Infinity) sign = verb.space ? ' ' : '+';
-	const padding = Math.max(verb.width - sign.length - body.length, 0);
-	if (verb.zero && Number.isFinite(value)) return `${sign}${'0'.repeat(padding)}${body}`;
-	if (verb.minus) return `${sign}${body}${' '.repeat(padding)}`;
-	return `${' '.repeat(padding)}${sign}${body}`;
-}
-
-/** math/big's Float.Text of a number, with its sign: `-Inf` and `+Inf` for the infinities. */
-function numberText(value: number, format: 'f' | 'g'): string {
-	if (!Number.isFinite(value)) return value < 0 ? '-Inf' : '+Inf';
-	return `${value < 0 ? '-' : ''}${decimalText(decimalOf(value), format, -1)}`;
-}
-
-/**
- * A number's decimal digits as math/big holds them: `mant` the significant digits with no leading or trailing
- * zero, the decimal point `exp` digits into them.
- */
-interface Decimal {
-	mant: string;
-	exp: number;
-	/** Whether go-cty's 512-bit value lies above these digits, or undefined where it is exactly them. */
-	above: boolean | undefined;
-}
-
-/** The shortest decimal of a number's magnitude, with where go-cty's 512-bit value of it lies. */
-function decimalOf(value: number): Decimal {
-	const magnitude = Math.abs(value);
-	if (magnitude === 0) return { mant: '', exp: 0, above: undefined };
-	const [digits, exponent] = magnitude.toExponential().split('e');
-	const mant = digits.replace('.', '').replace(/0+$/u, '');
-	const exp = Number(exponent) + 1;
-	return { mant, exp, above: storedAbove(mant, exp) };
-}
-
-/**
- * Where the 512-bit float nearest a decimal lies: go-cty reads a number into 512 bits, rounding to the nearest even,
- * so a decimal fraction no binary fraction equals is held a little above or a little below it.
- */
-function storedAbove(mant: string, exp: number): boolean | undefined {
-	const fractionDigits = mant.length - exp;
-	if (fractionDigits <= 0) return undefined;
-	const numerator = BigInt(mant);
-	const denominator = 10n ** BigInt(fractionDigits);
-	if (numerator % 5n ** BigInt(fractionDigits) === 0n) return undefined;
-	const bits = (value: bigint) => value.toString(2).length;
-	let shift = 512 - (bits(numerator) - bits(denominator));
-	const scaled = (by: number) => by >= 0
-		? { num: numerator << BigInt(by), den: denominator }
-		: { num: numerator, den: denominator << BigInt(-by) };
-	while (bits(scaled(shift).num / scaled(shift).den) > 512) shift--;
-	while (bits(scaled(shift).num / scaled(shift).den) < 512) shift++;
-	const { num, den } = scaled(shift);
-	let quotient = num / den;
-	const twiceRemainder = 2n * (num - quotient * den);
-	if (twiceRemainder > den || (twiceRemainder === den && quotient % 2n === 1n)) quotient++;
-	return quotient * den > num;
-}
-
-/** Rounds to `n` significant digits as math/big's decimal.round does. */
-function round(decimal: Decimal, n: number): Decimal {
-	if (n < 0 || n >= decimal.mant.length) return decimal;
-	const half = decimal.mant[n] === '5' && n + 1 === decimal.mant.length;
-	const up = half
-		? decimal.above ?? (n > 0 && Number(decimal.mant[n - 1]) % 2 === 1)
-		: decimal.mant[n] >= '5';
-	if (!up) {
-		const mant = decimal.mant.slice(0, n).replace(/0+$/u, '');
-		return { mant, exp: mant === '' ? 0 : decimal.exp, above: undefined };
-	}
-	let keep = n;
-	while (keep > 0 && decimal.mant[keep - 1] === '9') keep--;
-	if (keep === 0) return { mant: '1', exp: decimal.exp + 1, above: undefined };
-	const mant = decimal.mant.slice(0, keep - 1) + String(Number(decimal.mant[keep - 1]) + 1);
-	return { mant, exp: decimal.exp, above: undefined };
-}
-
-/** math/big's Float.Append for the `e`, `E`, `f`, `g` and `G` formats, of a magnitude; -1 is the shortest precision. */
-function decimalText(decimal: Decimal, format: 'e' | 'E' | 'f' | 'g' | 'G', precision: number): string {
-	let d = decimal;
-	let prec = precision;
-	const shortest = prec < 0;
-	if (shortest) {
-		prec = format === 'e' || format === 'E' ? d.mant.length - 1 : format === 'f' ? Math.max(d.mant.length - d.exp, 0) : d.mant.length;
-	} else if (format === 'e' || format === 'E') {
-		d = round(d, 1 + prec);
-	} else if (format === 'f') {
-		d = round(d, d.exp + prec);
-	} else {
-		if (prec === 0) prec = 1;
-		d = round(d, prec);
-	}
-	if (format === 'e' || format === 'E') return exponentText(d, format, prec);
-	if (format === 'f') return fixedText(d, prec);
-	let eprec = prec;
-	if (eprec > d.mant.length && d.mant.length >= d.exp) eprec = d.mant.length;
-	if (shortest) eprec = 6;
-	const exp = d.exp - 1;
-	if (exp < -4 || exp >= eprec) {
-		if (prec > d.mant.length) prec = d.mant.length;
-		return exponentText(d, format === 'g' ? 'e' : 'E', prec - 1);
-	}
-	if (prec > d.exp) prec = d.mant.length;
-	return fixedText(d, Math.max(prec - d.exp, 0));
-}
-
-/** math/big's %e: d.ddddde±dd. */
-function exponentText(d: Decimal, format: 'e' | 'E', prec: number): string {
-	let text = d.mant[0] ?? '0';
-	if (prec > 0) text += `.${d.mant.slice(1, prec + 1).padEnd(prec, '0')}`;
-	const exp = d.mant.length > 0 ? d.exp - 1 : 0;
-	return `${text}${format}${exp < 0 ? '-' : '+'}${String(Math.abs(exp)).padStart(2, '0')}`;
-}
-
-/** math/big's %f: ddddd.ddd. */
-function fixedText(d: Decimal, prec: number): string {
-	const at = (index: number) => (index >= 0 && index < d.mant.length ? d.mant[index] : '0');
-	let text = d.exp > 0 ? d.mant.slice(0, d.exp).padEnd(d.exp, '0') : '0';
-	if (prec > 0) {
-		text += '.';
-		for (let index = 0; index < prec; index++) text += at(d.exp + index);
-	}
-	return text;
+/** A verb's flags, width and precision, as Go's fmt.State gives them to math/big's formatters. */
+function formatSpec(verb: Verb): FormatSpec {
+	return {
+		zero: verb.zero,
+		sharp: verb.sharp,
+		plus: verb.plus,
+		minus: verb.minus,
+		space: verb.space,
+		width: verb.width < 0 ? undefined : verb.width,
+		precision: verb.prec < 0 ? undefined : verb.prec
+	};
 }
 
 /** A value as go-cty's JSON marshalling writes it: a number in decimal, an object's attributes in sorted order. */
@@ -385,7 +241,7 @@ function ctyJson(value: RuntimeValue<ValueType>): string {
 		case 'string':
 			return jsonString(String(plain.value));
 		case 'number':
-			return numberText(Number(plain.value), 'f');
+			return (plain.value as CtyNumber).toString();
 		case 'boolean':
 			return plain.value ? 'true' : 'false';
 		case 'array':

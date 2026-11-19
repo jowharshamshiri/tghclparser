@@ -1,4 +1,6 @@
 import type { FunctionContext, RuntimeValue, ValueType } from '../model';
+import { CtyNumber } from '../cty-number';
+import { arithmetic, comparison, negation, sequencePosition } from '../cty-operations';
 import { isDefect } from '../unresolved';
 import type { LogicalOperand } from './utils';
 import { coerceToString, conditionValue, logicalOperation, makeBooleanValue, makeNullValue, makeNumberValue, makeStringValue, NULL_OPERAND, operandBool } from './utils';
@@ -496,11 +498,11 @@ class TemplateExpressionParser {
 		return result;
 	}
 
-	private matchNumber(): number | null {
+	private matchNumber(): string | null {
 		const match = /^[+-]?(?:\d+\.\d+|\.\d+|\d+)(?:[eE][+-]?\d+)?/u.exec(this.source.slice(this.index));
 		if (!match) return null;
 		this.index += match[0].length;
-		return Number(match[0]);
+		return match[0];
 	}
 
 	private matchIdentifier(): string | null {
@@ -522,7 +524,7 @@ async function evaluateTemplateAst(
 ): Promise<RuntimeValue<ValueType>> {
 	switch (node.kind) {
 		case 'number':
-			return makeNumberValue(node.value as number);
+			return makeNumberValue(CtyNumber.parse(node.value as string));
 		case 'string':
 			return makeStringValue(node.value as string);
 		case 'bool':
@@ -558,31 +560,18 @@ async function evaluateTemplateAst(
 				if (truth === null) throw new Error(NULL_OPERAND);
 				return makeBooleanValue(!truth);
 			}
-			if (node.value === '-') {
-				if (operand.type !== 'number') throw new Error('Template unary minus requires a number');
-				return makeNumberValue(-Number(operand.value));
-			}
+			if (node.value === '-') return negation(operand);
 			throw new Error(`Unknown template unary operator ${String(node.value)}`);
 		}
 		case 'binary': {
 			const left = await evaluateTemplateAst(node.left!, scope, context);
 			const right = await evaluateTemplateAst(node.right!, scope, context);
-			if (left.type !== 'number' || right.type !== 'number') throw new Error('Template arithmetic requires numbers');
-			const a = Number(left.value);
-			const b = Number(right.value);
-			switch (node.value) {
-				case '+': return makeNumberValue(a + b);
-				case '-': return makeNumberValue(a - b);
-				case '*': return makeNumberValue(a * b);
-				case '/': return makeNumberValue(a / b);
-				case '%': return makeNumberValue(a % b);
-				default: throw new Error(`Unknown template binary operator ${String(node.value)}`);
-			}
+			return arithmetic(String(node.value), left, right);
 		}
 		case 'compare': {
 			const left = await evaluateTemplateAst(node.left!, scope, context);
 			const right = await evaluateTemplateAst(node.right!, scope, context);
-			return templateCompare(left, right, node.value as string);
+			return comparison(node.value as string, left, right);
 		}
 		case 'and':
 		case 'or': {
@@ -626,41 +615,10 @@ function templateIndex(base: RuntimeValue<ValueType>, index: RuntimeValue<ValueT
 		return member;
 	}
 	if (base.type === 'array') {
-		if (index.type !== 'number') throw new Error('Template list index must be a number');
 		const items = base.value as RuntimeValue<ValueType>[];
-		const position = Number(index.value);
-		if (position < 0 || position >= items.length) throw new Error('Template list index out of range');
-		return items[position];
+		return items[sequencePosition(items.length, index)];
 	}
 	throw new Error(`Template cannot index ${base.type}`);
-}
-
-function templateCompare(left: RuntimeValue<ValueType>, right: RuntimeValue<ValueType>, operator: string): RuntimeValue<'boolean'> {
-	const a = templateComparisonValue(left);
-	const b = templateComparisonValue(right);
-	let result = false;
-	switch (operator) {
-		case '==': result = a === b; break;
-		case '!=': result = a !== b; break;
-		case '<': result = a < b; break;
-		case '<=': result = a <= b; break;
-		case '>': result = a > b; break;
-		case '>=': result = a >= b; break;
-	}
-	return makeBooleanValue(result);
-}
-
-function templateComparisonValue(value: RuntimeValue<ValueType>): string | number {
-	switch (value.type) {
-		case 'string':
-		case 'number':
-		case 'boolean':
-			return value.value as string | number;
-		case 'null':
-			return '';
-		default:
-			return JSON.stringify(value.value);
-	}
 }
 
 function templateUnknownFunction(name: string): never {

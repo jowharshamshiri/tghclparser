@@ -13,6 +13,7 @@
  * what is reported here.
  */
 
+import { CtyNumber } from './cty-number';
 import { goQuoted } from './go-quote';
 import { graphemeClusters } from './grapheme-clusters';
 import { scanHclTokens } from './hcl-scanner';
@@ -800,27 +801,15 @@ function editDistance(from: string, to: string): number {
 }
 
 /**
- * Checks that a number literal has a value, as Go's arbitrary-precision parser decides it: digits, an optional
- * fraction, and an optional exponent that fits.
+ * Checks that a number literal has a value, as go-cty's ParseNumberVal, which HCL reads it with, decides it.
  *
  * @param token the number literal.
  * @throws {Problem} when it has no value.
  */
 function checkNumber(token: HclToken): void {
-	const parts = /^(\d+)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/.exec(token.text);
-	let valid = parts !== null;
-	if (parts) {
-		const mantissa = BigInt(parts[1] + (parts[2] ?? ''));
-		const exponent = BigInt(parts[3] ?? '0');
-		const int64 = 2n ** 63n;
-		if (exponent >= int64 || exponent < -int64) valid = false;
-		else if (mantissa !== 0n) {
-			// The value is the mantissa's bits scaled by a power of ten, and its binary exponent must fit in 32 bits.
-			const binaryExponent = BigInt(mantissa.toString(2).length) + exponent - BigInt((parts[2] ?? '').length);
-			if (binaryExponent > 2n ** 31n - 1n || binaryExponent < -(2n ** 31n)) valid = false;
-		}
+	if (CtyNumber.tryParse(token.text) === undefined) {
+		throw new Problem('Invalid number literal', 'Failed to recognize the value of this number literal.', token);
 	}
-	if (!valid) throw new Problem('Invalid number literal', 'Failed to recognize the value of this number literal.', token);
 }
 
 /**

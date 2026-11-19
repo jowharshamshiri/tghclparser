@@ -3,6 +3,8 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+import { CtyNumber } from './cty-number';
+import { arithmetic, comparison, negation, sequencePosition } from './cty-operations';
 import { FunctionOperation, invokeFunctionOperation, readArgs, FUNCTION_CONTEXT_KEY } from './function-ops';
 import type { InlineFunctionDefinition } from './inline-functions';
 import { checkTypeConstraint, readInlineFunction, readTypeConstraint, synthesizeDefinition } from './inline-functions';
@@ -27,7 +29,7 @@ import {
 	makeObjectValue,
 	makeSensitiveValue,
 	makeStringValue,
-	runtimeToPlain,
+	runtimeToJavaScript,
 	templatePart,
 	unwrapSensitive
 } from './functions/utils';
@@ -985,7 +987,7 @@ export class ConfigEvaluator {
 			for (const [key, item] of items) {
 				const frame = new Map<string, RuntimeValue<ValueType>>();
 				if (variables.length === 2) {
-					frame.set(String(variables[0].value ?? ''), collectionValue?.type === 'array' ? makeNumberValue(Number(key)) : makeStringValue(key));
+					frame.set(String(variables[0].value ?? ''), collectionValue?.type === 'array' ? makeNumberValue(CtyNumber.fromInt64(Number(key))) : makeStringValue(key));
 				}
 				frame.set(String(variables.at(-1)?.value ?? ''), item);
 				scope.comprehension.push(frame);
@@ -1969,13 +1971,8 @@ export class ConfigEvaluator {
 	private indexValue(base: RuntimeValue<ValueType>, index: RuntimeValue<ValueType>): RuntimeValue<ValueType> {
 		const current = unwrapSensitive(base);
 		if (current.type === 'array') {
-			if (index.type !== 'number') throw new Error('List index must be a number');
 			const items = current.value as RuntimeValue<ValueType>[];
-			const position = Number(index.value);
-			if (!Number.isInteger(position) || position < 0 || position >= items.length) {
-				throw new Error(`List index ${position} out of range`);
-			}
-			return unwrapSensitive(items[position]);
+			return unwrapSensitive(items[sequencePosition(items.length, index)]);
 		}
 		if (current.type === 'object' || current.type === 'block') {
 			const key = index.type === 'string' ? String(index.value) : coerceToString(index);
@@ -2126,7 +2123,7 @@ export class ConfigEvaluator {
 			case 'string_lit':
 				return makeStringValue(String(node.value ?? ''));
 			case 'number_lit':
-				return makeNumberValue(Number(node.value));
+				return makeNumberValue(numberLiteral(node));
 			case 'boolean_lit':
 				return makeBooleanValue(Boolean(node.value));
 			case 'null_lit':
@@ -2171,7 +2168,9 @@ export class ConfigEvaluator {
 				const [start, end] = (await this.evalOperands([node.children?.[0], node.children?.[1]], scope)).map(computable);
 				if (start.type !== 'number' || end.type !== 'number') throw new Error('range requires number arguments');
 				const items: RuntimeValue<ValueType>[] = [];
-				for (let value = Number(start.value); value < Number(end.value); value++) items.push(makeNumberValue(value));
+				const one = CtyNumber.fromInt64(1);
+				const limit = end.value as CtyNumber;
+				for (let value = start.value as CtyNumber; value.compare(limit) < 0; value = value.add(one)) items.push(makeNumberValue(value));
 				return makeArrayValue(items);
 			}
 			case 'list_comprehension':
@@ -2353,7 +2352,7 @@ export class ConfigEvaluator {
 		for (const [key, item] of items) {
 			const frame = new Map<string, RuntimeValue<ValueType>>();
 			if (variables.length === 2) {
-				frame.set(String(variables[0].value ?? ''), collectionValue.type === 'array' ? makeNumberValue(Number(key)) : makeStringValue(key));
+				frame.set(String(variables[0].value ?? ''), collectionValue.type === 'array' ? makeNumberValue(CtyNumber.fromInt64(Number(key))) : makeStringValue(key));
 			}
 			frame.set(String(variables[variables.length - 1].value ?? ''), item);
 			scope.comprehension.push(frame);
@@ -2370,42 +2369,17 @@ export class ConfigEvaluator {
 	}
 
 	private async evalComparison(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
-		const [left, right] = (await this.evalOperands([node.children?.[0], node.children?.[1]], scope)).map(computable).map(unwrapSensitive);
-		const operator = node.value === undefined ? '' : String(node.value);
-		const a = comparisonValue(left);
-		const b = comparisonValue(right);
-		let result = false;
-		switch (operator) {
-			case '==': result = a === b; break;
-			case '!=': result = a !== b; break;
-			case '<': result = a < b; break;
-			case '<=': result = a <= b; break;
-			case '>': result = a > b; break;
-			case '>=': result = a >= b; break;
-			default: throw new Error(`Unknown comparison operator "${operator}"`);
-		}
-		return makeBooleanValue(result);
+		const [left, right] = (await this.evalOperands([node.children?.[0], node.children?.[1]], scope)).map(computable);
+		return comparison(node.value === undefined ? '' : String(node.value), left, right);
 	}
 
 	private async evalArithmetic(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
 		const operator = node.value === undefined ? '' : String(node.value);
 		if (operator === '-' && (node.children?.length ?? 0) === 1) {
-			const value = computable(await this.evalNode(node.children?.[0], scope));
-			if (value.type !== 'number') throw new Error('Unary minus requires a number');
-			return makeNumberValue(-Number(value.value));
+			return negation(computable(await this.evalNode(node.children?.[0], scope)));
 		}
 		const [left, right] = (await this.evalOperands([node.children?.[0], node.children?.[1]], scope)).map(computable);
-		if (left.type !== 'number' || right.type !== 'number') throw new Error('Arithmetic requires numbers');
-		const a = Number(left.value);
-		const b = Number(right.value);
-		switch (operator) {
-			case '+': return makeNumberValue(a + b);
-			case '-': return makeNumberValue(a - b);
-			case '*': return makeNumberValue(a * b);
-			case '/': return makeNumberValue(a / b);
-			case '%': return makeNumberValue(a % b);
-			default: throw new Error(`Unknown arithmetic operator "${operator}"`);
-		}
+		return arithmetic(operator, left, right);
 	}
 
 	/**
@@ -2479,7 +2453,7 @@ export class ConfigEvaluator {
 			if (variables.length === 2) {
 				frame.set(
 					String(variables[0].value ?? ''),
-					collectionValue.type === 'array' ? makeNumberValue(Number(key)) : makeStringValue(key)
+					collectionValue.type === 'array' ? makeNumberValue(CtyNumber.fromInt64(Number(key))) : makeStringValue(key)
 				);
 			}
 			frame.set(String(variables[variables.length - 1].value ?? ''), item);
@@ -2730,7 +2704,7 @@ export class ConfigEvaluator {
 	): Promise<RuntimeValue<ValueType>> {
 		if (!definition.compiled) definition.compiled = this.compileJsBody(definition);
 
-		const plainArgs = args.map(value => runtimeToPlain(value));
+		const plainArgs = args.map(value => runtimeToJavaScript(value));
 		const binding = await this.makeTgBinding(definition, context);
 
 		let result: unknown;
@@ -2786,7 +2760,7 @@ export class ConfigEvaluator {
 			// is being resolved. Do not eagerly recurse into that one merely to
 			// build the binding; guardedNamespace still fails if the body reads it.
 			if (activePath.some(entry => entry.scope === scope && entry.name === name)) continue;
-			resolved[name] = runtimeToPlain(await this.resolveLocal(scope, name));
+			resolved[name] = runtimeToJavaScript(await this.resolveLocal(scope, name));
 		}
 		return resolved;
 	}
@@ -2818,7 +2792,7 @@ export class ConfigEvaluator {
 				localName => `Inline function "${definition.name}" referenced undefined local "${localName}" on include "${name}"`
 			);
 			if (include.result.inputs) {
-				exposed.inputs = runtimeToPlain(makeObjectValue(include.result.inputs));
+				exposed.inputs = runtimeToJavaScript(makeObjectValue(include.result.inputs));
 			}
 			includes[name] = exposed;
 		}
@@ -2832,7 +2806,7 @@ export class ConfigEvaluator {
 					convertToRuntimeValue(value, `tg.call("${name}") argument ${index + 1}`));
 				const inline = this.findInlineFunction(scope, name);
 				if (inline) {
-					return runtimeToPlain(await this.callInlineFunction(inline, runtimeArgs));
+					return runtimeToJavaScript(await this.callInlineFunction(inline, runtimeArgs));
 				}
 				if (!this.schema.getFunctionDefinition(name)) {
 					throw new Error(`tg.call in inline function "${definition.name}" named unknown function "${name}"`);
@@ -2842,7 +2816,7 @@ export class ConfigEvaluator {
 						`tg.call is unavailable to inline function "${definition.name}": the evaluation context has no function evaluator`
 					);
 				}
-				return runtimeToPlain(await context.evaluateFunction(name, runtimeArgs));
+				return runtimeToJavaScript(await context.evaluateFunction(name, runtimeArgs));
 			},
 			local: guardedNamespace(locals, name => (
 				scope.locals.has(name)
@@ -2930,22 +2904,20 @@ function comprehensionCondition(value: RuntimeValue<ValueType>): boolean {
  * @throws Error when the key is null or a collection, as HCL refuses it.
  */
 function comprehensionKey(value: RuntimeValue<ValueType>): string {
-	if (value.type === 'string' || value.type === 'number' || value.type === 'boolean') return String(value.value);
+	if (value.type === 'string' || value.type === 'number' || value.type === 'boolean') return coerceToString(value);
 	if (value.type === 'null') throw new Error('The key of a for expression must not be null');
 	throw new Error(`The key of a for expression must be a string, got ${value.type}`);
 }
 
-function comparisonValue(value: RuntimeValue<ValueType>): string | number {
-	switch (value.type) {
-		case 'string':
-		case 'number':
-		case 'boolean':
-			return value.value as string | number;
-		case 'null':
-			return '';
-		default:
-			return JSON.stringify(value.value);
-	}
+/**
+ * The value of a number literal, read from its text as HCL reads it with go-cty's ParseNumberVal.
+ *
+ * @throws Error in HCL's words when the text is not a number go-cty can read.
+ */
+function numberLiteral(node: TNode): CtyNumber {
+	const number = CtyNumber.tryParse(String(node.value));
+	if (!number) throw new Error('Invalid number literal: Failed to recognize the value of this number literal.');
+	return number;
 }
 
 /**
@@ -3163,6 +3135,10 @@ function functionArguments(name: string, args: RuntimeValue<ValueType>[]): Runti
 /** What stands in for a value sops stored encrypted wherever a plain form of it is shown. */
 export const ENCRYPTED_VALUE = '(encrypted)';
 
+/**
+ * A value in plain JavaScript: strings, booleans, null, arrays and records, and each number a {@link CtyNumber},
+ * which JSON.stringify writes as its exact decimal text.
+ */
 export function runtimeValueToPlain(value: RuntimeValue<ValueType>): unknown {
 	switch (value.type) {
 		case 'string':

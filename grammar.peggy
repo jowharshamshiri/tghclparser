@@ -734,25 +734,15 @@ DirectiveVariable = name:$(([a-zA-Z_] / [^\0-\x7F]) DirectiveNameRest*) {
 
 DirectiveNameRest = [a-zA-Z0-9_\-] / [^\0-\x7F]
 
-Number = OctalNumber / LegacyOctal / DecimalNumber
+Number = DecimalNumber
 
-LegacyOctal = "0" digits:$[0-7]+ {
-  return makeNode('number_lit', parseInt(digits, 8), location());
-}
-
-HexNumber = "0x" digits:$[0-9a-fA-F]+ {
-  return makeNode('number_lit', parseInt(digits, 16), location());
-}
-
-OctalNumber = "0o" digits:$[0-7]+ {
-  return makeNode('number_lit', parseInt(digits, 8), location());
-}
-
+// A number literal keeps its text, which the evaluator reads as HCL does, with go-cty's arbitrary-precision decimal
+// reading: every literal is decimal, so 0755 is seven hundred and fifty-five.
 DecimalNumber = minus:"-"? int:Integer frac:Fraction? exp:Exponent? {
-  return makeNode('number_lit', parseFloat(text()), location());
+  return makeNode('number_lit', text(), location());
 }
 
-Integer = "0" / [1-9][0-9]*
+Integer = [0-9]+
 Fraction = "." [0-9]+
 Exponent = [eE] [+-]? [0-9]+
 

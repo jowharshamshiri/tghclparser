@@ -4,8 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 
 import type { DependencyRequest } from '../src/Evaluator';
-import { ConfigEvaluator, runtimeValueToPlain } from '../src/Evaluator';
+import { ConfigEvaluator } from '../src/Evaluator';
 import { makeObjectValue } from '../src/functions/utils';
+import { plainValue } from './plain-values';
 
 /**
  * A dependency is resolved the way Terragrunt resolves it for a unit: its block is found in the configurations
@@ -58,7 +59,7 @@ describe('dependency resolution', () => {
 		declaredIn: path.relative(root, request.declaredIn),
 		targetConfigPath: path.relative(root, request.targetConfigPath),
 		targetDir: path.relative(root, request.targetDir),
-		mockOutputs: request.mockOutputs === undefined ? undefined : runtimeValueToPlain(request.mockOutputs),
+		mockOutputs: request.mockOutputs === undefined ? undefined : plainValue(request.mockOutputs),
 		mockOutputsAllowedTerraformCommands: request.mockOutputsAllowedTerraformCommands
 	});
 
@@ -113,7 +114,7 @@ describe('dependency resolution', () => {
 		] as const) {
 			const result = await inputs(expression);
 			assert.equal(result.valid, true, `${expression}: ${result.error}`);
-			assert.deepEqual(runtimeValueToPlain(result.inputs!), { x: known }, expression);
+			assert.deepEqual(plainValue(result.inputs!), { x: known }, expression);
 		}
 		for (const expression of ['dependency.vpc.outputs.on && true', 'false || dependency.vpc.outputs.on', '!dependency.vpc.outputs.on']) {
 			assert.equal((await inputs(expression)).unresolved, true, expression);
@@ -188,7 +189,7 @@ describe('dependency resolution', () => {
 		]);
 		const result = await evaluate(recording().evaluator);
 		assert.equal(result.valid, true, result.error);
-		assert.deepEqual(runtimeValueToPlain(result.inputs!), { names: ['a-eu-west-1', 'b-eu-west-1'], keyed: { x: 1 } });
+		assert.deepEqual(plainValue(result.inputs!), { names: ['a-eu-west-1', 'b-eu-west-1'], keyed: { x: 1 } });
 	});
 
 	it('reports a dependency declared nowhere the unit merges as a fault, without asking the resolver', async () => {
@@ -224,7 +225,7 @@ describe('dependency resolution', () => {
 		const { evaluator, requests } = recording({ vpc: { id: 'vpc-123' } });
 		const result = await evaluate(evaluator);
 		assert.equal(result.valid, true, result.error);
-		assert.deepEqual(runtimeValueToPlain(result.inputs!), { id: 'vpc-123' });
+		assert.deepEqual(plainValue(result.inputs!), { id: 'vpc-123' });
 		assert.deepEqual(requests.map(plain), [{
 			name: 'vpc',
 			declaredIn: 'root.hcl',
@@ -241,7 +242,7 @@ describe('dependency resolution', () => {
 		const { evaluator, requests } = recording({ vpc: { id: 'vpc-123' } });
 		const result = await evaluate(evaluator);
 		assert.equal(result.valid, true, result.error);
-		assert.deepEqual(runtimeValueToPlain(result.inputs!), { vpc_id: 'vpc-123' });
+		assert.deepEqual(plainValue(result.inputs!), { vpc_id: 'vpc-123' });
 		assert.deepEqual(requests.map(request => path.relative(root, request.declaredIn)), [path.join('app', 'terragrunt.hcl')]);
 	});
 
@@ -287,7 +288,7 @@ describe('dependency resolution', () => {
 		await write('app/terragrunt.hcl', ['dependency "vpc" {', '  config_path = "../vpc"', '}', '', 'inputs = { id = dependency.vpc.outputs.id }']);
 		const { evaluator, requests } = recording({ network: { id: 'net-1' } });
 		const result = await evaluate(evaluator);
-		assert.deepEqual(runtimeValueToPlain(result.inputs!), { id: 'net-1' });
+		assert.deepEqual(plainValue(result.inputs!), { id: 'net-1' });
 		assert.deepEqual(requests.map(request => path.relative(root, request.targetDir)), ['network']);
 	});
 
@@ -298,7 +299,7 @@ describe('dependency resolution', () => {
 		]);
 		const { evaluator, requests } = recording({ vpc: { id: 'vpc-123' } });
 		const result = await evaluate(evaluator);
-		assert.deepEqual(runtimeValueToPlain(result.inputs!), { a: 'vpc-123', b: 'VPC-123', c: 'vpc-123-x' });
+		assert.deepEqual(plainValue(result.inputs!), { a: 'vpc-123', b: 'VPC-123', c: 'vpc-123-x' });
 		assert.equal(requests.length, 1);
 	});
 
