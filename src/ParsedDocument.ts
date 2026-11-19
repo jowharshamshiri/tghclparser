@@ -3,6 +3,9 @@ import path from 'node:path';
 import type { CompletionItem, Diagnostic, DocumentLink, LocationLink, MarkupContent, Position } from 'vscode-languageserver';
 import { URI } from 'vscode-uri';
 
+import { CtyNumber } from './cty-number';
+import { comparison } from './cty-operations';
+import { coerceToBool, coerceToString } from './functions/utils';
 import { readInlineFunction, synthesizeDefinition, tokenToNode } from './inline-functions';
 import type { FunctionContext, FunctionDefinition, ResolvedReference, RuntimeValue, TerragruntConfig, TokenType, ValueType } from './model';
 import { Token } from './model';
@@ -722,10 +725,8 @@ export class ParsedDocument {
 				};
 			}
 			case 'number_lit': {
-				return {
-					type: 'number',
-					value: Number(node.value)
-				};
+				const number = CtyNumber.tryParse(String(node.value));
+				return number ? { type: 'number', value: number } : undefined;
 			}
 			case 'boolean_lit': {
 				return {
@@ -745,70 +746,28 @@ export class ParsedDocument {
 	}
 
 	private coerceToBool(value: RuntimeValue<ValueType>): boolean {
-		switch (value.type) {
-			case 'boolean': {
-				return Boolean(value.value);
-			}
-			case 'string': {
-				return typeof value.value === 'string' && value.value.length > 0;
-			}
-			case 'number': {
-				return value.value !== 0;
-			}
-			case 'array': {
-				return Array.isArray(value.value) && value.value.length > 0;
-			}
-			case 'object':
-			case 'block': {
-				return value.value instanceof Map && value.value.size > 0;
-			}
-			default: {
-				return false;
-			}
-		}
+		return coerceToBool(value);
 	}
 	private coerceToString(value: RuntimeValue<ValueType>): string {
-		switch (value.type) {
-			case 'string':
-			case 'number':
-			case 'boolean': {
-				return String(value.value);
-			}
-			case 'array': {
-				return Array.isArray(value.value) ? value.value.map(v => this.coerceToString(v)).join('') : '';
-			}
-			case 'object':
-			case 'block': {
-				if (value.value instanceof Map) {
-					const entries: string[] = [];
-					value.value.forEach((v, k) => {
-						entries.push(`${k}=${this.coerceToString(v)}`);
-					});
-					return entries.join(',');
-				}
-				return '';
-			}
-			default: {
-				return '';
-			}
-		}
+		return coerceToString(value);
 	}
-	private isPrimitiveValue(value: unknown): value is string | number | boolean | null {
+	private isPrimitiveValue(value: unknown): value is string | boolean | null {
 		return typeof value === 'string' ||
-			typeof value === 'number' ||
 			typeof value === 'boolean' ||
 			value === null;
 	}
 
-	private getPrimitiveValue(value: RuntimeValue<ValueType>): string | number | boolean | null {
+	/** A value in a few characters: a number as its decimal text, a collection as its elements joined or as JSON. */
+	private getPrimitiveValue(value: RuntimeValue<ValueType>): string | boolean | null {
 		if (!value) return null;
 
 		switch (value.type) {
-		case 'string':
 		case 'number':
+			return (value.value as CtyNumber).toString();
+		case 'string':
 		case 'boolean': {
 				const primitive = value.value;
-				if (typeof primitive === 'string' || typeof primitive === 'number' || typeof primitive === 'boolean') {
+				if (typeof primitive === 'string' || typeof primitive === 'boolean') {
 					return primitive;
 				}
 				return null;
@@ -826,7 +785,7 @@ export class ParsedDocument {
 			case 'object':
 			case 'block': {
 				if (!(value.value instanceof Map)) return null;
-				const obj: Record<string, string | number | boolean> = {};
+				const obj: Record<string, string | boolean> = {};
 				value.value.forEach((v, k) => {
 					const primitive = this.getPrimitiveValue(v);
 					if (primitive !== null) {
@@ -883,10 +842,9 @@ export class ParsedDocument {
 				const condValue = await this.evaluateValue(condition);
 				if (!condValue) return undefined;
 
-				const condBool = this.getPrimitiveValue(condValue);
-				if (condBool === null) return undefined;
+				if (condValue.type === 'null') return undefined;
 
-				return condBool ?
+				return this.coerceToBool(condValue) ?
 					await this.evaluateValue(trueExpr) :
 					await this.evaluateValue(falseExpr);
 			}
@@ -922,41 +880,20 @@ export class ParsedDocument {
 		left: RuntimeValue<ValueType> | undefined,
 		right: RuntimeValue<ValueType> | undefined,
 		operator: string
-	): RuntimeValue<'boolean'> {
-		if (!left || !right) {
+	): RuntimeValue<'boolean'> | undefined {
+		if (!left || !right || left.type === 'null' || right.type === 'null') {
 			return { type: 'boolean', value: false };
 		}
 
-		const leftValue = this.getPrimitiveValue(left);
-		const rightValue = this.getPrimitiveValue(right);
-
-		if (leftValue === null || rightValue === null) {
-			return { type: 'boolean', value: false };
+		// A comparison HCL refuses, such as an ordering of strings that are not numbers, has no value here, as an
+		// expression this reading cannot follow has none; the evaluator reports the fault.
+		let result: RuntimeValue<ValueType>;
+		try {
+			result = comparison(operator, left, right);
+		} catch {
+			return undefined;
 		}
-
-		let result = false;
-		switch (operator) {
-			case '==': {
-				result = leftValue === rightValue; break;
-			}
-			case '!=': {
-				result = leftValue !== rightValue; break;
-			}
-			case '<': {
-				result = leftValue < rightValue; break;
-			}
-			case '<=': {
-				result = leftValue <= rightValue; break;
-			}
-			case '>': {
-				result = leftValue > rightValue; break;
-			}
-			case '>=': {
-				result = leftValue >= rightValue; break;
-			}
-		}
-
-		return { type: 'boolean', value: result };
+		return { type: 'boolean', value: this.coerceToBool(result) };
 	}
 	public async resolveReference(node: Token): Promise<ResolvedReference | undefined> {
 		const parts = this.buildReferencePath(node);

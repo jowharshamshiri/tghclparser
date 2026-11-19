@@ -3,7 +3,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { ConfigEvaluator, runtimeValueToPlain } from '../src/Evaluator';
+import { ConfigEvaluator } from '../src/Evaluator';
+import { plainValue } from './plain-values';
 
 // Every expected value and message here is what Terragrunt v1.2.2 gives for the same expression in a unit's inputs.
 // A failure is stated the way Terragrunt states it: a refused count as its summary and detail, and any other failed
@@ -28,7 +29,7 @@ describe('function calls as Terragrunt evaluates them', () => {
 	const value = async (expression: string): Promise<unknown> => {
 		const result = await evaluate(expression);
 		assert.equal(result.error, undefined, expression);
-		return (runtimeValueToPlain(result.inputs!) as { x: unknown }).x;
+		return (plainValue(result.inputs!) as { x: unknown }).x;
 	};
 
 	const failure = async (expression: string): Promise<string> => {

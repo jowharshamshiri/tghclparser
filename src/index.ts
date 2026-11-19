@@ -1,5 +1,7 @@
 export type {RuntimeValue, TerragruntConfig, TreeNode, ValueType} from './model';
 export {Token} from './model';
+export type {Accuracy, FormatSpec, SerializedCtyNumber} from './cty-number';
+export {CtyNumber} from './cty-number';
 export {ConfigEvaluator, LocatedEvaluationError} from './Evaluator';
 export {runtimeValueToPlain} from './Evaluator';
 export type {ConfigEvaluationResult, DependencyRequest, EvaluatedSpan, EvaluationProblem} from './Evaluator';

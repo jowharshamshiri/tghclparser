@@ -18,6 +18,7 @@ import { ParsedDocument } from './ParsedDocument';
 import { Schema } from './Schema';
 import { unlessUnresolved } from './unresolved';
 import { expandTerragruntGlob } from './functions/terragrunt_glob';
+import { parseJsonDocument } from './functions/utils';
 
 /** @returns true for an error from the filesystem, such as a directory that cannot be listed or a file that cannot be read. */
 function isFileSystemError(error: unknown): error is NodeJS.ErrnoException {
@@ -1530,7 +1531,7 @@ export class Workspace {
 					if (outputValue.value !== null && outputValue.value !== undefined) {
 						if (typeof outputValue.value === 'string') {
 							try {
-								const parsed = JSON.parse(outputValue.value);
+								const parsed = parseJsonDocument(outputValue.value);
 								if (Array.isArray(parsed)) {
 									displayValue = `[${parsed.length} items]`;
 									const outputNode = outputsNode.addChild(

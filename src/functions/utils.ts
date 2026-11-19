@@ -1,3 +1,4 @@
+import { CtyNumber } from '../cty-number';
 import type { RuntimeValue, ValueType } from '../model';
 
 export const makeStringValue = (value: string): RuntimeValue<'string'> => ({
@@ -5,7 +6,7 @@ export const makeStringValue = (value: string): RuntimeValue<'string'> => ({
     value
 });
 
-export const makeNumberValue = (value: number): RuntimeValue<'number'> => ({
+export const makeNumberValue = (value: CtyNumber): RuntimeValue<'number'> => ({
     type: 'number',
     value
 });
@@ -41,6 +42,68 @@ export const unwrapSensitive = (value: RuntimeValue<ValueType>): RuntimeValue<Va
     }
     return value;
 };
+
+/** The name go-cty gives a value's type in a conversion error. */
+function friendlyTypeName(value: RuntimeValue<ValueType>): string {
+    switch (value.type) {
+        case 'boolean':
+            return 'bool';
+        case 'array':
+            return 'tuple';
+        case 'object':
+        case 'block':
+            return 'object';
+        default:
+            return value.type;
+    }
+}
+
+/**
+ * A value converted to a number as go-cty's convert does it: a number as it is, and a string read as go-cty's
+ * ParseNumberVal reads it.
+ *
+ * @param value a value that is not null and not sensitive.
+ * @returns the number.
+ * @throws Error with go-cty's message when the value does not convert.
+ */
+export function convertToNumber(value: RuntimeValue<ValueType>): CtyNumber {
+    if (value.type === 'number') return value.value as CtyNumber;
+    if (value.type === 'string') return CtyNumber.parse(String(value.value));
+    throw new Error(`number required, but have ${friendlyTypeName(value)}`);
+}
+
+/**
+ * Whether two values are equal as go-cty's Equals decides it: values of different types never are, nulls always
+ * are, numbers are compared as {@link CtyNumber.equals} compares them, and collections element by element.
+ */
+export function ctyEquals(left: RuntimeValue<ValueType>, right: RuntimeValue<ValueType>): boolean {
+    const a = unwrapSensitive(left);
+    const b = unwrapSensitive(right);
+    if (a.type === 'null' || b.type === 'null') return a.type === b.type;
+    const objectLike = (value: RuntimeValue<ValueType>) => value.type === 'object' || value.type === 'block';
+    if (objectLike(a) && objectLike(b)) {
+        const ours = a.value as Map<string, RuntimeValue<ValueType>>;
+        const theirs = b.value as Map<string, RuntimeValue<ValueType>>;
+        if (ours.size !== theirs.size) return false;
+        for (const [key, value] of ours) {
+            const other = theirs.get(key);
+            if (other === undefined || !ctyEquals(value, other)) return false;
+        }
+        return true;
+    }
+    if (a.type !== b.type) return false;
+    switch (a.type) {
+        case 'number':
+            return (a.value as CtyNumber).equals(b.value as CtyNumber);
+        case 'array': {
+            const ours = a.value as RuntimeValue<ValueType>[];
+            const theirs = b.value as RuntimeValue<ValueType>[];
+            return ours.length === theirs.length && ours.every((value, index) => ctyEquals(value, theirs[index]));
+        }
+        default:
+            return a.value === b.value;
+    }
+}
 
 /**
  * Refuses a call to a Terragrunt function with a number of arguments it does not take, in Terragrunt's own words. Its
@@ -98,8 +161,27 @@ export function markEncrypted(value: RuntimeValue<ValueType>): RuntimeValue<Valu
     }
 }
 
-// Converts an arbitrary JS value (as produced by JSON.parse, yaml.load, CSV
-// decoding, or an inline function body) into a RuntimeValue tree.
+/**
+ * Reads a JSON document as go-cty's JSON decoder does: each number from its own text, as go-cty's ParseNumberVal
+ * reads it, so that no digit is lost to a float64.
+ *
+ * @param text the document.
+ * @returns the document, its numbers as {@link CtyNumber}s, for {@link convertToRuntimeValue}.
+ * @throws SyntaxError when the text is not JSON.
+ */
+export function parseJsonDocument(text: string): unknown {
+    const reviver = (_key: string, value: unknown, context?: { source?: string }): unknown => {
+        if (typeof value !== 'number') return value;
+        if (context?.source === undefined) throw new Error('JSON.parse gave no source text for a number');
+        return CtyNumber.parse(context.source);
+    };
+    return JSON.parse(text, reviver as (key: string, value: unknown) => unknown);
+}
+
+// Converts an arbitrary JS value (as produced by parseJsonDocument, yaml.load,
+// CSV decoding, or an inline function body) into a RuntimeValue tree. A JS
+// number is taken as go-cty's NumberFloatVal takes a float64; a CtyNumber as it
+// is.
 //
 // When `label` is supplied, values with no HCL representation — functions,
 // symbols, undefined, non-finite numbers, and cyclic structures — raise an error
@@ -117,11 +199,12 @@ function convertValue(
     seen: Set<object>
 ): RuntimeValue<ValueType> {
     if (typeof value === 'string') return makeStringValue(value);
+    if (value instanceof CtyNumber) return makeNumberValue(value);
     if (typeof value === 'number') {
         if (label !== undefined && !Number.isFinite(value)) {
             throw new Error(`${path} is ${String(value)}, which has no HCL representation`);
         }
-        return makeNumberValue(value);
+        return makeNumberValue(CtyNumber.fromFloat64(value));
     }
     if (typeof value === 'boolean') return makeBooleanValue(value);
     if (value === null) return makeNullValue();
@@ -155,39 +238,55 @@ function convertValue(
 
 // Converts a RuntimeValue tree into plain JS (objects become plain records
 // with keys in sorted order so JSON output matches deterministic serialization).
-// Sensitive values are unwrapped to the value they protect: the wrapper marks
-// how a value is displayed, not what it is.
+// A number stays a CtyNumber, which JSON.stringify writes as its exact decimal
+// text. Sensitive values are unwrapped to the value they protect: the wrapper
+// marks how a value is displayed, not what it is.
 export function runtimeToPlain(value: RuntimeValue<ValueType>): unknown {
+    return plainValue(value, number => number);
+}
+
+/**
+ * A value as an inline function's JavaScript body receives it: as {@link runtimeToPlain} gives it, with each number
+ * a JavaScript number, converted as go-cty converts a number for a function that computes with a float64.
+ */
+export function runtimeToJavaScript(value: RuntimeValue<ValueType>): unknown {
+    return plainValue(value, number => number.toGoFloat64());
+}
+
+function plainValue(value: RuntimeValue<ValueType>, number: (value: CtyNumber) => unknown): unknown {
     switch (value.type) {
-        case 'string':
         case 'number':
+            return number(value.value as CtyNumber);
+        case 'string':
         case 'boolean':
             return value.value;
         case 'null':
             return null;
         case 'array':
-            return (value.value as RuntimeValue<ValueType>[]).map(runtimeToPlain);
+            return (value.value as RuntimeValue<ValueType>[]).map(entry => plainValue(entry, number));
         case 'object':
         case 'block': {
             const map = value.value as Map<string, RuntimeValue<ValueType>>;
             const out: Record<string, unknown> = {};
-            for (const key of [...map.keys()].sort(compareStrings)) out[key] = runtimeToPlain(map.get(key)!);
+            for (const key of [...map.keys()].sort(compareStrings)) out[key] = plainValue(map.get(key)!, number);
             return out;
         }
         default: {
             if ((value.type as string) === 'sensitive') {
-                return runtimeToPlain(value.value as RuntimeValue<ValueType>);
+                return plainValue(value.value as RuntimeValue<ValueType>, number);
             }
             throw new Error(`Value of type ${String(value.type)} has no plain representation`);
         }
     }
 }
 
-// HCL string coercion: how a value renders inside a string interpolation.
+// HCL string coercion: how a value renders inside a string interpolation. A
+// number is written as go-cty converts it to a string.
 export function coerceToString(value: RuntimeValue<ValueType>): string {
     switch (value.type) {
-        case 'string':
         case 'number':
+            return (value.value as CtyNumber).toString();
+        case 'string':
         case 'boolean':
             return String(value.value);
         case 'null':
@@ -204,14 +303,15 @@ export function coerceToString(value: RuntimeValue<ValueType>): string {
     }
 }
 
-export function coerceToBool(value: RuntimeValue<ValueType>): boolean {
+export function coerceToBool(sensitiveOrValue: RuntimeValue<ValueType>): boolean {
+    const value = unwrapSensitive(sensitiveOrValue);
     switch (value.type) {
         case 'boolean':
             return Boolean(value.value);
         case 'string':
             return String(value.value).length > 0;
         case 'number':
-            return Number(value.value) !== 0;
+            return !(value.value as CtyNumber).isZero();
         case 'array':
             return (value.value as RuntimeValue<ValueType>[]).length > 0;
         case 'object':

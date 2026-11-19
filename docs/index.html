@@ -545,7 +545,8 @@ tghclp run --tf-path terraform --working-dir ./app -- apply</code></pre></div>
 
         <h2>Utility exports</h2>
         <table class="reference-table"><thead><tr><th>Export</th><th>Purpose</th></tr></thead><tbody>
-          <tr><td>runtimeValueToPlain</td><td>Converts nested typed runtime values and maps to plain JavaScript values.</td></tr>
+          <tr><td>runtimeValueToPlain</td><td>Converts nested typed runtime values and maps to plain JavaScript values: strings, booleans, <code>null</code>, arrays and records, with each number a <code>CtyNumber</code>. <code>JSON.stringify</code> writes a <code>CtyNumber</code> as its exact decimal text, the text Terragrunt writes.</td></tr>
+          <tr><td>CtyNumber</td><td>A number as Terragrunt holds it: a binary floating-point value of arbitrary size with its own precision, read from a literal with a 512-bit mantissa. <code>toString()</code> gives the decimal text Terragrunt prints, <code>compare</code> and <code>equals</code> order and compare as Terragrunt does, <code>toFloat64()</code> gives the nearest JavaScript number, and <code>CtyNumber.parse</code> reads a decimal as Terragrunt reads one.</td></tr>
           <tr><td>Token</td><td>A source-positioned node with type, value, children, parent, decorators, and display helpers.</td></tr>
           <tr><td>FunctionOperation</td><td>An ops-ts operation wrapper for a named function evaluator.</td></tr>
           <tr><td>invokeFunctionOperation</td><td>Invokes an operation with serialized arguments and live evaluation context.</td></tr>
@@ -617,6 +618,9 @@ tghclp run --tf-path terraform --working-dir ./app -- apply</code></pre></div>
 
         <h2>Why runtime values keep their types</h2>
         <p>Evaluation does not collapse everything into plain JavaScript. <code>RuntimeValue&lt;T&gt;</code> carries an explicit Terragrunt value type, and nested collections contain more runtime values. This allows providers to retain type knowledge, sensitive wrappers, and origin information while computing results. Convert to plain values only at an application boundary with <code>runtimeValueToPlain</code>.</p>
+
+        <h2>Why numbers are not JavaScript numbers</h2>
+        <p>Terragrunt computes with go-cty's numbers: binary floating-point values of arbitrary size, each with its own mantissa precision, which Go's <code>math/big</code> rounds to nearest even. A number literal is read with 512 bits, an integer a function counts is held with 64, and the result of <code>pow</code> or <code>log</code>, which compute with a float64, with 53. Each number is printed as the fewest decimal digits that read back to it at its own precision. So <code>0.1 + 0.2</code> is <code>0.3</code>, <code>1 / 3</code> prints as many digits as tell its 512-bit value apart, and integers beyond 2<sup>53</sup> keep every digit. A JavaScript number would print <code>0.30000000000000004</code> and lose those digits, so every number the evaluator holds is a <code>CtyNumber</code>, which computes as Terragrunt does. An inline function's JavaScript body receives each number as the nearest JavaScript number.</p>
 
         <h2>Language service versus execution</h2>
         <p>Parsing and most editor assistance are observational: they analyze text. Semantic evaluation can read workspace files and invoke selected functions. Command execution goes further by starting an OpenTofu, Terraform, or explicitly requested external program. Those capabilities are kept behind separate APIs and trust checks.</p>

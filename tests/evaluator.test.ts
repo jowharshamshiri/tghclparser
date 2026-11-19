@@ -3,7 +3,8 @@ import { generateKeyPairSync, publicEncrypt, constants } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
 import path from 'node:path';
 
-import { ConfigEvaluator, runtimeValueToPlain } from '../src/Evaluator';
+import { ConfigEvaluator } from '../src/Evaluator';
+import { plainValue } from './plain-values';
 import { ENCRYPTED_SOPS_JSON, ENCRYPTED_SOPS_YAML, withoutSopsKey } from './sops-fixture';
 
 describe('semantic configuration evaluation', () => {
@@ -59,7 +60,7 @@ describe('semantic configuration evaluation', () => {
 			].join('\n');
 			const result = await evaluator.evaluateUnit(configPath, content, process.cwd());
 			assert.equal(result.error, undefined);
-			return (runtimeValueToPlain(result.inputs!) as Record<string, unknown>).x;
+			return (plainValue(result.inputs!) as Record<string, unknown>).x;
 		};
 
 		it('reads an attribute of the variable', async () => {
@@ -151,7 +152,7 @@ describe('semantic configuration evaluation', () => {
 		const substr = async (args: string): Promise<unknown> => {
 			const result = await evaluator.evaluateUnit(configPath, `inputs = {\n  x = substr(${args})\n}\n`, process.cwd());
 			assert.equal(result.error, undefined);
-			return (runtimeValueToPlain(result.inputs!) as Record<string, unknown>).x;
+			return (plainValue(result.inputs!) as Record<string, unknown>).x;
 		};
 
 		it('takes a length from an offset', async () => {
@@ -335,7 +336,7 @@ describe('semantic configuration evaluation', () => {
 				'live/app/terragrunt.hcl': 'include "root" {\n  path   = find_in_parent_folders("root.hcl")\n  expose = true\n}\ninputs = { exposed = include.root.locals.relative }\n'
 			}, (root, result) => {
 				assert.equal(result.valid, true, result.error);
-				assert.deepEqual(runtimeValueToPlain(result.inputs!), {
+				assert.deepEqual(plainValue(result.inputs!), {
 					relative: 'live/app',
 					from: '../..',
 					parent: root,
@@ -351,7 +352,7 @@ describe('semantic configuration evaluation', () => {
 				'live/app/terragrunt.hcl': 'include "root" {\n  path = find_in_parent_folders("root.hcl")\n}\ninputs = { relative = path_relative_to_include(), parent = get_parent_terragrunt_dir() }\n'
 			}, (root, result) => {
 				assert.equal(result.valid, true, result.error);
-				assert.deepEqual(runtimeValueToPlain(result.inputs!), { relative: 'live/app', parent: root });
+				assert.deepEqual(plainValue(result.inputs!), { relative: 'live/app', parent: root });
 			});
 		});
 
@@ -359,14 +360,14 @@ describe('semantic configuration evaluation', () => {
 			const inputs = 'inputs = { relative = path_relative_to_include(), from = path_relative_from_include(), parent = get_parent_terragrunt_dir() }\n';
 			await withUnit({ 'live/app/terragrunt.hcl': inputs }, (root, result) => {
 				assert.equal(result.valid, true, result.error);
-				assert.deepEqual(runtimeValueToPlain(result.inputs!), { relative: '.', from: '.', parent: path.join(root, 'live', 'app') });
+				assert.deepEqual(plainValue(result.inputs!), { relative: '.', from: '.', parent: path.join(root, 'live', 'app') });
 			});
 			await withUnit({
 				'live/app/common.hcl': inputs,
 				'live/app/terragrunt.hcl': 'include "common" {\n  path = "common.hcl"\n}\n'
 			}, (root, result) => {
 				assert.equal(result.valid, true, result.error);
-				assert.deepEqual(runtimeValueToPlain(result.inputs!), { relative: '.', from: '.', parent: path.join(root, 'live', 'app') });
+				assert.deepEqual(plainValue(result.inputs!), { relative: '.', from: '.', parent: path.join(root, 'live', 'app') });
 			});
 		});
 
@@ -387,7 +388,7 @@ describe('semantic configuration evaluation', () => {
 				].join('\n')
 			}, (root, result) => {
 				assert.equal(result.valid, true, result.error);
-				assert.deepEqual(runtimeValueToPlain(result.inputs!), {
+				assert.deepEqual(plainValue(result.inputs!), {
 					root_relative: 'live/app',
 					root_from: '../..',
 					root_parent: root,
@@ -421,7 +422,7 @@ describe('semantic configuration evaluation', () => {
 				'live/app/terragrunt.hcl': 'include "root" {\n  path = find_in_parent_folders("root.hcl")\n}\ninputs = { value = path_relative_to_include("region") }\n'
 			}, (_root, result) => {
 				assert.equal(result.valid, true, result.error);
-				assert.deepEqual(runtimeValueToPlain(result.inputs!), { value: 'live/app' });
+				assert.deepEqual(plainValue(result.inputs!), { value: 'live/app' });
 			});
 		});
 	});
@@ -502,7 +503,7 @@ describe('semantic configuration evaluation', () => {
 
 			const result = await evaluator.evaluateUnit(configPath, content, unitDir);
 			assert.equal(result.valid, true, result.error);
-			assert.deepEqual(result.inputs ? runtimeValueToPlain(result.inputs) : undefined, {
+			assert.deepEqual(result.inputs ? plainValue(result.inputs) : undefined, {
 				root: path.join(projectRoot, 'root.hcl')
 			});
 		} finally {
@@ -529,7 +530,7 @@ describe('semantic configuration evaluation', () => {
 		});
 		const enabled = await enabledEvaluator.evaluateUnit(configPath, content, process.cwd());
 		assert.equal(enabled.valid, true);
-		assert.deepEqual(enabled.inputs ? runtimeValueToPlain(enabled.inputs) : undefined, {
+		assert.deepEqual(enabled.inputs ? plainValue(enabled.inputs) : undefined, {
 			merged: {
 				service: { retries: 3, mode: 'safe' },
 				values: [1, 2]
@@ -549,7 +550,7 @@ describe('semantic configuration evaluation', () => {
 }`;
 		const result = await evaluator.evaluateUnit(configPath, content, process.cwd());
 		assert.equal(result.valid, true);
-		const plain = result.inputs ? runtimeValueToPlain(result.inputs) as Record<string, unknown> : {};
+		const plain = result.inputs ? plainValue(result.inputs) as Record<string, unknown> : {};
 		assert.equal(typeof plain.compressed, 'string');
 		assert.equal(gunzipSync(Buffer.from(String(plain.compressed), 'base64')).toString(), 'hello');
 		assert.match(String(plain.password_hash), /^\$2[aby]\$10\$/u);
@@ -604,7 +605,7 @@ describe('semantic configuration evaluation', () => {
 		const results = await Promise.all([0, 1, 2].map(() => evaluator.evaluateUnit(configPath, content, process.cwd())));
 		for (const result of results) {
 			assert.equal(result.valid, true, result.error);
-			assert.deepEqual(runtimeValueToPlain(result.inputs!), { a: 'X' });
+			assert.deepEqual(plainValue(result.inputs!), { a: 'X' });
 		}
 	});
 
@@ -664,7 +665,7 @@ describe('semantic configuration evaluation', () => {
 			].join('\n');
 			await fs.writeFile(unitPath, unit);
 
-			const rendered = runtimeValueToPlain(
+			const rendered = plainValue(
 				await evaluator.evaluateRenderedConfig(unitPath, unit, unitDir)
 			) as Record<string, unknown>;
 			const generate = rendered.generate as Record<string, Record<string, unknown>>;
@@ -713,7 +714,7 @@ describe('semantic configuration evaluation', () => {
 			});
 			const allowed = await permitting.evaluateUnit(configPath, content, workspace);
 			assert.equal(allowed.valid, true, allowed.error);
-			const plain = allowed.inputs ? runtimeValueToPlain(allowed.inputs) as Record<string, unknown> : {};
+			const plain = allowed.inputs ? plainValue(allowed.inputs) as Record<string, unknown> : {};
 			assert.equal(plain.name, 'from-outside');
 
 			// Permitting one directory does not permit its neighbours.
@@ -762,7 +763,7 @@ describe('semantic configuration evaluation', () => {
 			const content = `inputs = { value = "${authored}" }`;
 			const result = await evaluator.evaluateUnit(configPath, content, process.cwd());
 			assert.equal(result.valid, true, `${authored}: ${result.error}`);
-			const plain = result.inputs ? runtimeValueToPlain(result.inputs) as Record<string, unknown> : {};
+			const plain = result.inputs ? plainValue(result.inputs) as Record<string, unknown> : {};
 			assert.equal(plain.value, expected, `authored ${authored}`);
 		}
 
@@ -779,7 +780,7 @@ describe('semantic configuration evaluation', () => {
 		].join('\n');
 		const result = await evaluator.evaluateUnit(configPath, heredoc, process.cwd());
 		assert.equal(result.valid, true, result.error);
-		const plain = result.inputs ? runtimeValueToPlain(result.inputs) as Record<string, unknown> : {};
+		const plain = result.inputs ? plainValue(result.inputs) as Record<string, unknown> : {};
 		assert.match(String(plain.value), /a = \$\{foo\.bar\}/u, 'the interpolation escape is reduced in a heredoc');
 		assert.match(String(plain.value), /b = %\{if y\}/u, 'and so is the directive escape');
 	});
@@ -816,7 +817,7 @@ describe('semantic configuration evaluation', () => {
 			const unit = 'include "root" {\n  path = find_in_parent_folders("terragrunt.hcl")\n}\n';
 			await fs.writeFile(unitPath, unit);
 
-			const rendered = runtimeValueToPlain(
+			const rendered = plainValue(
 				await evaluator.evaluateRenderedConfig(unitPath, unit, unitDir)
 			) as Record<string, unknown>;
 			const generate = rendered.generate as Record<string, Record<string, unknown>>;
@@ -860,7 +861,7 @@ describe('semantic configuration evaluation', () => {
 
 			const result = await evaluator.evaluateUnit(unitPath, unit, root);
 			assert.equal(result.valid, true, result.error);
-			assert.deepEqual(result.inputs ? runtimeValueToPlain(result.inputs) : undefined, {
+			assert.deepEqual(result.inputs ? plainValue(result.inputs) : undefined, {
 				id: '123456789012'
 			});
 		} finally {
@@ -896,7 +897,7 @@ describe('semantic configuration evaluation', () => {
 
 			const result = await evaluator.evaluateUnit(unitPath, unit, root);
 			assert.equal(result.valid, true, result.error);
-			assert.deepEqual(result.inputs ? runtimeValueToPlain(result.inputs) : undefined, {
+			assert.deepEqual(result.inputs ? plainValue(result.inputs) : undefined, {
 				tags: ['account:platform', 'region:eu-west-2']
 			});
 		} finally {
@@ -985,7 +986,7 @@ describe('semantic configuration evaluation', () => {
 
 			const result = await evaluator.evaluateUnit(unitPath, unit, root);
 			assert.equal(result.valid, true, result.error);
-			assert.deepEqual(result.inputs ? runtimeValueToPlain(result.inputs) : undefined, {
+			assert.deepEqual(result.inputs ? plainValue(result.inputs) : undefined, {
 				site: 'datadoghq.eu'
 			});
 		} finally {
@@ -1018,7 +1019,7 @@ describe('semantic configuration evaluation', () => {
 
 			const result = await evaluator.evaluateUnit(unitPath, unit, root);
 			assert.equal(result.valid, true, result.error);
-			assert.deepEqual(result.inputs ? runtimeValueToPlain(result.inputs) : undefined, {
+			assert.deepEqual(result.inputs ? plainValue(result.inputs) : undefined, {
 				marker: 'from-unit'
 			});
 		} finally {
@@ -1052,7 +1053,7 @@ describe('semantic configuration evaluation', () => {
 
 			const result = await evaluator.evaluateUnit(path.join(unitDir, 'terragrunt.hcl'), unit, root);
 			assert.equal(result.valid, true, result.error);
-			assert.deepEqual(result.inputs ? runtimeValueToPlain(result.inputs) : undefined, {
+			assert.deepEqual(result.inputs ? plainValue(result.inputs) : undefined, {
 				marker: 'unit-repository'
 			});
 		} finally {
@@ -1156,7 +1157,7 @@ describe('semantic configuration evaluation', () => {
 			const result = await withoutSopsKey(root, () => reader.evaluateUnit(unitPath, sopsUnit, root));
 			assert.equal(result.valid, true, result.error);
 			const masked = { token: '(encrypted)', db: { password: '(encrypted)' } };
-			assert.deepEqual(runtimeValueToPlain(result.inputs!), { yaml: masked, json: masked, token: '(encrypted)' });
+			assert.deepEqual(plainValue(result.inputs!), { yaml: masked, json: masked, token: '(encrypted)' });
 			const inputs = result.inputs!.value as Map<string, unknown>;
 			assert.deepEqual(inputs.get('token'), { type: 'string', value: 'ENC[AES256_GCM,data:nq2Z7w==,iv:A1B2,tag:C3D4,type:str]', encrypted: true });
 
@@ -1249,7 +1250,7 @@ describe('semantic configuration evaluation', () => {
 						`inputs = { ${name} = ${expression} }`
 					].join('\n');
 					const result = await evaluateWithoutKey(root, unit);
-					assert.equal(result.valid, false, `${name}: ${JSON.stringify(result.inputs ? runtimeValueToPlain(result.inputs) : null)}`);
+					assert.equal(result.valid, false, `${name}: ${JSON.stringify(result.inputs ? plainValue(result.inputs) : null)}`);
 					assert.equal(result.unresolved, true, `${name}: ${result.error}`);
 					assert.match(result.error ?? '', /could not be decrypted/, name);
 				}
@@ -1280,7 +1281,7 @@ describe('semantic configuration evaluation', () => {
 				].join('\n');
 				const result = await evaluateWithoutKey(root, unit);
 				assert.equal(result.valid, true, result.error);
-				assert.deepEqual(runtimeValueToPlain(result.inputs!), {
+				assert.deepEqual(plainValue(result.inputs!), {
 					merged: { token: '(encrypted)', db: { password: '(encrypted)' }, region: 'eu-west-2' },
 					looked_up: '(encrypted)',
 					element: '(encrypted)',
@@ -1349,7 +1350,7 @@ describe('semantic configuration evaluation', () => {
 				await fs.writeFile(unitPath, unit);
 				const reader = encryptedReader(true);
 				const rendered = await withoutSopsKey(root, () => reader.evaluateRenderedConfig(unitPath, unit, root));
-				const plain = runtimeValueToPlain(rendered) as Record<string, unknown>;
+				const plain = plainValue(rendered) as Record<string, unknown>;
 				assert.deepEqual(plain.generate, { secret: { path: 'secret.txt' }, plain: { path: 'plain.txt', contents: 'plain' } });
 				assert.equal(Object.prototype.hasOwnProperty.call(plain, 'remote_state'), false, JSON.stringify(plain.remote_state));
 				assert.deepEqual(reader.unresolvedRenderFields().map(issue => issue.field).sort(), ['generate.secret.contents', 'remote_state']);

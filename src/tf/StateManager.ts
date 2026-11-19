@@ -3,6 +3,8 @@ import * as path from 'node:path';
 
 import { URI } from 'vscode-uri';
 
+import { CtyNumber } from '../cty-number';
+import { parseJsonDocument } from '../functions/utils';
 import type { RuntimeValue, ValueType } from '../model';
 
 import type { TerraformState } from './model';
@@ -32,7 +34,7 @@ export class StateManager {
 		for (const statePath of possiblePaths) {
 			try {
 				const stateContent = await fs.readFile(statePath, 'utf8');
-				const state = JSON.parse(stateContent) as TerraformState;
+				const state = parseJsonDocument(stateContent) as TerraformState;
 				this.stateCache.set(documentUri, state);
 				return state;
 			} catch (error) {
@@ -106,7 +108,8 @@ export class StateManager {
 				return { type: 'string', value: String(value) };
 			}
 			case 'number': {
-				return { type: 'number', value: Number(value) };
+				if (!(value instanceof CtyNumber)) throw new Error('Terraform state output declared number but contains a non-number value');
+				return { type: 'number', value };
 			}
 			case 'bool':
 			case 'boolean': {
@@ -125,6 +128,7 @@ export class StateManager {
 	private normalizeType(type: unknown, value: unknown): string | [string, unknown] {
 		if (typeof type === 'string' || (Array.isArray(type) && typeof type[0] === 'string')) return type as string | [string, unknown];
 		if (value === null) return 'null';
+		if (value instanceof CtyNumber) return 'number';
 		if (Array.isArray(value)) return ['tuple', value.map(item => this.normalizeType(undefined, item))];
 		if (typeof value === 'object') {
 			return ['object', Object.fromEntries(Object.entries(value).map(([key, item]) => [key, this.normalizeType(undefined, item)]))];

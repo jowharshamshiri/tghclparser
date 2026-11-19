@@ -3,20 +3,25 @@ import { gunzipSync, gzipSync } from 'node:zlib';
 import path from 'node:path';
 import bcrypt from 'bcryptjs';
 
+import { CtyNumber, type FormatSpec, parseGoInteger } from '../cty-number';
 import { graphemeClusters, graphemeCount } from '../grapheme-clusters';
+import { quoted } from '../hcl-syntax';
 import type { FunctionContext, RuntimeValue, ValueType } from '../model';
 import { assumeFunctions, markedLike } from './assume_functions';
 import { addressRange, contains, type IP, type IPNet, parseCIDR, parseIP, to4 } from './ipaddr';
 import { renderTemplate } from './template';
 import { expandTerragruntGlob } from './terragrunt_glob';
 import {
+	coerceToString,
 	compareStrings,
+	convertToNumber,
 	convertToRuntimeValue,
+	ctyEquals,
 	expectParams,
 	makeNullValue,
 	makeSensitiveValue,
 	markEncrypted,
-	runtimeToPlain,
+	parseJsonDocument,
 	unwrapSensitive
 } from './utils';
 
@@ -32,17 +37,164 @@ function stringArgument(args: RuntimeValue<ValueType>[], index: number, name: st
 	return String(argument.value);
 }
 
-function numberArgument(args: RuntimeValue<ValueType>[], index: number, name: string): number {
-	const argument = requireArgument(args, index, name);
-	if (argument.type !== 'number') throw new Error(`${name} argument ${index + 1} must be a number`);
-	return Number(argument.value);
+/**
+ * An argument for a go-cty number parameter, converted as HCL converts a function argument: a number as it is, and a
+ * string read as go-cty reads a number. A sensitive argument gives its number; the caller marks the result.
+ *
+ * @param args the call's arguments.
+ * @param index the argument's position.
+ * @param parameter the go-cty parameter's name, which HCL's messages give.
+ */
+function numberArgument(args: RuntimeValue<ValueType>[], index: number, parameter: string): CtyNumber {
+	const argument = unwrapSensitive(requireArgument(args, index, parameter));
+	if (argument.type === 'null') throw new Error(`Invalid value for "${parameter}" parameter: argument must not be null.`);
+	try {
+		return convertToNumber(argument);
+	} catch (error) {
+		throw new Error(`Invalid value for "${parameter}" parameter: ${error instanceof Error ? error.message : String(error)}.`);
+	}
+}
+
+/**
+ * An argument for a go-cty number parameter that the function reads into a Go int, which go-cty refuses unless the
+ * number is whole and fits an int64.
+ */
+function integerArgument(args: RuntimeValue<ValueType>[], index: number, parameter: string): number {
+	return Number(numberArgument(args, index, parameter).toGoInt64());
 }
 
 /** A number argument that go-cty converts to an integer, which it refuses unless the number is whole. */
 function wholeNumberArgument(args: RuntimeValue<ValueType>[], index: number, name: string, parameter: string): number {
-	const value = numberArgument(args, index, name);
-	if (!Number.isInteger(value)) throw new Error(`${name} ${parameter} must be a whole number, not ${value}`);
-	return value;
+	const value = numberArgument(args, index, parameter);
+	if (!value.isInteger()) throw new Error(`${name} ${parameter} must be a whole number, not ${value.toString()}`);
+	return Number(value.toGoInt64());
+}
+
+/**
+ * The float64 results of go-cty's log and pow, held as NumberFloatVal holds them. A NaN, which Go's big.Float refuses,
+ * fails the call as go-cty reports the panic it causes.
+ */
+function float64Value(value: number): RuntimeValue<'number'> {
+	if (Number.isNaN(value)) throw new Error('panic in function implementation: Float.SetFloat64(NaN)');
+	return numberValue(CtyNumber.fromFloat64(value));
+}
+
+/**
+ * go-cty's min (direction -1) and max (direction 1): starting from the opposite infinity, each argument that lies
+ * beyond the one kept so far replaces it, so the first of equal extremes is the one given.
+ */
+function extreme(args: RuntimeValue<ValueType>[], direction: 1 | -1): CtyNumber {
+	if (args.length === 0) throw new Error('must pass at least one number');
+	const numbers = args.map((_, index) => numberArgument(args, index, 'numbers'));
+	let kept = CtyNumber.fromFloat64(direction > 0 ? -Infinity : Infinity);
+	for (const number of numbers) if (number.compare(kept) * direction > 0) kept = number;
+	return kept;
+}
+
+/** Go's math.Frexp: x as a fraction in [0.5, 1) times a power of two. */
+function frexp(x: number): [number, number] {
+	if (x === 0 || !Number.isFinite(x)) return [x, 0];
+	const view = new DataView(new ArrayBuffer(8));
+	let value = x;
+	let exponent = 0;
+	if (Math.abs(value) < 2.2250738585072014e-308) {
+		value *= 2 ** 52;
+		exponent = -52;
+	}
+	view.setFloat64(0, value);
+	const high = view.getUint32(0);
+	exponent += ((high >>> 20) & 0x7ff) - 1022;
+	view.setUint32(0, (high & ~(0x7ff << 20)) | (1022 << 20));
+	return [view.getFloat64(0), exponent];
+}
+
+/** Go's math.Ldexp: frac × 2^exp, rounded once into a float64. */
+function ldexp(fraction: number, power: number): number {
+	if (fraction === 0 || !Number.isFinite(fraction)) return fraction;
+	const [normal, shift] = frexp(fraction);
+	let exponent = power + shift;
+	const view = new DataView(new ArrayBuffer(8));
+	view.setFloat64(0, normal);
+	const high = view.getUint32(0);
+	exponent += ((high >>> 20) & 0x7ff) - 1023;
+	if (exponent < -1075) return normal < 0 ? -0 : 0;
+	if (exponent > 1023) return normal < 0 ? -Infinity : Infinity;
+	let scale = 1;
+	if (exponent < -1022) {
+		exponent += 53;
+		scale = 2 ** -53;
+	}
+	view.setUint32(0, (high & ~(0x7ff << 20)) | ((exponent + 1023) << 20));
+	return scale * view.getFloat64(0);
+}
+
+function isOddInteger(x: number): boolean {
+	if (Math.abs(x) >= 2 ** 53) return false;
+	return Number.isInteger(x) && Math.abs(x % 2) === 1;
+}
+
+/**
+ * Go's math.Pow, which go-cty's pow calls: an integer power by repeated squaring, rounding at each step as Go does,
+ * and the fractional part of a power through exp and log.
+ */
+function goPow(x: number, y: number): number {
+	if (y === 0 || x === 1) return 1;
+	if (y === 1) return x;
+	if (Number.isNaN(x) || Number.isNaN(y)) return NaN;
+	if (x === 0) {
+		if (y < 0) return Object.is(x, -0) && isOddInteger(y) ? -Infinity : Infinity;
+		if (y > 0) return Object.is(x, -0) && isOddInteger(y) ? x : 0;
+	}
+	if (!Number.isFinite(y)) {
+		if (x === -1) return 1;
+		return (Math.abs(x) < 1) === (y > 0) ? 0 : Infinity;
+	}
+	if (!Number.isFinite(x)) {
+		if (x < 0) return goPow(1 / x, -y);
+		if (y < 0) return 0;
+		if (y > 0) return Infinity;
+	}
+	if (y === 0.5) return Math.sqrt(x);
+	if (y === -0.5) return 1 / Math.sqrt(x);
+
+	let yi = Math.trunc(Math.abs(y));
+	let yf = Math.abs(y) - yi;
+	if (yf !== 0 && x < 0) return NaN;
+	if (yi >= 2 ** 63) {
+		if (x === -1) return 1;
+		return (Math.abs(x) < 1) === (y > 0) ? 0 : Infinity;
+	}
+	let a1 = 1;
+	let ae = 0;
+	if (yf !== 0) {
+		if (yf > 0.5) {
+			yf--;
+			yi++;
+		}
+		a1 = Math.exp(yf * Math.log(x));
+	}
+	let [x1, xe] = frexp(x);
+	for (let i = BigInt(yi); i !== 0n; i >>= 1n) {
+		if (xe < -(1 << 12) || 1 << 12 < xe) {
+			ae += xe;
+			break;
+		}
+		if ((i & 1n) === 1n) {
+			a1 *= x1;
+			ae += xe;
+		}
+		x1 *= x1;
+		xe *= 2;
+		if (x1 < 0.5) {
+			x1 += x1;
+			xe--;
+		}
+	}
+	if (y < 0) {
+		a1 = 1 / a1;
+		ae = -ae;
+	}
+	return ldexp(a1, ae);
 }
 
 function arrayArgument(args: RuntimeValue<ValueType>[], index: number, name: string): RuntimeValue<ValueType>[] {
@@ -58,7 +210,9 @@ function objectArgument(args: RuntimeValue<ValueType>[], index: number, name: st
 }
 
 const stringValue = (value: string): RuntimeValue<'string'> => ({ type: 'string', value });
-const numberValue = (value: number): RuntimeValue<'number'> => ({ type: 'number', value });
+const numberValue = (value: CtyNumber): RuntimeValue<'number'> => ({ type: 'number', value });
+/** A count or position a function gives as go-cty's NumberIntVal holds it. */
+const integerValue = (value: number): RuntimeValue<'number'> => numberValue(CtyNumber.fromInt64(value));
 const booleanValue = (value: boolean): RuntimeValue<'boolean'> => ({ type: 'boolean', value });
 const arrayValue = (value: RuntimeValue<ValueType>[]): RuntimeValue<'array'> => ({ type: 'array', value });
 const objectValue = (value: Map<string, RuntimeValue<ValueType>>): RuntimeValue<'object'> => ({ type: 'object', value });
@@ -67,99 +221,94 @@ function hash(name: 'md5' | 'sha1' | 'sha256' | 'sha512', value: string): Runtim
 	return stringValue(createHash(name).update(value, 'utf8').digest('hex'));
 }
 
-function valueEquals(left: RuntimeValue<ValueType>, right: RuntimeValue<ValueType>): boolean {
-	const plainLeft = runtimeToPlain(unwrapSensitive(left));
-	const plainRight = runtimeToPlain(unwrapSensitive(right));
-	if (plainLeft === plainRight) return true;
-	if (typeof plainLeft === 'object' && typeof plainRight === 'object') {
-		return JSON.stringify(plainLeft) === JSON.stringify(plainRight);
-	}
-	return false;
-}
+const valueEquals = ctyEquals;
 
 function sortRuntimeList(items: RuntimeValue<ValueType>[]): RuntimeValue<ValueType>[] {
 	const allNumbers = items.every(item => item.type === 'number');
 	const sorted = [...items];
 	if (allNumbers) {
-		sorted.sort((left, right) => Number(left.value) - Number(right.value));
+		sorted.sort((left, right) => (left.value as CtyNumber).compare(right.value as CtyNumber));
 	} else {
 		sorted.sort((left, right) => String(left.value).localeCompare(String(right.value)));
 	}
 	return sorted;
 }
 
-// Go-compatible formatting for a single format string. Arguments are taken as go-cty's formatFSM takes them: each
-// verb uses the next argument, or the one its `[n]` index names, and every argument must be used.
+/** One verb of a format string, as go-cty's formatFSM reads it. */
+interface FormatVerb {
+	raw: string;
+	offset: number;
+	argument: number;
+	mode: string;
+	spec: FormatSpec;
+}
+
+const isDigit = (character: string | undefined): boolean => character !== undefined && character >= '0' && character <= '9';
+
+/**
+ * go-cty's format: each verb is `%`, then flags (`0`, `#`, `-`, `+` and space), a width, a precision after `.`, an
+ * argument index in brackets, and a letter. Each verb uses the next argument, or the one its index names, and every
+ * argument must be used.
+ */
 function goFormat(format: string, args: RuntimeValue<ValueType>[]): string {
 	let output = '';
 	let nextArgument = 1;
 	let highestArgument = 0;
-	for (let index = 0; index < format.length;) {
+	let index = 0;
+	const unrecognized = (at: number): Error => new Error(`unrecognized format character '${format[at]}' at offset ${at}`);
+	const ended = (): Error => new Error(`invalid format string starting at offset ${format.length}`);
+	while (index < format.length) {
 		if (format[index] !== '%') {
 			output += format[index];
 			index++;
 			continue;
 		}
-		const verbStart = index;
-		index++;
-		if (format[index] === '%') {
+		if (format[index + 1] === '%') {
 			output += '%';
-			index++;
+			index += 2;
 			continue;
 		}
-		let width = 0;
-		let zeroPad = false;
-		let precision = -1;
-		while (format[index] === '0' || format[index] === '-' || format[index] === '+') {
-			if (format[index] === '0') zeroPad = true;
-			index++;
+		const offset = index;
+		index++;
+		const spec: FormatSpec = {};
+		for (; ; index++) {
+			const flag = format[index];
+			if (flag === '0') spec.zero = true;
+			else if (flag === '#') spec.sharp = true;
+			else if (flag === '-') spec.minus = true;
+			else if (flag === '+') spec.plus = true;
+			else if (flag === ' ') spec.space = true;
+			else break;
 		}
-		const widthStart = index;
-		while (index < format.length && /[0-9]/u.test(format[index])) index++;
-		if (index > widthStart) width = parseInt(format.slice(widthStart, index), 10);
+		if (format[index] !== undefined && format[index] >= '1' && format[index] <= '9') {
+			let width = 0;
+			for (; isDigit(format[index]); index++) width = width * 10 + Number(format[index]);
+			spec.width = width;
+		}
 		if (format[index] === '.') {
 			index++;
-			const precisionStart = index;
-			while (index < format.length && /[0-9]/u.test(format[index])) index++;
-			if (index > precisionStart) precision = parseInt(format.slice(precisionStart, index), 10);
+			let precision = 0;
+			for (; isDigit(format[index]); index++) precision = precision * 10 + Number(format[index]);
+			spec.precision = precision;
 		}
-		let argumentNumber = nextArgument;
+		let argument = nextArgument;
 		if (format[index] === '[') {
-			const close = format.indexOf(']', index);
-			const explicit = format.slice(index + 1, close);
-			if (close === -1 || !/^[1-9][0-9]*$/u.test(explicit)) throw new Error(`invalid format string starting at offset ${index}`);
-			argumentNumber = Number(explicit);
-			index = close + 1;
+			index++;
+			if (format[index] === undefined) throw ended();
+			if (!(format[index] >= '1' && format[index] <= '9')) throw unrecognized(index);
+			argument = 0;
+			for (; isDigit(format[index]); index++) argument = argument * 10 + Number(format[index]);
+			if (format[index] === undefined) throw ended();
+			if (format[index] !== ']') throw unrecognized(index);
+			index++;
 		}
-		const verb = format[index];
+		const mode = format[index];
+		if (mode === undefined) throw ended();
+		if (!/^[A-Za-z]$/u.test(mode)) throw unrecognized(index);
 		index++;
-		const raw = format.slice(verbStart, index);
-		if (argumentNumber > args.length) {
-			throw new Error(`not enough arguments for "${raw}" at ${verbStart}: need index ${argumentNumber} but have ${args.length} total`);
-		}
-		highestArgument = Math.max(highestArgument, argumentNumber);
-		nextArgument = argumentNumber + 1;
-		const argument = args[argumentNumber - 1];
-		let rendered: string;
-		switch (verb) {
-			case 's':
-				rendered = argument === undefined ? '' : String(argument.value);
-				break;
-			case 'd':
-				rendered = String(Math.trunc(Number(argument.value)));
-				if (zeroPad) rendered = rendered.padStart(width, '0');
-				break;
-			case 'f':
-				rendered = precision >= 0 ? Number(argument.value).toFixed(precision) : String(Number(argument.value));
-				break;
-			case 'v':
-				rendered = JSON.stringify(runtimeToPlain(argument));
-				break;
-			default:
-				rendered = argument === undefined ? '' : String(argument.value);
-		}
-		if (!zeroPad && width > 0 && rendered.length < width) rendered = rendered.padStart(width, ' ');
-		output += rendered;
+		highestArgument = Math.max(highestArgument, argument);
+		output += formatVerb({ raw: format.slice(offset, index), offset, argument, mode, spec }, args);
+		nextArgument = argument + 1;
 	}
 	if (highestArgument < args.length) {
 		throw new Error(highestArgument === 0
@@ -167,6 +316,69 @@ function goFormat(format: string, args: RuntimeValue<ValueType>[]): string {
 			: `too many arguments; only ${highestArgument} used by format string`);
 	}
 	return output;
+}
+
+/** go-cty's formatPadWidth: pads to the width, counted in grapheme clusters, with zeros or spaces, left or right. */
+function padWidth(verb: FormatVerb, text: string): string {
+	const width = verb.spec.width;
+	if (width === undefined) return text;
+	const length = graphemeCount(text);
+	if (length >= width) return text;
+	const pad = (verb.spec.zero ? '0' : ' ').repeat(width - length);
+	return verb.spec.minus ? text + pad : pad + text;
+}
+
+/** go-cty's formatAppend: one verb applied to its argument. */
+function formatVerb(verb: FormatVerb, args: RuntimeValue<ValueType>[]): string {
+	if (verb.argument > args.length) {
+		throw new Error(`not enough arguments for ${JSON.stringify(verb.raw)} at ${verb.offset}: need index ${verb.argument} but have ${args.length} total`);
+	}
+	const argument = unwrapSensitive(args[verb.argument - 1]);
+	const unsupported = (reason: string): Error => new Error(`unsupported value for ${JSON.stringify(verb.raw)} at ${verb.offset}: ${reason}`);
+	if (verb.mode !== 'v' && argument.type === 'null') throw unsupported('null value cannot be formatted');
+	switch (verb.mode) {
+		case 'v':
+			if (!verb.spec.sharp && argument.type === 'string') return padWidth(verb, String(argument.value));
+			if (!verb.spec.sharp && argument.type === 'number') return padWidth(verb, (argument.value as CtyNumber).text('g', -1));
+			return padWidth(verb, jsonEncode(argument));
+		case 't':
+			if (argument.type === 'boolean') return argument.value ? 'true' : 'false';
+			if (argument.type === 'string' && ['true', '1', 'false', '0'].includes(String(argument.value))) {
+				return argument.value === 'true' || argument.value === '1' ? 'true' : 'false';
+			}
+			throw unsupported('a bool is required');
+		case 'b':
+		case 'd':
+		case 'o':
+		case 'x':
+		case 'X':
+		case 'e':
+		case 'E':
+		case 'f':
+		case 'g':
+		case 'G': {
+			let number: CtyNumber;
+			try {
+				number = convertToNumber(argument);
+			} catch (error) {
+				throw unsupported(error instanceof Error ? error.message : String(error));
+			}
+			if (verb.mode === 'e' || verb.mode === 'E' || verb.mode === 'f' || verb.mode === 'g' || verb.mode === 'G') {
+				return number.format(verb.mode, verb.spec);
+			}
+			if (!number.isInteger()) throw unsupported('an integer is required');
+			return number.formatInteger(verb.mode, verb.spec);
+		}
+		case 's':
+		case 'q': {
+			if (argument.type !== 'string' && argument.type !== 'number' && argument.type !== 'boolean') throw unsupported('string required');
+			let text = coerceToString(argument);
+			if (verb.spec.precision !== undefined && verb.spec.precision > 0) text = graphemeClusters(text).slice(0, verb.spec.precision).join('');
+			return padWidth(verb, verb.mode === 's' ? text : jsonString(text));
+		}
+		default:
+			throw new Error(`unsupported format verb '${verb.mode}' in ${JSON.stringify(verb.raw)} at offset ${verb.offset}`);
+	}
 }
 
 function escapeRegExp(text: string): string {
@@ -298,18 +510,10 @@ function jsonString(text: string): string {
 	return JSON.stringify(text).replace(/[<>&\u2028\u2029]/g, character => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`);
 }
 
-/** A number as go-cty writes it into JSON: every digit in full with no exponent, and a negative zero as -0. */
-function jsonNumber(value: number): string {
-	if (!Number.isFinite(value)) throw new Error('cannot serialize infinity as JSON');
-	if (Object.is(value, -0)) return '-0';
-	// The shortest digits that give the number back, and where the decimal point goes among them.
-	const [mantissa, exponent] = Math.abs(value).toExponential().split('e');
-	const digits = mantissa.replace('.', '');
-	const point = Number(exponent) + 1;
-	const sign = value < 0 ? '-' : '';
-	if (point <= 0) return `${sign}0.${'0'.repeat(-point)}${digits}`;
-	if (point >= digits.length) return `${sign}${digits}${'0'.repeat(point - digits.length)}`;
-	return `${sign}${digits.slice(0, point)}.${digits.slice(point)}`;
+/** A number as go-cty writes it into JSON: its decimal text, and an infinity refused. */
+function jsonNumber(value: CtyNumber): string {
+	if (value.isInfinite()) throw new Error('cannot serialize infinity as JSON');
+	return value.toString();
 }
 
 /** A value as go-cty's jsonencode writes it: with no spaces, and an object's keys in the order of their bytes. */
@@ -321,7 +525,7 @@ function jsonEncode(value: RuntimeValue<ValueType>): string {
 		case 'boolean':
 			return current.value ? 'true' : 'false';
 		case 'number':
-			return jsonNumber(Number(current.value));
+			return jsonNumber(current.value as CtyNumber);
 		case 'string':
 			return jsonString(String(current.value));
 		case 'array':
@@ -488,7 +692,7 @@ export const builtinFunctionGroup = {
 		},
 		urldecode: async (args: RuntimeValue<ValueType>[]) => markedLike(stringValue(queryUnescape(convertedString(args[0], 'str'))), args),
 		abspath: async (args: RuntimeValue<ValueType>[], context: FunctionContext) => stringValue(path.resolve(context.workingDirectory, stringArgument(args, 0, 'abspath'))),
-		abs: async (args: RuntimeValue<ValueType>[]) => numberValue(Math.abs(numberArgument(args, 0, 'abs'))),
+		abs: async (args: RuntimeValue<ValueType>[]) => markedLike(numberValue(numberArgument(args, 0, 'num').absolute()), args),
 		alltrue: async (args: RuntimeValue<ValueType>[]) => booleanValue(arrayArgument(args, 0, 'alltrue').every(item => {
 			if (item.type === 'boolean') return Boolean(item.value);
 			if (item.type === 'string' && (item.value === 'true' || item.value === 'false')) return item.value === 'true';
@@ -506,14 +710,14 @@ export const builtinFunctionGroup = {
 		base64sha256: async (args: RuntimeValue<ValueType>[]) => stringValue(createHash('sha256').update(stringArgument(args, 0, 'base64sha256'), 'utf8').digest('base64')),
 		base64sha512: async (args: RuntimeValue<ValueType>[]) => stringValue(createHash('sha512').update(stringArgument(args, 0, 'base64sha512'), 'utf8').digest('base64')),
 		can: async (args: RuntimeValue<ValueType>[]) => booleanValue(args.length > 0),
-		ceil: async (args: RuntimeValue<ValueType>[]) => numberValue(Math.ceil(numberArgument(args, 0, 'ceil'))),
+		ceil: async (args: RuntimeValue<ValueType>[]) => markedLike(numberValue(numberArgument(args, 0, 'num').ceil()), args),
 		chomp: async (args: RuntimeValue<ValueType>[]) => {
 			const value = stringArgument(args, 0, 'chomp');
 			return stringValue(value.replace(/(?:\r?\n)+$/u, ''));
 		},
 		chunklist: async (args: RuntimeValue<ValueType>[]) => {
 			const items = arrayArgument(args, 0, 'chunklist');
-			const size = numberArgument(args, 1, 'chunklist');
+			const size = integerArgument(args, 1, 'size');
 			if (size <= 0) throw new Error('chunklist size must be positive');
 			const chunks: RuntimeValue<ValueType>[] = [];
 			for (let index = 0; index < items.length; index += size) chunks.push(arrayValue(items.slice(index, index + size)));
@@ -521,7 +725,7 @@ export const builtinFunctionGroup = {
 		},
 		cidrhost: async (args: RuntimeValue<ValueType>[]) => {
 			const { network, prefix } = parseCidr(stringArgument(args, 0, 'cidrhost'));
-			let host = numberArgument(args, 1, 'cidrhost');
+			let host = integerArgument(args, 1, 'hostnum');
 			const hostBits = 32 - prefix;
 			const maxHost = (1 << hostBits) - 2;
 			if (host === -1) host = (1 << hostBits) - 1;
@@ -535,8 +739,8 @@ export const builtinFunctionGroup = {
 		},
 		cidrsubnet: async (args: RuntimeValue<ValueType>[]) => {
 			const { network, prefix } = parseCidr(stringArgument(args, 0, 'cidrsubnet'));
-			const newBits = numberArgument(args, 1, 'cidrsubnet');
-			const netNumber = numberArgument(args, 2, 'cidrsubnet');
+			const newBits = integerArgument(args, 1, 'newbits');
+			const netNumber = integerArgument(args, 2, 'netnum');
 			if (newBits < 0 || newBits > 32) throw new Error('cidrsubnet newbits out of range');
 			const resultPrefix = prefix + newBits;
 			if (resultPrefix > 32) throw new Error('cidrsubnet prefix exceeds 32 bits');
@@ -547,7 +751,7 @@ export const builtinFunctionGroup = {
 		},
 		cidrsubnets: async (args: RuntimeValue<ValueType>[]) => {
 			const { network, prefix } = parseCidr(stringArgument(args, 0, 'cidrsubnets'));
-			const newBitsList = args.slice(1).map((_, index) => numberArgument(args, index + 1, 'cidrsubnets'));
+			const newBitsList = args.slice(1).map((_, index) => integerArgument(args, index + 1, 'newbits'));
 			const results: RuntimeValue<ValueType>[] = [];
 			let current = network;
 			for (const newBits of newBitsList) {
@@ -596,7 +800,7 @@ export const builtinFunctionGroup = {
 		},
 		element: async (args: RuntimeValue<ValueType>[]) => {
 			const items = arrayArgument(args, 0, 'element');
-			const index = numberArgument(args, 1, 'element');
+			const index = integerArgument(args, 1, 'index');
 			if (items.length === 0) throw new Error('element cannot be used on an empty list');
 			const wrapped = ((index % items.length) + items.length) % items.length;
 			return items[wrapped];
@@ -613,7 +817,7 @@ export const builtinFunctionGroup = {
 			flattenItems(arrayArgument(args, 0, 'flatten'), output);
 			return arrayValue(output);
 		},
-		floor: async (args: RuntimeValue<ValueType>[]) => numberValue(Math.floor(numberArgument(args, 0, 'floor'))),
+		floor: async (args: RuntimeValue<ValueType>[]) => markedLike(numberValue(numberArgument(args, 0, 'num').floor()), args),
 		format: async (args: RuntimeValue<ValueType>[]) => stringValue(goFormat(stringArgument(args, 0, 'format'), args.slice(1))),
 		formatlist: async (args: RuntimeValue<ValueType>[]) => {
 			const format = stringArgument(args, 0, 'formatlist');
@@ -636,10 +840,10 @@ export const builtinFunctionGroup = {
 			const target = requireArgument(args, 1, 'index');
 			const position = items.findIndex(item => valueEquals(item, target));
 			if (position === -1) throw new Error('index target not found in list');
-			return numberValue(position);
+			return integerValue(position);
 		},
 		indent: async (args: RuntimeValue<ValueType>[]) => {
-			const spaces = ' '.repeat(numberArgument(args, 0, 'indent'));
+			const spaces = ' '.repeat(integerArgument(args, 0, 'spaces'));
 			const lines = stringArgument(args, 1, 'indent').split('\n');
 			return stringValue(lines.map((line, index) => (index === 0 ? line : spaces + line)).join('\n'));
 		},
@@ -654,7 +858,7 @@ export const builtinFunctionGroup = {
 		jsondecode: async (args: RuntimeValue<ValueType>[]) => {
 			let parsed: unknown;
 			try {
-				parsed = JSON.parse(stringArgument(args, 0, 'jsondecode'));
+				parsed = parseJsonDocument(stringArgument(args, 0, 'jsondecode'));
 			} catch (error) {
 				throw new Error(`Invalid JSON: ${error instanceof Error ? error.message : error}`);
 			}
@@ -665,12 +869,16 @@ export const builtinFunctionGroup = {
 		keys: async (args: RuntimeValue<ValueType>[]) => arrayValue([...objectArgument(args, 0, 'keys').keys()].sort(compareStrings).map(stringValue)),
 		length: async (args: RuntimeValue<ValueType>[]) => {
 			const value = requireArgument(args, 0, 'length');
-			if (value.type === 'string') return numberValue(graphemeCount(String(value.value)));
-			if (value.type === 'array' && Array.isArray(value.value)) return numberValue(value.value.length);
-			if (value.type === 'object' && value.value instanceof Map) return numberValue(value.value.size);
+			if (value.type === 'string') return integerValue(graphemeCount(String(value.value)));
+			if (value.type === 'array' && Array.isArray(value.value)) return integerValue(value.value.length);
+			if (value.type === 'object' && value.value instanceof Map) return integerValue(value.value.size);
 			throw new Error('length requires a string, list, or object');
 		},
-		log: async (args: RuntimeValue<ValueType>[]) => numberValue(Math.log(numberArgument(args, 0, 'log')) / Math.log(numberArgument(args, 1, 'log'))),
+		log: async (args: RuntimeValue<ValueType>[]) => {
+			const number = numberArgument(args, 0, 'num').toGoFloat64();
+			const base = numberArgument(args, 1, 'base').toGoFloat64();
+			return markedLike(float64Value(Math.log(number) / Math.log(base)), args);
+		},
 		lookup: async (args: RuntimeValue<ValueType>[]) => {
 			if (args.length > 3) throw new Error(`lookup() takes two or three arguments, got ${args.length}`);
 			const map = objectArgument(args, 0, 'lookup');
@@ -701,7 +909,7 @@ export const builtinFunctionGroup = {
 			}
 			return arrayValue(results);
 		},
-		max: async (args: RuntimeValue<ValueType>[]) => numberValue(Math.max(...args.map((_, index) => numberArgument(args, index, 'max')))),
+		max: async (args: RuntimeValue<ValueType>[]) => markedLike(numberValue(extreme(args, 1)), args),
 		md5: async (args: RuntimeValue<ValueType>[]) => hash('md5', stringArgument(args, 0, 'md5')),
 		merge: async (args: RuntimeValue<ValueType>[]) => {
 			const merged = new Map<string, RuntimeValue<ValueType>>();
@@ -710,7 +918,7 @@ export const builtinFunctionGroup = {
 			}
 			return objectValue(merged);
 		},
-		min: async (args: RuntimeValue<ValueType>[]) => numberValue(Math.min(...args.map((_, index) => numberArgument(args, index, 'min')))),
+		min: async (args: RuntimeValue<ValueType>[]) => markedLike(numberValue(extreme(args, -1)), args),
 		nonsensitive: async (args: RuntimeValue<ValueType>[]) => unwrapSensitive(requireArgument(args, 0, 'nonsensitive')),
 		one: async (args: RuntimeValue<ValueType>[]) => {
 			const items = arrayArgument(args, 0, 'one');
@@ -718,7 +926,27 @@ export const builtinFunctionGroup = {
 			if (items.length > 1) throw new Error('one requires a list with exactly zero or one element');
 			return items[0];
 		},
-		parseint: async (args: RuntimeValue<ValueType>[]) => numberValue(parseInt(stringArgument(args, 0, 'parseint'), numberArgument(args, 1, 'parseint'))),
+		parseint: async (args: RuntimeValue<ValueType>[]) => {
+			const text = unwrapSensitive(requireArgument(args, 0, 'number'));
+			if (text.type === 'null') throw new Error('Invalid value for "number" parameter: argument must not be null.');
+			if (text.type !== 'string') {
+				const typeName = text.type === 'boolean' ? 'bool' : text.type === 'array' ? 'tuple' : text.type === 'block' ? 'object' : text.type;
+				throw new Error(`Invalid value for "number" parameter: first argument must be a string, not ${typeName}.`);
+			}
+			const baseNumber = numberArgument(args, 1, 'base');
+			let base: number;
+			try {
+				base = Number(baseNumber.toGoInt64());
+			} catch (error) {
+				throw new Error(`Invalid value for "base" parameter: ${error instanceof Error ? error.message : String(error)}.`);
+			}
+			if (base < 2 || base > 62) throw new Error('Invalid value for "base" parameter: base must be a whole number between 2 and 62 inclusive.');
+			const parsed = parseGoInteger(String(text.value), base);
+			if (parsed === undefined) {
+				throw new Error(`Invalid value for "number" parameter: cannot parse ${quoted(String(text.value))} as a base ${base} integer.`);
+			}
+			return markedLike(numberValue(CtyNumber.fromBigInt(parsed)), args);
+		},
 		pathexpand: async (args: RuntimeValue<ValueType>[]) => {
 			const value = stringArgument(args, 0, 'pathexpand');
 			if (value === '~') {
@@ -733,25 +961,34 @@ export const builtinFunctionGroup = {
 			}
 			return stringValue(value);
 		},
-		pow: async (args: RuntimeValue<ValueType>[]) => numberValue(Math.pow(numberArgument(args, 0, 'pow'), numberArgument(args, 1, 'pow'))),
-		// As go-cty's RangeFunc: without a step it counts by 1, or by -1 towards a lower limit. A zero step is not
-		// refused, since go-cty compares it to zero by identity; it counts upwards and meets the 1024 limit.
+		pow: async (args: RuntimeValue<ValueType>[]) => {
+			const number = numberArgument(args, 0, 'num').toGoFloat64();
+			const power = numberArgument(args, 1, 'power').toGoFloat64();
+			return markedLike(float64Value(goPow(number, power)), args);
+		},
+		// As go-cty's RangeFunc: without a step it counts by 1, or by -1 towards a lower limit, from zero when only the
+		// limit is given. A zero step is not refused, since go-cty compares it to zero by identity; it counts upwards
+		// and meets the 1024 limit. Each value is the one before plus the step, and the limit is reached when a value
+		// passes it or equals it as go-cty's equality decides.
 		range: async (args: RuntimeValue<ValueType>[]) => {
 			if (args.length < 1 || args.length > 3) throw new Error('range must have one, two, or three arguments');
-			const numbers = args.map((_, index) => numberArgument(args, index, 'range'));
-			const [start, limit] = numbers.length === 1 ? [0, numbers[0]] : [numbers[0], numbers[1]];
-			const step = numbers.length === 3 ? numbers[2] : (limit < start ? -1 : 1);
-			const down = step < 0;
-			if (down && limit > start) throw new Error('range end must be less than start when step is negative');
-			if (!down && limit < start) throw new Error('range end must be greater than start when step is positive');
+			const numbers = args.map((_, index) => numberArgument(args, index, 'params'));
+			const zero = CtyNumber.fromInt64(0);
+			const [start, limit] = numbers.length === 1 ? [zero, numbers[0]] : [numbers[0], numbers[1]];
+			const step = numbers.length === 3 ? numbers[2] : CtyNumber.fromInt64(limit.compare(start) < 0 ? -1 : 1);
+			const down = step.compare(zero) < 0;
+			if (down && limit.compare(start) > 0) throw new Error('range end must be less than start when step is negative');
+			if (!down && limit.compare(start) < 0) throw new Error('range end must be greater than start when step is positive');
 			const values: RuntimeValue<ValueType>[] = [];
-			for (let value = start; down ? value > limit : value < limit; value += step) {
+			for (let value = start; ; value = value.add(step)) {
+				const order = value.compare(limit);
+				if (down ? order < 0 || value.equals(limit) : order > 0 || value.equals(limit)) break;
 				if (values.length >= 1024) {
 					throw new Error('range failed: more than 1024 values were generated; either decrease the difference between start and end or use a smaller step');
 				}
 				values.push(numberValue(value));
 			}
-			return arrayValue(values);
+			return markedLike(arrayValue(values), args);
 		},
 		regex: async (args: RuntimeValue<ValueType>[]) => regexMatch(stringArgument(args, 0, 'regex'), stringArgument(args, 1, 'regex')),
 		regexall: async (args: RuntimeValue<ValueType>[]) => regexAll(stringArgument(args, 0, 'regexall'), stringArgument(args, 1, 'regexall')),
@@ -761,7 +998,7 @@ export const builtinFunctionGroup = {
 		bcrypt: async (args: RuntimeValue<ValueType>[]) => {
 			if (args.length > 2) throw new Error('bcrypt() takes no more than two arguments');
 			const password = stringArgument(args, 0, 'bcrypt');
-			const cost = args[1] ? numberArgument(args, 1, 'bcrypt') : 10;
+			const cost = args[1] ? integerArgument(args, 1, 'cost') : 10;
 			if (!Number.isInteger(cost) || cost < 4 || cost > 31) throw new Error('bcrypt cost must be an integer between 4 and 31');
 			return stringValue(bcrypt.hashSync(password, cost));
 		},
@@ -816,14 +1053,26 @@ export const builtinFunctionGroup = {
 		sha1: async (args: RuntimeValue<ValueType>[]) => hash('sha1', stringArgument(args, 0, 'sha1')),
 		sha256: async (args: RuntimeValue<ValueType>[]) => hash('sha256', stringArgument(args, 0, 'sha256')),
 		sha512: async (args: RuntimeValue<ValueType>[]) => hash('sha512', stringArgument(args, 0, 'sha512')),
-		signum: async (args: RuntimeValue<ValueType>[]) => numberValue(Math.sign(numberArgument(args, 0, 'signum'))),
+		// go-cty's signum reads its number into a Go int, so it refuses a fraction.
+		signum: async (args: RuntimeValue<ValueType>[]) => markedLike(integerValue(Math.sign(Number(numberArgument(args, 0, 'num').toGoInt64()))), args),
 		slice: async (args: RuntimeValue<ValueType>[]) => {
 			const items = arrayArgument(args, 0, 'slice');
-			const start = numberArgument(args, 1, 'slice');
-			const end = numberArgument(args, 2, 'slice');
+			const start = integerArgument(args, 1, 'start_index');
+			const end = integerArgument(args, 2, 'end_index');
 			return arrayValue(items.slice(start, end));
 		},
-		sort: async (args: RuntimeValue<ValueType>[]) => arrayValue(sortRuntimeList(arrayArgument(args, 0, 'sort'))),
+		// go-cty's sort takes a list of strings, so a number is sorted as the text it converts to, in byte order.
+		sort: async (args: RuntimeValue<ValueType>[]) => {
+			const strings = arrayArgument(args, 0, 'sort').map((item, index) => {
+				const value = unwrapSensitive(item);
+				if (value.type === 'null') throw new Error(`given list element ${index} is null; a null string cannot be sorted`);
+				if (value.type !== 'string' && value.type !== 'number' && value.type !== 'boolean') {
+					throw new Error('Invalid value for "list" parameter: list of string required.');
+				}
+				return coerceToString(value);
+			});
+			return arrayValue(strings.sort(compareStrings).map(stringValue));
+		},
 		split: async (args: RuntimeValue<ValueType>[]) => arrayValue(stringArgument(args, 1, 'split').split(stringArgument(args, 0, 'split')).map(stringValue)),
 		startswith: async (args: RuntimeValue<ValueType>[]) => booleanValue(stringArgument(args, 0, 'startswith').startsWith(stringArgument(args, 1, 'startswith'))),
 		strcontains: async (args: RuntimeValue<ValueType>[]) => booleanValue(stringArgument(args, 0, 'strcontains').includes(stringArgument(args, 1, 'strcontains'))),
@@ -836,10 +1085,31 @@ export const builtinFunctionGroup = {
 			const rest = clusters.slice(Math.max(offset < 0 ? offset + clusters.length : offset, 0));
 			return stringValue((length > 0 ? rest.slice(0, length) : rest).join(''));
 		},
-		sum: async (args: RuntimeValue<ValueType>[]) => numberValue(arrayArgument(args, 0, 'sum').reduce((total, value, index) => {
-			if (value.type !== 'number') throw new Error(`sum list element ${index + 1} must be a number`);
-			return total + Number(value.value);
-		}, 0)),
+		// OpenTofu's sum: the elements, each converted to a number, added in order to the first.
+		sum: async (args: RuntimeValue<ValueType>[]) => {
+			const collection = unwrapSensitive(requireArgument(args, 0, 'list'));
+			if (collection.type !== 'array' && collection.type !== 'object' && collection.type !== 'block') {
+				throw new Error('Invalid value for "list" parameter: cannot sum noniterable.');
+			}
+			const size = collection.type === 'array'
+				? (collection.value as RuntimeValue<ValueType>[]).length
+				: (collection.value as Map<string, RuntimeValue<ValueType>>).size;
+			if (size === 0) throw new Error('Invalid value for "list" parameter: cannot sum an empty list.');
+			if (collection.type !== 'array') throw new Error('Invalid value for "list" parameter: argument must be list, set, or tuple. Received object.');
+			const notNumbers = 'Invalid value for "list" parameter: argument must be list, set, or tuple of number values.';
+			const element = (value: RuntimeValue<ValueType>): CtyNumber => {
+				const item = unwrapSensitive(value);
+				const number = item.type === 'number'
+					? item.value as CtyNumber
+					: item.type === 'string' ? CtyNumber.tryParse(String(item.value)) : undefined;
+				if (number === undefined) throw new Error(notNumbers);
+				return number;
+			};
+			const [first, ...rest] = collection.value as RuntimeValue<ValueType>[];
+			let total = element(first);
+			for (const value of rest) total = total.add(element(value));
+			return markedLike(numberValue(total), args);
+		},
 		textdecodebase64: async (args: RuntimeValue<ValueType>[]) => {
 			const content = stringArgument(args, 0, 'textdecodebase64');
 			const charset = stringArgument(args, 1, 'textdecodebase64');
@@ -887,13 +1157,21 @@ export const builtinFunctionGroup = {
 			if (argument.type === 'array') throw new Error('cannot convert a list to an object');
 			throw new Error('tomap requires an object');
 		},
+		// OpenTofu's tonumber: a number or null as it is, and a string read as go-cty reads a number.
 		tonumber: async (args: RuntimeValue<ValueType>[]) => {
-			const argument = requireArgument(args, 0, 'tonumber');
-			if (argument.type === 'number') return argument;
-			if (argument.type !== 'string') throw new Error('tonumber requires a string or number');
-			const value = Number(String(argument.value));
-			if (Number.isNaN(value)) throw new Error(`cannot convert ${JSON.stringify(String(argument.value))} to number`);
-			return numberValue(value);
+			const argument = requireArgument(args, 0, 'v');
+			const value = unwrapSensitive(argument);
+			if (value.type === 'number' || value.type === 'null') return argument;
+			if (value.type !== 'string') {
+				const typeName = value.type === 'boolean' ? 'bool' : value.type === 'array' ? 'tuple' : 'object';
+				throw new Error(`Invalid value for "v" parameter: cannot convert ${typeName} to number.`);
+			}
+			const number = CtyNumber.tryParse(String(value.value));
+			if (number === undefined) {
+				if ((argument.type as string) === 'sensitive') throw new Error('Invalid value for "v" parameter: cannot convert this sensitive string to number.');
+				throw new Error(`Invalid value for "v" parameter: cannot convert ${quoted(String(value.value))} to number; given string must be a decimal representation of a number.`);
+			}
+			return markedLike(numberValue(number), args);
 		},
 		tostring: async (args: RuntimeValue<ValueType>[]) => {
 			const argument = requireArgument(args, 0, 'tostring');
@@ -966,7 +1244,7 @@ export const builtinFunctionGroup = {
 			const first = Date.parse(stringArgument(args, 0, 'timecmp'));
 			const second = Date.parse(stringArgument(args, 1, 'timecmp'));
 			if (Number.isNaN(first) || Number.isNaN(second)) throw new Error('timecmp requires RFC3339 timestamps');
-			return numberValue(first < second ? -1 : first > second ? 1 : 0);
+			return integerValue(first < second ? -1 : first > second ? 1 : 0);
 		},
 		zipmap: async (args: RuntimeValue<ValueType>[]) => {
 			const keys = arrayArgument(args, 0, 'zipmap');
