@@ -198,6 +198,114 @@ describe('function calls as Terragrunt evaluates them', () => {
 				'"Outer":\n  "A": 2\n  "b": 1\n"outer":\n  "Y": 2\n  "y": 3\n  "z": 1\n'
 			);
 		});
+
+		it('writes collections in block style, a sequence under a key at the key\'s indentation and a collection in a sequence on the dash\'s line', async () => {
+			const calls: Array<[string, string]> = [
+				['yamlencode({ a = { b = { c = 1 }, d = "e" }, f = { g = true } })', '"a":\n  "b":\n    "c": 1\n  "d": "e"\n"f":\n  "g": true\n'],
+				['yamlencode([[1, 2], [[3], []], "x"])', '- - 1\n  - 2\n- - - 3\n  - []\n- "x"\n'],
+				['yamlencode([{ b = 1, A = 2 }, { c = { d = 1 }, e = [1, 2] }, {}])', '- "A": 2\n  "b": 1\n- "c":\n    "d": 1\n  "e":\n  - 1\n  - 2\n- {}\n'],
+				['yamlencode({ k = ["a", "b"], m = { n = [{ o = 1, p = 2 }, [3, 4]] } })', '"k":\n- "a"\n- "b"\n"m":\n  "n":\n  - "o": 1\n    "p": 2\n  - - 3\n    - 4\n'],
+				['yamlencode([[{ a = 1 }], { b = [{ c = 1 }] }])', '- - "a": 1\n- "b":\n  - "c": 1\n'],
+				['yamlencode(toset(["b", "a", "B"]))', '- "B"\n- "a"\n- "b"\n']
+			];
+			for (const [call, encoded] of calls) assert.equal(await value(call), encoded, call);
+		});
+
+		it('writes an empty collection in flow style', async () => {
+			const calls: Array<[string, string]> = [
+				['yamlencode([])', '[]\n'],
+				['yamlencode({})', '{}\n'],
+				['yamlencode(tolist([]))', '[]\n'],
+				['yamlencode(tomap({}))', '{}\n'],
+				['yamlencode({ a = [], b = {}, c = [[], {}] })', '"a": []\n"b": {}\n"c":\n- []\n- {}\n']
+			];
+			for (const [call, encoded] of calls) assert.equal(await value(call), encoded, call);
+		});
+
+		it('writes a null, bool or number plain, and ends the stream with ... after one that is the whole value', async () => {
+			const calls: Array<[string, string]> = [
+				['yamlencode(1)', '1\n...\n'],
+				['yamlencode(-0)', '-0\n...\n'],
+				['yamlencode(true)', 'true\n...\n'],
+				['yamlencode(false)', 'false\n...\n'],
+				['yamlencode(null)', 'null\n...\n'],
+				['yamlencode(1/0)', '+Inf\n...\n'],
+				['yamlencode({ a = 1/0, b = -1/0 })', '"a": +Inf\n"b": -Inf\n'],
+				['yamlencode([1, -1, 0.5, -0, 1e21, 1e-7, 0.000001, 123.456e5, 100000000000000000000, 1.5])', '- 1\n- -1\n- 0.5\n- -0\n- 1000000000000000000000\n- 0.0000001\n- 0.000001\n- 12345600\n- 100000000000000000000\n- 1.5\n'],
+				['yamlencode({ a = null, b = false, c = true, d = 0, e = "" })', '"a": null\n"b": false\n"c": true\n"d": 0\n"e": ""\n']
+			];
+			for (const [call, encoded] of calls) assert.equal(await value(call), encoded, call);
+		});
+
+		it('writes every other string double-quoted', async () => {
+			const calls: Array<[string, string]> = [
+				['yamlencode("a")', '"a"\n'],
+				['yamlencode("")', '""\n'],
+				['yamlencode({ "" = "" })', '"": ""\n'],
+				['yamlencode(["true", "null", "1", "- a", "#", "...", "---", "a: b", "\'", "\\"", "\\\\"])', '- "true"\n- "null"\n- "1"\n- "- a"\n- "#"\n- "..."\n- "---"\n- "a: b"\n- "\'"\n- "\\""\n- "\\\\"\n'],
+				['yamlencode("say \\"hi\\" \\\\ bye")', '"say \\"hi\\" \\\\ bye"\n']
+			];
+			for (const [call, encoded] of calls) assert.equal(await value(call), encoded, call);
+		});
+
+		it('writes a string holding a line feed as a literal block where libyaml allows one', async () => {
+			const calls: Array<[string, string]> = [
+				['yamlencode("a\\nb\\n")', '|\n  a\n  b\n'],
+				['yamlencode("a\\nb")', '|-\n  a\n  b\n'],
+				['yamlencode("a\\n\\n")', '|+\n  a\n\n'],
+				['yamlencode("\\n")', '|2+\n\n'],
+				['yamlencode("\\n\\n")', '|2+\n\n\n'],
+				['yamlencode("\\na")', '|2-\n\n  a\n'],
+				['yamlencode(" a\\nb")', '|2-\n   a\n  b\n'],
+				['yamlencode("a \\nb")', '"a \\nb"\n'],
+				['yamlencode("a\\nb ")', '"a\\nb "\n'],
+				['yamlencode("a\\n\\tb")', '"a\\n\\tb"\n'],
+				['yamlencode("a\\r\\nb")', '"a\\r\\nb"\n'],
+				['yamlencode({ k = "a\\nb\\n", l = "x\\n\\n", m = { n = "c\\nd" } })', '"k": |\n  a\n  b\n"l": |+\n  x\n\n"m":\n  "n": |-\n    c\n    d\n'],
+				['yamlencode({ k = "x\\n\\n" })', '"k": |+\n  x\n\n'],
+				['yamlencode(["a\\nb", "c", ["d\\ne\\n"]])', '- |-\n  a\n  b\n- "c"\n- - |\n    d\n    e\n'],
+				['yamlencode({ "a\\nb" = 1, "c\\n" = [1], "d\\te\\n" = 2 })', '? |-\n  a\n  b\n: 1\n? |\n  c\n: - 1\n? "d\\te\\n"\n: 2\n'],
+				['yamlencode("first line that is long enough to pass the eightieth column of the output by a good margin\\nsecond")', '|-\n  first line that is long enough to pass the eightieth column of the output by a good margin\n  second\n']
+			];
+			for (const [call, encoded] of calls) assert.equal(await value(call), encoded, call);
+		});
+
+		it('folds a double-quoted string at a space past the eightieth column, and writes a key longer than 128 bytes after ?', async () => {
+			const calls: Array<[string, string]> = [
+				['yamlencode("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.")', '"Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt\n  ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation\n  ullamco laboris nisi ut aliquip ex ea commodo consequat."\n'],
+				['yamlencode({ outer = { inner = ["Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua."] } })', '"outer":\n  "inner":\n  - "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor\n    incididunt ut labore et dolore magna aliqua."\n'],
+				['yamlencode("0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 012345  6789   end  ")', '"0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 012345\n  \\ 6789   end  "\n'],
+				['yamlencode("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx yyy")', '"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n  yyy"\n'],
+				['yamlencode("éééééééééé éééééééééé éééééééééé éééééééééé éééééééééé éééééééééé éééééééééé éééééééééé éééééééééé")', '"éééééééééé éééééééééé éééééééééé éééééééééé éééééééééé éééééééééé éééééééééé éééééééééé\n  éééééééééé"\n'],
+				['yamlencode("😀😀😀😀😀😀😀😀 😀😀😀😀😀😀😀😀 😀😀😀😀😀😀😀😀 😀😀😀😀😀😀😀😀 end")', '"\\U0001F600\\U0001F600\\U0001F600\\U0001F600\\U0001F600\\U0001F600\\U0001F600\\U0001F600\n  \\U0001F600\\U0001F600\\U0001F600\\U0001F600\\U0001F600\\U0001F600\\U0001F600\\U0001F600\n  \\U0001F600\\U0001F600\\U0001F600\\U0001F600\\U0001F600\\U0001F600\\U0001F600\\U0001F600\n  \\U0001F600\\U0001F600\\U0001F600\\U0001F600\\U0001F600\\U0001F600\\U0001F600\\U0001F600\n  end"\n'],
+				['yamlencode("tab\\tseparated\\tvalues\\tthat\\tgo\\tpast\\tthe\\teightieth\\tcolumn\\tof\\tthe\\tline and then some words")', '"tab\\tseparated\\tvalues\\tthat\\tgo\\tpast\\tthe\\teightieth\\tcolumn\\tof\\tthe\\tline and\n  then some words"\n'],
+				['yamlencode({ "a key that is longer than eighty columns but no longer than one hundred and twenty-eight bytes" = 1 })', '"a key that is longer than eighty columns but no longer than one hundred and twenty-eight bytes": 1\n'],
+				['yamlencode({ "a key that is longer than one hundred and twenty-eight bytes, so the emitter cannot write it as a simple key and must use an explicit one" = { a = 1 } })', '? "a key that is longer than one hundred and twenty-eight bytes, so the emitter cannot\n  write it as a simple key and must use an explicit one"\n: "a": 1\n'],
+				['yamlencode({ "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk" = [1, 2] })', '? "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk"\n: - 1\n  - 2\n'],
+				['yamlencode("a line with a trailing space \\nand a second line that is long enough to pass the eightieth column of the output")', '"a line with a trailing space \\nand a second line that is long enough to pass the\n  eightieth column of the output"\n']
+			];
+			for (const [call, encoded] of calls) assert.equal(await value(call), encoded, call);
+		});
+
+		it('escapes what libyaml does not print, and every character of a string that begins with a byte order mark', async () => {
+			const calls: Array<[string, string]> = [
+				['yamlencode("😀")', '"\\U0001F600"\n'],
+				['yamlencode({ "😀" = "x😀y" })', '"\\U0001F600": "x\\U0001F600y"\n'],
+				['yamlencode("\\u0000\\u0001\\u0007\\u0008\\t\\u000b\\u000c\\r\\u001b\\u001f\\u007f")', '"\\0\\x01\\a\\b\\t\\v\\f\\r\\e\\x1F\\x7F"\n'],
+				['yamlencode("\\u0080\\u0085\\u009f\\u00a0ÿ")', '"\\x80\\N\\x9F\u{a0}ÿ"\n'],
+				['yamlencode("a\\u2028b\\u2029c")', '"a\\Lb\\Pc"\n'],
+				['yamlencode({ "a\\u2028b" = 1 })', '? "a\\Lb"\n: 1\n'],
+				['yamlencode("\\ue000\\ufeff\\ufffd\\ufffe\\uffff\\ud7ff")', '"\u{e000}\\uFEFF\u{fffd}\\uFFFE\\uFFFF\u{d7ff}"\n'],
+				['yamlencode("\\ufeffab")', '"\\uFEFF\\x61\\x62"\n'],
+				['yamlencode({ "\\ufeffk" = "v" })', '"\\uFEFF\\x6B": "v"\n'],
+				['yamlencode("é中ｚ\\u00a1")', '"é中ｚ\u{a1}"\n']
+			];
+			for (const [call, encoded] of calls) assert.equal(await value(call), encoded, call);
+		});
+
+		it('encodes a sensitive value inside the value as the value it holds', async () => {
+			assert.equal(await value('yamlencode({ a = sensitive("x"), b = [sensitive(1)] })'), '"a": "x"\n"b":\n- 1\n');
+		});
 	});
 
 	describe('keys, values and for expressions', () => {

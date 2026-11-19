@@ -326,30 +326,257 @@ function jsonEncode(value: RuntimeValue<ValueType>): string {
 	}
 }
 
-function yamlEncode(value: RuntimeValue<ValueType>, indent = ''): string {
-	const current = value;
-	if (current.type === 'string') return JSON.stringify(String(current.value));
-	if (current.type === 'number' || current.type === 'boolean') return String(current.value);
-	if (current.type === 'null') return 'null';
-	if (current.type === 'array') {
-		const items = current.value as RuntimeValue<ValueType>[];
-		if (items.length === 0) return '[]';
-		return items.map(item => {
-			const rendered = yamlEncode(item, `${indent}  `);
-			if (item.type === 'object' || item.type === 'block' || item.type === 'array') return `${indent}-\n${rendered}`;
-			return `${indent}- ${rendered}`;
-		}).join('\n');
+/** How far libyaml indents each level, and the column past which it folds a double-quoted scalar at a space. */
+const yamlIndent = 2;
+const yamlWidth = 80;
+
+/** The escapes libyaml writes in a double-quoted scalar by name rather than by number. */
+const yamlNamedEscapes = new Map<number, string>([
+	[0x00, '0'], [0x07, 'a'], [0x08, 'b'], [0x09, 't'], [0x0a, 'n'], [0x0b, 'v'], [0x0c, 'f'], [0x0d, 'r'], [0x1b, 'e'],
+	[0x22, '"'], [0x5c, '\\'], [0x85, 'N'], [0xa0, '_'], [0x2028, 'L'], [0x2029, 'P']
+]);
+
+/** Whether libyaml writes a character unescaped: a line feed, printable ASCII, and the Basic Multilingual Plane from U+00A0 up but for the surrogates, U+FEFF, U+FFFE and U+FFFF. */
+function yamlPrintable(code: number): boolean {
+	return code === 0x0a || (code >= 0x20 && code <= 0x7e) || (code >= 0xa0 && code <= 0xd7ff) || (code >= 0xe000 && code <= 0xfffd && code !== 0xfeff);
+}
+
+/** Whether libyaml takes a character as a line break: CR, LF, NEL, LS or PS. */
+function yamlBreak(code: number): boolean {
+	return code === 0x0d || code === 0x0a || code === 0x85 || code === 0x2028 || code === 0x2029;
+}
+
+/**
+ * A value as go-cty-yaml's Marshal writes it, which yamlencode returns: the events it sends through its port of
+ * libyaml's emitter, written as that emitter writes them. A null, bool or number is a plain scalar, written as
+ * big.Float's Text('f', -1) writes the number; a string is double-quoted, or a literal block when it holds a line
+ * feed and the emitter allows one there; a list, set or tuple is a block sequence and an object or map a block
+ * mapping with its keys in the order of their bytes, either written in flow style when it is empty.
+ */
+class YamlEmitter {
+	private output = '';
+	private column = 0;
+	private whitespace = true;
+	private indention = true;
+	private openEnded = false;
+	private indent = -1;
+	private readonly indents: number[] = [];
+
+	static encode(value: RuntimeValue<ValueType>): string {
+		const emitter = new YamlEmitter();
+		emitter.node(value, true, false, false);
+		// DOCUMENT-END, implicit.
+		emitter.writeIndent();
+		// STREAM-END: a plain scalar at the root leaves the stream open-ended, and libyaml closes it with `...`.
+		if (emitter.openEnded) {
+			emitter.writeIndicator('...', true, false, false);
+			emitter.writeIndent();
+		}
+		return emitter.output;
 	}
-	if (current.type === 'object' || current.type === 'block') {
-		const entries = [...(current.value as Map<string, RuntimeValue<ValueType>>).entries()].sort(([left], [right]) => compareStrings(left, right));
-		if (entries.length === 0) return '{}';
-		return entries.map(([key, item]) => {
-			const rendered = yamlEncode(item, `${indent}  `);
-			if (rendered.includes('\n')) return `${indent}${JSON.stringify(key)}:\n${rendered}`;
-			return `${indent}${JSON.stringify(key)}: ${rendered}`;
-		}).join('\n');
+
+	private node(value: RuntimeValue<ValueType>, root: boolean, mapping: boolean, simpleKey: boolean): void {
+		const current = unwrapSensitive(value);
+		switch (current.type) {
+			case 'null':
+				return this.plainScalar('null', root);
+			case 'boolean':
+				return this.plainScalar(current.value ? 'true' : 'false', root);
+			case 'number':
+				return this.plainScalar(yamlNumber(Number(current.value)), root);
+			case 'string':
+				return this.stringScalar(String(current.value), simpleKey);
+			case 'array': {
+				const items = current.value as RuntimeValue<ValueType>[];
+				if (items.length === 0) return this.emptyCollection('[', ']');
+				return this.blockSequence(items, mapping);
+			}
+			case 'object':
+			case 'block': {
+				const map = current.value as Map<string, RuntimeValue<ValueType>>;
+				if (map.size === 0) return this.emptyCollection('{', '}');
+				return this.blockMapping([...map.entries()].sort(([left], [right]) => compareStrings(left, right)));
+			}
+			default:
+				throw new Error(`yamlencode cannot encode ${current.type}`);
+		}
 	}
-	throw new Error(`yamlencode cannot encode ${current.type}`);
+
+	private blockSequence(items: RuntimeValue<ValueType>[], mapping: boolean): void {
+		// A sequence that is a mapping's value, on the line after its key, is not indented further than the key.
+		this.increaseIndent(false, mapping && !this.indention);
+		for (const item of items) {
+			this.writeIndent();
+			this.writeIndicator('-', true, false, true);
+			this.node(item, false, false, false);
+		}
+		this.indent = this.indents.pop()!;
+	}
+
+	private blockMapping(entries: Array<[string, RuntimeValue<ValueType>]>): void {
+		this.increaseIndent(false, false);
+		for (const [key, item] of entries) {
+			this.writeIndent();
+			// A key on more than one line, or longer than 128 bytes, cannot be a simple key and is written after `?`.
+			if (!yamlMultiline(key) && Buffer.byteLength(key, 'utf8') <= 128) {
+				this.stringScalar(key, true);
+				this.writeIndicator(':', false, false, false);
+			} else {
+				this.writeIndicator('?', true, false, true);
+				this.stringScalar(key, false);
+				this.writeIndent();
+				this.writeIndicator(':', true, false, true);
+			}
+			this.node(item, false, true, false);
+		}
+		this.indent = this.indents.pop()!;
+	}
+
+	private emptyCollection(open: string, close: string): void {
+		this.writeIndicator(open, true, true, false);
+		this.writeIndicator(close, false, false, false);
+	}
+
+	/** A null, bool or number, whose text holds no space, line break or indicator. */
+	private plainScalar(text: string, root: boolean): void {
+		if (!this.whitespace) this.put(' ');
+		this.write(text);
+		this.whitespace = false;
+		this.indention = false;
+		if (root) this.openEnded = true;
+	}
+
+	private stringScalar(text: string, simpleKey: boolean): void {
+		const codes = Array.from(text, character => character.codePointAt(0)!);
+		// go-cty-yaml asks for a literal block when the string holds a line feed; libyaml writes it double-quoted
+		// instead where a block is not allowed: in a simple key, or for a string with a space at its end or before a
+		// line break, or a character it must escape.
+		const literal = text.includes('\n') && !simpleKey && codes[codes.length - 1] !== 0x20
+			&& !codes.some((code, index) => !yamlPrintable(code) || (yamlBreak(code) && codes[index - 1] === 0x20));
+		this.increaseIndent(true, false);
+		if (literal) this.writeLiteral(codes);
+		else this.writeDoubleQuoted(codes, !simpleKey);
+		this.indent = this.indents.pop()!;
+	}
+
+	private writeDoubleQuoted(codes: number[], allowBreaks: boolean): void {
+		this.writeIndicator('"', true, false, false);
+		// libyaml tests for a byte order mark at the start of the string rather than at each character, so a string
+		// that begins with one has every character escaped.
+		const bom = codes[0] === 0xfeff;
+		let spaces = false;
+		for (let index = 0; index < codes.length; index++) {
+			const code = codes[index];
+			if (bom || !yamlPrintable(code) || yamlBreak(code) || code === 0x22 || code === 0x5c) {
+				this.put('\\');
+				const named = yamlNamedEscapes.get(code);
+				if (named !== undefined) this.put(named);
+				else if (code <= 0xff) this.write(`x${yamlHex(code, 2)}`);
+				else if (code <= 0xffff) this.write(`u${yamlHex(code, 4)}`);
+				else this.write(`U${yamlHex(code, 8)}`);
+				spaces = false;
+			} else if (code === 0x20) {
+				// A space past the width, after something other than a space and before the last character, becomes
+				// the fold; a space after it is escaped so that the fold does not swallow it.
+				if (allowBreaks && !spaces && this.column > yamlWidth && index > 0 && index < codes.length - 1) {
+					this.writeIndent();
+					if (codes[index + 1] === 0x20) this.put('\\');
+				} else {
+					this.put(' ');
+				}
+				spaces = true;
+			} else {
+				this.put(String.fromCodePoint(code));
+				spaces = false;
+			}
+		}
+		this.writeIndicator('"', false, false, false);
+		this.whitespace = false;
+		this.indention = false;
+	}
+
+	private writeLiteral(codes: number[]): void {
+		this.writeIndicator('|', true, false, false);
+		// The indentation indicator, when the first line begins with a space or is empty.
+		if (codes[0] === 0x20 || yamlBreak(codes[0])) this.writeIndicator(String(yamlIndent), false, false, false);
+		// Chomping: strip the final line break when there is none, keep every one when there is more than one.
+		// libyaml marks the stream open-ended for `+`, and writing the indicator clears the mark again.
+		const last = codes.length - 1;
+		if (!yamlBreak(codes[last])) this.writeIndicator('-', false, false, false);
+		else if (last === 0 || yamlBreak(codes[last - 1])) this.writeIndicator('+', false, false, false);
+		this.putBreak();
+		this.indention = true;
+		this.whitespace = true;
+		let breaks = true;
+		for (const code of codes) {
+			if (yamlBreak(code)) {
+				if (code === 0x0a) this.putBreak();
+				else {
+					this.output += String.fromCodePoint(code);
+					this.column = 0;
+				}
+				this.indention = true;
+				breaks = true;
+			} else {
+				if (breaks) this.writeIndent();
+				this.put(String.fromCodePoint(code));
+				this.indention = false;
+				breaks = false;
+			}
+		}
+	}
+
+	private increaseIndent(flow: boolean, indentless: boolean): void {
+		this.indents.push(this.indent);
+		if (this.indent < 0) this.indent = flow ? yamlIndent : 0;
+		else if (!indentless) this.indent += yamlIndent;
+	}
+
+	private writeIndent(): void {
+		const indent = Math.max(this.indent, 0);
+		if (!this.indention || this.column > indent || (this.column === indent && !this.whitespace)) this.putBreak();
+		while (this.column < indent) this.put(' ');
+		this.whitespace = true;
+		this.indention = true;
+	}
+
+	private writeIndicator(indicator: string, needWhitespace: boolean, isWhitespace: boolean, isIndention: boolean): void {
+		if (needWhitespace && !this.whitespace) this.put(' ');
+		this.write(indicator);
+		this.whitespace = isWhitespace;
+		this.indention = this.indention && isIndention;
+		this.openEnded = false;
+	}
+
+	/** Writes characters, each one column wide whatever its encoded length. */
+	private write(text: string): void {
+		for (const character of text) this.put(character);
+	}
+
+	private put(character: string): void {
+		this.output += character;
+		this.column++;
+	}
+
+	private putBreak(): void {
+		this.output += '\n';
+		this.column = 0;
+	}
+}
+
+function yamlMultiline(text: string): boolean {
+	return /[\r\n\u0085\u2028\u2029]/.test(text);
+}
+
+function yamlHex(code: number, digits: number): string {
+	return code.toString(16).toUpperCase().padStart(digits, '0');
+}
+
+/** A number as go-cty-yaml writes it: as go-cty writes it into JSON, and an infinity as +Inf or -Inf. */
+function yamlNumber(value: number): string {
+	if (value === Infinity) return '+Inf';
+	if (value === -Infinity) return '-Inf';
+	return jsonNumber(value);
 }
 
 function parseCsvRow(row: string): string[] {
@@ -942,7 +1169,7 @@ export const builtinFunctionGroup = {
 			for (const item of items) if (!distinct.some(existing => valueEquals(existing, item))) distinct.push(item);
 			return arrayValue(sortRuntimeList(distinct));
 		},
-		yamlencode: async (args: RuntimeValue<ValueType>[]) => stringValue(`${yamlEncode(requireArgument(args, 0, 'yamlencode'))}\n`),
+		yamlencode: async (args: RuntimeValue<ValueType>[]) => stringValue(YamlEmitter.encode(requireArgument(args, 0, 'yamlencode'))),
 		formatdate: async (args: RuntimeValue<ValueType>[]) => stringValue(formatDate(stringArgument(args, 0, 'formatdate'), stringArgument(args, 1, 'formatdate'))),
 		timeadd: async (args: RuntimeValue<ValueType>[]) => {
 			const time = stringArgument(args, 0, 'timeadd');
