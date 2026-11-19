@@ -27,6 +27,7 @@ import {
 	makeSensitiveValue,
 	makeStringValue,
 	runtimeToPlain,
+	templatePart,
 	unwrapSensitive
 } from './functions/utils';
 import { isDefect } from './unresolved';
@@ -2269,15 +2270,46 @@ export class ConfigEvaluator {
 		return makeObjectValue(map);
 	}
 
+	/**
+	 * Evaluates a quoted string or heredoc holding a template sequence as HCL does. One that is a single interpolation
+	 * and nothing else gives that interpolation's value as it is, of whatever type, as HCL's TemplateWrapExpr does;
+	 * any other is rendered to a string. A literal a strip marker emptied is still a part, as it is to HCL.
+	 *
+	 * @param node the interpolated string.
+	 * @param scope the scope of the file it is written in.
+	 * @returns its value.
+	 */
 	private async evalInterpolatedString(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
+		const children = node.children ?? [];
+		if (children.length === 1 && children[0].type === 'interpolation') return this.evalNode(children[0], scope);
+		return this.renderTemplate(node, scope);
+	}
+
+	/**
+	 * Renders a template to a string as HCL's TemplateExpr does, each interpolation's value converted as
+	 * {@link templatePart} converts it, even where the template is one interpolation: a directive's branch or loop is
+	 * a template of its own that HCL never passes through.
+	 *
+	 * @param node the template: an interpolated string, or a string literal for one with no sequence in it.
+	 * @param scope the scope of the file it is written in.
+	 * @returns the rendered string, sensitive when any part is.
+	 * @throws Error where a value is written that does not convert, in HCL's words.
+	 */
+	private async renderTemplate(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
+		if (node.type === 'string_lit') return makeStringValue(String(node.value ?? ''));
+		if (node.type !== 'interpolated_string') throw new Error(`A template cannot be a ${node.type}`);
 		const parts = await this.settleOperands((node.children ?? []).map(child => {
-			if (child.type === 'string_lit') return async () => String(child.value ?? '');
+			if (child.type === 'string_lit') return async () => ({ text: String(child.value ?? ''), sensitive: false });
 			if (child.type === 'interpolation' || child.type === 'if_directive' || child.type === 'for_directive') {
-				return async () => coerceToString(computable(await this.evalNode(child, scope)));
+				return async () => {
+					const value = computable(await this.evalNode(child, scope));
+					return this.atNode(child.type === 'interpolation' ? child.children?.[0] : child, scope, () => templatePart(value));
+				};
 			}
 			throw new Error(`A template cannot hold a ${child.type}`);
 		}));
-		return makeStringValue(parts.join(''));
+		const rendered = makeStringValue(parts.map(part => part.text).join(''));
+		return parts.some(part => part.sensitive) ? makeSensitiveValue(rendered) : rendered;
 	}
 
 	/**
@@ -2292,7 +2324,7 @@ export class ConfigEvaluator {
 		const [condition, whenTrue, whenFalse] = node.children ?? [];
 		const value = computable(await this.evalNode(condition, scope));
 		const truth = this.atNode(condition, scope, () => conditionValue(value));
-		return this.evalNode(truth ? whenTrue : whenFalse, scope);
+		return this.renderTemplate(truth ? whenTrue : whenFalse, scope);
 	}
 
 	/**
@@ -2303,7 +2335,7 @@ export class ConfigEvaluator {
 	 * @param node the for_directive: its key variable if it has one, its value variable, the collection and the
 	 *   template it repeats.
 	 * @param scope the scope of the file it is written in.
-	 * @returns the concatenated renderings, sensitive when the collection is.
+	 * @returns the concatenated renderings, sensitive when the collection or any rendering is.
 	 * @throws Error at the collection when it is null or cannot be iterated, in HCL's words.
 	 */
 	private async evalTemplateFor(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
@@ -2314,6 +2346,7 @@ export class ConfigEvaluator {
 		const collectionValue = unwrapSensitive(marked);
 		const items = this.atNode(collection, scope, () => iterateValue(collectionValue));
 		let rendered = '';
+		let sensitive = marked !== collectionValue;
 		for (const [key, item] of items) {
 			const frame = new Map<string, RuntimeValue<ValueType>>();
 			if (variables.length === 2) {
@@ -2322,12 +2355,15 @@ export class ConfigEvaluator {
 			frame.set(String(variables[variables.length - 1].value ?? ''), item);
 			scope.comprehension.push(frame);
 			try {
-				rendered += coerceToString(computable(await this.evalNode(template, scope)));
+				const repeated = await this.renderTemplate(template, scope);
+				const text = unwrapSensitive(repeated);
+				rendered += String(text.value);
+				sensitive ||= text !== repeated;
 			} finally {
 				scope.comprehension.pop();
 			}
 		}
-		return marked === collectionValue ? makeStringValue(rendered) : makeSensitiveValue(makeStringValue(rendered));
+		return sensitive ? makeSensitiveValue(makeStringValue(rendered)) : makeStringValue(rendered);
 	}
 
 	private async evalComparison(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {

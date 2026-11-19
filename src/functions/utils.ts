@@ -172,6 +172,43 @@ export function coerceToString(value: RuntimeValue<ValueType>): string {
 }
 
 /**
+ * An interpolation's value as a string template includes it, as HCL's TemplateExpr converts one (cty's conversion to
+ * a string): a string as it is, a number or a bool written out. A sensitive value is included as the value it
+ * protects, and makes the rendered string sensitive.
+ *
+ * A template that is one interpolation and nothing else is not converted: HCL gives it the interpolation's value as
+ * it is.
+ *
+ * @returns the text the value renders as, and whether it was sensitive.
+ * @throws Error saying why the value cannot be included, in HCL's words: null and collections do not convert. HCL
+ *   names a collection by its cty type; values have one kind of collection each, so a list or a set is named a tuple
+ *   and a map an object.
+ */
+export function templatePart(value: RuntimeValue<ValueType>): { text: string; sensitive: boolean } {
+    const protectedValue = unwrapSensitive(value);
+    const sensitive = protectedValue !== value;
+    switch (protectedValue.type) {
+        case 'string':
+        case 'number':
+        case 'boolean':
+            return { text: String(protectedValue.value), sensitive };
+        case 'null':
+            throw new Error('The expression result is null. Cannot include a null value in a string template.');
+        case 'array':
+            return failTemplatePart('tuple');
+        case 'object':
+        case 'block':
+            return failTemplatePart('object');
+        default:
+            return failTemplatePart(protectedValue.type);
+    }
+}
+
+function failTemplatePart(type: string): never {
+    throw new Error(`Cannot include the given value in a string template: string required, but have ${type}.`);
+}
+
+/**
  * A value converted to a bool as HCL converts one (cty's conversion): a bool as it is, null as null, and the strings
  * "true" and "1", "false" and "0". Nothing else converts: no other string, number or collection.
  *

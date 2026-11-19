@@ -61,8 +61,13 @@ export class ValueTypeReader {
 	typeOf(node: any): ModuleType {
 		switch (node?.type) {
 			case 'string_lit':
-			case 'interpolated_string':
 				return { kind: 'primitive', name: 'string', text: 'string' };
+			case 'interpolated_string': {
+				// A template that is one interpolation and nothing else is that interpolation's value, as HCL gives it.
+				const children = node.children ?? [];
+				if (children.length === 1 && children[0].type === 'interpolation') return this.typeOf(children[0].children?.[0]);
+				return { kind: 'primitive', name: 'string', text: 'string' };
+			}
 			case 'number_lit':
 				return { kind: 'primitive', name: 'number', text: 'number' };
 			case 'boolean_lit':
