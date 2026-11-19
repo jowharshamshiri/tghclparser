@@ -5,6 +5,7 @@ import { URI } from 'vscode-uri';
 
 import { base64GzipCompat } from '../gzip-compat';
 import type { FunctionContext, RuntimeValue, ValueType } from '../model';
+import { goRepoRoot } from './git_repo_root';
 import { expectParams, makeArrayValue, makeBooleanValue, makeObjectValue, makeSensitiveValue, makeStringValue, unwrapSensitive } from './utils';
 
 const defaultRetryableErrors = [
@@ -57,19 +58,14 @@ const TerraformCommandsNeedParallelism = [
     'apply', 'plan', 'destroy',
 ];
 async function findParentWithFile(
-    startDir: string, 
-    filename: string, 
-    context: FunctionContext,
-    includeStart = true
+    startDir: string,
+    filename: string,
+    context: FunctionContext
 ): Promise<string | null> {
-    let currentDir = path.resolve(startDir);
     if (!context.fs?.access) {
 		throw new Error('Filesystem access is required to resolve parent files');
     }
-
-    if (!includeStart) {
-        currentDir = path.dirname(currentDir);
-    }
+    let currentDir = path.dirname(path.resolve(startDir));
 	const workspaceRoot = context.workspaceRoot ? path.resolve(context.workspaceRoot) : undefined;
 
     while (true) {
@@ -92,11 +88,26 @@ async function findParentWithFile(
     }
 }
 
-async function requireRepositoryRoot(context: FunctionContext): Promise<string> {
-	const currentDir = path.dirname(URI.parse(context.document.uri).fsPath);
-	const marker = await findParentWithFile(currentDir, '.git', context, true);
-	if (!marker) throw new Error(`No Git repository contains ${currentDir}`);
-	return path.dirname(marker);
+// The directory Terragrunt's repository-root functions answer for: the unit's,
+// in a configuration the unit includes as well.
+function repositoryWorkingDirectory(context: FunctionContext): string {
+	return context.terragruntDir ?? path.dirname(URI.parse(context.document.uri).fsPath);
+}
+
+async function topLevelDirectory(workingDirectory: string, context: FunctionContext): Promise<string> {
+	try {
+		return await goRepoRoot(workingDirectory, context.environmentVariables, context.repoRoots);
+	} catch (error) {
+		throw new Error(`getting git top level dir: ${(error as Error).message}`, { cause: error });
+	}
+}
+
+// Go's filepath.Rel: "." for the same directory, and a failure for paths with
+// no relative path between them, such as two Windows volumes.
+function goRelative(base: string, target: string, failure: string): string {
+	const relative = path.relative(base, target);
+	if (path.isAbsolute(relative)) throw new Error(`${failure}: Rel: can't make ${target} relative to ${base}`);
+	return relative || '.';
 }
 export const coreFunctionGroup = {
     namespace: 'core',
@@ -191,7 +202,7 @@ export const coreFunctionGroup = {
 			// A filename unique to the parent resolved fine, which is why this
 			// survived: it only bites when the two names agree, which is the
 			// case every real configuration hits.
-			const foundDir = await findParentWithFile(currentDir, fileToFind, context, false);
+			const foundDir = await findParentWithFile(currentDir, fileToFind, context);
                 
 			if (!foundDir) {
 				if (fallback !== undefined) {
@@ -255,22 +266,24 @@ export const coreFunctionGroup = {
 		get_repo_root: async (
 			_args: RuntimeValue<ValueType>[],
 			context: FunctionContext
-		): Promise<RuntimeValue<ValueType>> => makeStringValue(context.repoRoot ?? await requireRepositoryRoot(context)),
+		): Promise<RuntimeValue<ValueType>> => makeStringValue(await goRepoRoot(repositoryWorkingDirectory(context), context.environmentVariables, context.repoRoots)),
+		// The root comes with its links resolved and the working directory as
+		// written, so a unit reached through a link answers a path through it.
 		get_path_from_repo_root: async (
 			_args: RuntimeValue<ValueType>[],
 			context: FunctionContext
 		): Promise<RuntimeValue<ValueType>> => {
-			const currentDir = context.terragruntDir ?? path.dirname(URI.parse(context.document.uri).fsPath);
-			const repoRoot = context.repoRoot ?? await requireRepositoryRoot(context);
-			return makeStringValue(path.relative(repoRoot, currentDir) || '.');
+			const workingDirectory = repositoryWorkingDirectory(context);
+			const repoRoot = await topLevelDirectory(workingDirectory, context);
+			return makeStringValue(goRelative(repoRoot, workingDirectory, 'computing path relative to repo root'));
 		},
 		get_path_to_repo_root: async (
 			_args: RuntimeValue<ValueType>[],
 			context: FunctionContext
 		): Promise<RuntimeValue<ValueType>> => {
-			const currentDir = context.terragruntDir ?? path.dirname(URI.parse(context.document.uri).fsPath);
-			const repoRoot = context.repoRoot ?? await requireRepositoryRoot(context);
-			return makeStringValue(path.relative(currentDir, repoRoot) || '.');
+			const workingDirectory = repositoryWorkingDirectory(context);
+			const repoRoot = await topLevelDirectory(workingDirectory, context);
+			return makeStringValue(goRelative(workingDirectory, repoRoot, 'computing path to repo root'));
 		},
 
         get_working_dir: async (

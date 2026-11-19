@@ -11,6 +11,7 @@ import { checkTypeConstraint, readInlineFunction, readTypeConstraint, synthesize
 import { parseHclSyntax } from './syntax';
 import { Schema } from './Schema';
 import { encryptedSopsDocument } from './sops';
+import { goRepoRoot, RepoRootError } from './functions/git_repo_root';
 import type { FunctionArity, FunctionContext, FunctionDefinition, RuntimeValue, ValueType } from './model';
 import {
 	coerceToString,
@@ -433,6 +434,8 @@ interface UnitContext {
 	resolved: Map<string, Promise<RuntimeValue<ValueType> | undefined>>;
 	/** Scopes for merged files that have not been evaluated when a dependency needs one, by path. */
 	structuralScopes: Map<string, Scope>;
+	/** The run's Git repository roots by the directories walked to them, shared with the configurations it reads. */
+	repoRoots: Map<string, string>;
 }
 
 type MergeStrategy = 'no_merge' | 'shallow' | 'deep';
@@ -1067,7 +1070,13 @@ export class ConfigEvaluator {
 	/** A fresh {@link UnitContext} for evaluating `filePath` as a unit. */
 	private newUnitContext(filePath: string, unitDir?: string): UnitContext {
 		const unitPath = path.resolve(filePath);
-		return { unitPath, unitDir: unitDir ?? path.dirname(unitPath), resolved: new Map(), structuralScopes: new Map() };
+		return {
+			unitPath,
+			unitDir: unitDir ?? path.dirname(unitPath),
+			resolved: new Map(),
+			structuralScopes: new Map(),
+			repoRoots: this.unitContext.getStore()?.repoRoots ?? new Map()
+		};
 	}
 
 	private async evaluateFile(filePath: string, content: string, workDir: string, unitDir?: string, skipInputs = false): Promise<FileResult> {
@@ -1350,11 +1359,6 @@ export class ConfigEvaluator {
 	}
 
 	private async makeContext(scope: Scope): Promise<FunctionContext> {
-		// A configuration need not live in a Git repository. Functions that
-		// genuinely require the repository root resolve it themselves and raise
-		// their own error, so resolving it eagerly here would fail evaluations
-		// that never ask for it.
-		const repoRoot = await this.findRepoRoot(scope.unitDir ?? scope.dir);
 		return {
 			workingDirectory: scope.dir,
 			environmentVariables: this.options.environmentVariables,
@@ -1386,7 +1390,7 @@ export class ConfigEvaluator {
 				original: scope.unit !== undefined && path.resolve(scope.filePath) !== scope.unit.unitPath ? scope.dir : undefined,
 				named: new Map([...scope.includes].map(([name, include]) => [name, include.dir]))
 			},
-			repoRoot,
+			repoRoots: this.unitContext.getStore()?.repoRoots,
 			readTerragruntConfig: async (relativePath: string) => {
 				this.assertTrusted('read_terragrunt_config');
 				const target = path.isAbsolute(relativePath)
@@ -1653,21 +1657,6 @@ export class ConfigEvaluator {
 		const plain: Record<string, unknown> = {};
 		for (const key of [...values.keys()].sort()) plain[key] = runtimeValueToPlain(values.get(key)!);
 		return makeStringValue(JSON.stringify(plain));
-	}
-
-	/**
-	 * Locates the Git repository containing `startDir`, or undefined when the
-	 * configuration is not inside a repository. Callers that require a
-	 * repository report that themselves.
-	 */
-	private async findRepoRoot(startDir: string): Promise<string | undefined> {
-		let current = path.resolve(startDir);
-		while (true) {
-			if (await pathExists(path.join(current, '.git'))) return current;
-			const parent = path.dirname(current);
-			if (parent === current) return undefined;
-			current = parent;
-		}
 	}
 
 	private async resolveLocal(scope: Scope, name: string): Promise<RuntimeValue<ValueType>> {
@@ -2798,6 +2787,15 @@ export class ConfigEvaluator {
 			includes[name] = exposed;
 		}
 
+		const terragruntDir = context.terragruntDir ?? scope.dir;
+		let repoRoot: string | null;
+		try {
+			repoRoot = await goRepoRoot(terragruntDir, context.environmentVariables, context.repoRoots);
+		} catch (error) {
+			if (!(error instanceof RepoRootError)) throw error;
+			repoRoot = null;
+		}
+
 		return {
 			call: async (name: unknown, ...callArgs: unknown[]): Promise<unknown> => {
 				if (typeof name !== 'string' || name === '') {
@@ -2831,8 +2829,8 @@ export class ConfigEvaluator {
 				name => `Inline function "${definition.name}" referenced unexposed or undefined include "${name}"`
 			),
 			context: {
-				terragruntDir: context.terragruntDir ?? scope.dir,
-				repoRoot: context.repoRoot ?? null,
+				terragruntDir,
+				repoRoot,
 				workingDirectory: context.workingDirectory,
 				environmentVariables: { ...context.environmentVariables }
 			}

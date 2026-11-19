@@ -459,7 +459,11 @@ export interface FunctionContext {
 	 * directories of the configurations this one includes, by label.
 	 */
 	includes?: { original?: string; named: Map<string, string> };
-	repoRoot?: string;
+	/**
+	 * The run's Git repository roots by the directories walked to them, as Terragrunt memoizes them for a run, so a
+	 * repository made while the run goes on is not seen. Without it every lookup walks afresh.
+	 */
+	repoRoots?: Map<string, string>;
 	readTerragruntConfig?: (relativePath: string) => Promise<RuntimeValue<ValueType> | undefined>;
 	readTFVarsFile?: (relativePath: string) => Promise<RuntimeValue<ValueType> | undefined>;
 	runCommand?: (program: string, args: string[]) => Promise<string>;

@@ -17,6 +17,15 @@ export function isUnreadable(error: unknown): boolean {
 	return unreadableCodes.has((error as NodeJS.ErrnoException).code ?? '');
 }
 
+// Go's text for the failures a stat of a named path can meet.
+export const goStatFailures: Record<string, string> = {
+	EACCES: 'permission denied',
+	ELOOP: 'too many levels of symbolic links',
+	ENAMETOOLONG: 'file name too long',
+	ENOTDIR: 'not a directory',
+	EPERM: 'operation not permitted'
+};
+
 // Go orders a directory's entries by the bytes of their names.
 function byName(left: string, right: string): number {
 	return Buffer.compare(Buffer.from(left), Buffer.from(right));

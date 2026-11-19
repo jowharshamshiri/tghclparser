@@ -536,16 +536,6 @@ export class Workspace {
 		}
 	}
 
-	private async findRepositoryRoot(startDir: string): Promise<string | undefined> {
-		let current = path.resolve(startDir);
-		while (true) {
-			if (await this.fileExists(path.join(current, '.git'))) return current;
-			const parent = path.dirname(current);
-			if (parent === current) return undefined;
-			current = parent;
-		}
-	}
-
 	public async resolveDependencyPath(pathToken: Token, sourceUri: string, unitDir?: string): Promise<string> {
 		const sourcePath = URI.parse(sourceUri).fsPath;
 		const sourceDir = path.dirname(sourcePath);
@@ -1268,7 +1258,6 @@ export class Workspace {
 			// Without this `find_in_parent_folders` falls back to the document URI and starts one level above the file doing the
 			// searching.
 			terragruntDir: sourceDir,
-			repoRoot: await this.findRepositoryRoot(sourceDir),
 			fs: { access: async filePath => fs.access(filePath) }
 		};
 
@@ -1358,7 +1347,7 @@ export class Workspace {
 					if (error instanceof UnresolvableReadPath) continue;
 					throw error;
 				}
-				for (const match of await expandTerragruntGlob(values, resolveFrom)) reads.add(URI.file(match).toString());
+				for (const match of await expandTerragruntGlob(values, resolveFrom, process.env)) reads.add(URI.file(match).toString());
 				continue;
 			}
 			let configuredPath: string;

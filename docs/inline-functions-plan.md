@@ -474,9 +474,10 @@ supports a nested `function` declaration inside a body.
 **`makeContext` resolved the repository root eagerly**, so evaluating any
 configuration outside a Git repository failed with `No Git repository contains
 …`. Inline functions call `makeContext` on every invocation, which made this
-surface constantly. The functions that genuinely need the repository root already
-resolve it themselves and raise their own error, so `repoRoot` is now resolved
-only when a repository exists (`findRepoRoot`).
+surface constantly. The functions that genuinely need the repository root
+resolve it themselves and raise their own error, and the `tg` binding's
+`repoRoot` is what `get_repo_root` answers, or `null` where it finds no
+repository.
 
 **Collecting inherited declarations must not evaluate the configuration.** The
 first implementation called `evaluateFile`, so any error anywhere — including the
