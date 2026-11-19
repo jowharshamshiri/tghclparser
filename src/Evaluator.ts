@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { CtyNumber } from './cty-number';
+import { CtyNumber, NUMBER_OUT_OF_RANGE } from './cty-number';
 import { arithmetic, comparison, negation, sequencePosition } from './cty-operations';
 import { FunctionOperation, invokeFunctionOperation, readArgs, FUNCTION_CONTEXT_KEY } from './function-ops';
 import type { InlineFunctionDefinition } from './inline-functions';
@@ -1189,6 +1189,7 @@ export class ConfigEvaluator {
 		for (const name of mergedUnresolved.keys()) mergedInputs.delete(name);
 
 		if (ownInputs === null && mergedInputs.size === 0 && mergedUnresolved.size === 0) mergedInputs = null;
+		if (mergedInputs !== null) checkInputNumbers(mergedInputs);
 
 		return {
 			filePath,
@@ -2600,12 +2601,49 @@ function comprehensionKey(value: RuntimeValue<ValueType>): string {
 /**
  * The value of a number literal, read from its text as HCL reads it with go-cty's ParseNumberVal.
  *
- * @throws Error in HCL's words when the text is not a number go-cty can read.
+ * @throws Error in HCL's words when the text is not a number go-cty can read, and in Terragrunt's when its magnitude is
+ *   beyond 1e±4096, which Terragrunt refuses as it parses a configuration.
  */
 function numberLiteral(node: TNode): CtyNumber {
 	const number = CtyNumber.tryParse(String(node.value));
 	if (!number) throw new Error('Invalid number literal: Failed to recognize the value of this number literal.');
+	if (!number.withinSupportedRange()) throw new Error(NUMBER_OUT_OF_RANGE);
 	return number;
+}
+
+/**
+ * Refuses inputs Terragrunt cannot convert, as its ParseCtyValueToMap refuses them for every command: first a number
+ * whose magnitude is beyond 1e±4096, named by its path in the inputs, and then an infinity, which JSON cannot hold.
+ * Attributes are visited in the order of their names, as go-cty walks an object.
+ *
+ * @param inputs the inputs.
+ */
+function checkInputNumbers(inputs: Map<string, RuntimeValue<ValueType>>): void {
+	let infinite = false;
+	const visit = (value: RuntimeValue<ValueType>, path: string): void => {
+		const current = unwrapSensitive(value);
+		switch (current.type) {
+			case 'number': {
+				const number = current.value as CtyNumber;
+				if (!number.withinSupportedRange()) throw new Error(`${path}: ${NUMBER_OUT_OF_RANGE}`);
+				if (number.isInfinite()) infinite = true;
+				return;
+			}
+			case 'array':
+				(current.value as RuntimeValue<ValueType>[]).forEach((item, index) => visit(item, `${path}[${index}]`));
+				return;
+			case 'object':
+			case 'block': {
+				const map = current.value as Map<string, RuntimeValue<ValueType>>;
+				for (const key of [...map.keys()].sort(compareStrings)) visit(map.get(key)!, `${path}.${key}`);
+				return;
+			}
+			default:
+				return;
+		}
+	};
+	for (const key of [...inputs.keys()].sort(compareStrings)) visit(inputs.get(key)!, key);
+	if (infinite) throw new Error('failed to serialize value: cannot serialize infinity as JSON');
 }
 
 /**
