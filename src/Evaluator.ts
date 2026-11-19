@@ -11,8 +11,13 @@ import { Schema } from './Schema';
 import { encryptedSopsDocument } from './sops';
 import type { FunctionContext, FunctionDefinition, RuntimeValue, ValueType } from './model';
 import {
-	coerceToBool,
 	coerceToString,
+	conditionValue,
+	convertToBool,
+	type LogicalOperand,
+	logicalOperation,
+	NULL_OPERAND,
+	operandBool,
 	convertToRuntimeValue,
 	makeArrayValue,
 	makeBooleanValue,
@@ -147,6 +152,71 @@ function nodeRange(node: TNode): Range | undefined {
 	};
 }
 
+/** The variables a `locals` block can read, as Terragrunt names them. */
+const LOCALS_ROOTS = ['local', 'include', 'feature', 'values'];
+
+/** The variable each kind of reference node reads, for the kinds whose variable the grammar fixes. */
+const REFERENCE_ROOTS: Record<string, string> = {
+	local_reference: 'local',
+	dependency_reference: 'dependency',
+	module_reference: 'module',
+	terraform_reference: 'terraform',
+	var_reference: 'var',
+	data_reference: 'data',
+	path_reference: 'path'
+};
+
+/** Nodes that name something rather than read a variable: a for expression's variables, members, functions and keys. */
+const NAMING_NODES = new Set(['identifier', 'function_identifier', 'attribute_identifier', 'type_parameters']);
+
+/**
+ * The variables an expression reads, by the name each is rooted at, in the order they are written: what HCL's
+ * `Expression.Variables()` gives. A for expression's own variables are not among them, inside it, whatever they are
+ * called; its collection is read outside them.
+ *
+ * @param node the expression.
+ * @param bound the names the for expressions around it bind.
+ * @returns the root names, one per reference.
+ */
+function variableRoots(node: TNode, bound: ReadonlySet<string> = new Set()): string[] {
+	const root = REFERENCE_ROOTS[node.type]
+		?? (node.type === 'reference' || node.type === 'traversal_reference' ? String(node.value ?? '') : undefined);
+	if (root !== undefined) return bound.has(root) ? [] : [root];
+	const children = node.children ?? [];
+	if (node.type === 'list_comprehension' || node.type === 'map_comprehension' || node.type === 'for_expression') {
+		const names = children.filter(child => child.type === 'identifier').map(child => String(child.value ?? ''));
+		const [collection, ...body] = children.filter(child => child.type !== 'identifier');
+		const inner = new Set([...bound, ...names]);
+		return [
+			...(collection ? variableRoots(collection, bound) : []),
+			...body.flatMap(child => variableRoots(child, inner))
+		];
+	}
+	return children.filter(child => !NAMING_NODES.has(child.type)).flatMap(child => variableRoots(child, bound));
+}
+
+/**
+ * Refuses a local that reads a variable a `locals` block cannot see, as Terragrunt does before evaluating any: a
+ * dependency's outputs, `var`, `terraform` and the rest. The reference alone decides, whether or not evaluation would
+ * reach it.
+ *
+ * @param node the local's expression.
+ * @param filePath the configuration it is written in.
+ * @throws LocatedEvaluationError naming the first such variable, with one further fault for each other.
+ */
+function assertLocalReadsOnlyLocalsRoots(node: TNode, filePath: string): void {
+	const refused = [...new Set(variableRoots(node).filter(root => !LOCALS_ROOTS.includes(root)))];
+	if (refused.length === 0) return;
+	const messages = refused.map(root =>
+		`Locals can only reference these variables: ${LOCALS_ROOTS.join(', ')}. This expression references "${root}".`
+	);
+	const range = nodeRange(node);
+	if (!range) throw new Error(messages[0]);
+	const [first, ...rest] = messages.map(message => new LocatedEvaluationError(message, filePath, range));
+	first.further.push(...rest);
+	throw first;
+}
+
 export class UnreadableSopsFileError extends UnresolvedRenderValueError {
 	constructor(file: string, reason: string) {
 		super(`sops could not decrypt ${file}: ${reason}`);
@@ -190,12 +260,15 @@ export class UnresolvedDependencyError extends UnresolvedRenderValueError {
  *
  * `kind` says what the span is: an `expression`, or the `name` of an attribute, whose value is the one bound to it.
  * A name's value is always also the value of the expression beside it, so a caller marking spans can leave names
- * out and lose nothing, while one answering a hover still has them.
+ * out and lose nothing, while one answering a hover still has them. The `elements` of a `for` expression's
+ * collection are the values its variable takes, as a list in the order HCL visits them, gathered over every element
+ * of the `for` expressions around it: they are not the collection's value, which is its `expression` span when it
+ * has one, and are for completing the variable, not for showing.
  */
 export interface EvaluatedSpan {
 	start: number;
 	end: number;
-	kind: 'name' | 'expression';
+	kind: 'name' | 'expression' | 'elements';
 	value: RuntimeValue<ValueType>;
 }
 
@@ -866,7 +939,68 @@ export class ConfigEvaluator {
 			for (const child of node.children ?? []) await visit(child, node);
 		};
 		await visit(result.scope.ast, undefined);
-		return [...spans.values()].sort((left, right) => left.start - right.start || right.end - left.end);
+		const elements = await this.forElements(result.scope);
+		return [...spans.values(), ...elements].sort((left, right) => left.start - right.start || right.end - left.end);
+	}
+
+	/**
+	 * The `elements` spans of a file: for each `for` expression, the values its variable takes. Its collection is
+	 * evaluated once for each element of every `for` expression around it, with their variables bound, so a literal
+	 * collection and one that reads an outer variable have elements as any other does. An evaluation that fails, such
+	 * as for an element an outer condition would leave out, adds nothing.
+	 *
+	 * @param scope the file's scope.
+	 * @returns one span per collection that gave any elements, in the order the file is written.
+	 */
+	private async forElements(scope: Scope): Promise<EvaluatedSpan[]> {
+		const gathered = new Map<TNode, RuntimeValue<ValueType>[]>();
+		const visit = async (node: TNode): Promise<void> => {
+			if (node.type !== 'list_comprehension' && node.type !== 'map_comprehension') {
+				for (const child of node.children ?? []) await visit(child);
+				return;
+			}
+			const children = node.children ?? [];
+			const variables = children[1]?.type === 'identifier' ? children.slice(0, 2) : children.slice(0, 1);
+			const [collection, ...body] = children.slice(variables.length);
+			if (!collection) return;
+			await visit(collection);
+			let items: Array<[string, RuntimeValue<ValueType>]> = [];
+			let collectionValue: RuntimeValue<ValueType> | undefined;
+			try {
+				collectionValue = await this.evalNode(collection, scope);
+				if (!collectionValue.encrypted) items = iterateValue(collectionValue);
+			} catch {
+				items = [];
+			}
+			const kept = gathered.get(collection) ?? [];
+			kept.push(...items.map(([, item]) => item).filter(item => !item.encrypted));
+			gathered.set(collection, kept);
+			// A body is visited once for each element, so a for expression inside it sees that element.
+			for (const [key, item] of items) {
+				const frame = new Map<string, RuntimeValue<ValueType>>();
+				if (variables.length === 2) {
+					frame.set(String(variables[0].value ?? ''), collectionValue?.type === 'array' ? makeNumberValue(Number(key)) : makeStringValue(key));
+				}
+				frame.set(String(variables.at(-1)?.value ?? ''), item);
+				scope.comprehension.push(frame);
+				try {
+					for (const child of body) await visit(child);
+				} finally {
+					scope.comprehension.pop();
+				}
+			}
+			// With no elements to bind, a for expression inside the body still has its own collection, if it reads none.
+			if (items.length === 0) for (const child of body) await visit(child);
+		};
+		await visit(scope.ast);
+		return [...gathered]
+			.filter(([collection, values]) => collection.location && values.length > 0)
+			.map(([collection, values]) => ({
+				start: collection.location!.start.offset,
+				end: collection.location!.end.offset,
+				kind: 'elements',
+				value: makeArrayValue(values)
+			}));
 	}
 
 	private nodeWidth(node: TNode): number {
@@ -899,7 +1033,16 @@ export class ConfigEvaluator {
 			if (attrName === 'path') {
 				pathNode = child;
 			} else if (attrName === 'expose') {
-				expose = coerceToBool(await this.evalNode(requiredValueNode(child), scope));
+				// Terragrunt decodes expose as an optional bool: null is false.
+				const exposeNode = requiredValueNode(child);
+				const value = await this.evalNode(exposeNode, scope);
+				expose = this.atNode(exposeNode, scope, () => {
+					try {
+						return convertToBool(value) ?? false;
+					} catch (error) {
+						throw new Error(`Unsuitable value: ${(error as Error).message}`);
+					}
+				});
 			} else if (attrName === 'merge_strategy') {
 				mergeStrategy = readMergeStrategy(await this.evalNode(requiredValueNode(child), scope), name, scope.filePath);
 			}
@@ -1085,7 +1228,7 @@ export class ConfigEvaluator {
 		if (!skipInputs && unit.scope === scope) {
 			// Terragrunt evaluates every local of a unit and of the configurations it includes, whether anything reads it
 			// or not, and fails on a broken one. They are evaluated only once every include is read, as a local may read
-			// a dependency declared in any of them.
+			// any of them.
 			for (const owner of configurationScopes(scope)) {
 				for (const name of owner.locals.keys()) {
 					try {
@@ -1271,6 +1414,17 @@ export class ConfigEvaluator {
 					if (this.options.readEncryptedSops) {
 						const encrypted = await encryptedSopsDocument(filePath);
 						if (encrypted !== undefined) return { content: encrypted, encrypted: true };
+					}
+					// Terragrunt decrypts with sops built in; this needs the sops program, and says so when it is missing.
+					if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+						// Offline, a file reaches here only when it holds no sops metadata to read as written.
+						const offline = this.options.readEncryptedSops
+							? '.'
+							: ', or validate offline with "hcl validate --offline" to read the file as written.';
+						throw new Error(
+							`sops_decrypt_file cannot decrypt ${filePath}: the sops program is not on PATH. ` +
+							`Install sops (https://github.com/getsops/sops/releases) and put it on PATH${offline}`
+						);
 					}
 					if (!this.options.partialRender) throw error;
 					const stderr = (error as {stderr?: unknown}).stderr;
@@ -1521,6 +1675,7 @@ export class ConfigEvaluator {
 
 		const node = scope.locals.get(name);
 		if (!node) throw new Error(`Undefined local value "${name}"`);
+		assertLocalReadsOnlyLocalsRoots(node, scope.filePath);
 		const evaluation = this.localResolutionPath.run(
 			[...activePath, { scope, name }],
 			() => this.evalNode(node, scope)
@@ -1847,6 +2002,71 @@ export class ConfigEvaluator {
 	}
 
 	/**
+	 * Runs a check of a value already evaluated, placing a fault it finds where the value's expression is written
+	 * rather than where the expression around it is.
+	 *
+	 * @param node the expression the value is of.
+	 * @param scope the scope of the file it is written in.
+	 * @param check the check.
+	 * @returns what the check returns.
+	 */
+	private atNode<T>(node: TNode | undefined, scope: Scope, check: () => T): T {
+		try {
+			return check();
+		} catch (error) {
+			const range = node ? nodeRange(node) : undefined;
+			if (!(error instanceof Error) || !range) throw error;
+			throw new LocatedEvaluationError(error.message, scope.filePath, range, { cause: error });
+		}
+	}
+
+	/**
+	 * `!`, `&&` or `||`, as HCL evaluates them. Each operand must convert to a bool, an operand of `&&` or `||` even
+	 * where the other decides. Both operands of `&&` and `||` are evaluated, and one that decides the result drops
+	 * what the other threw, a value not known yet or a fault.
+	 *
+	 * @param node the logical expression.
+	 * @param scope the scope of the file it is written in.
+	 * @returns its value.
+	 */
+	private async evalLogical(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
+		const operator = node.value === undefined ? '' : String(node.value);
+		const [first, second] = node.children ?? [];
+		if (operator === '!') {
+			const value = computable(await this.evalNode(first, scope));
+			const truth = this.atNode(first, scope, () => operandBool(value, 'unary'));
+			if (truth === null) throw new Error(NULL_OPERAND);
+			return makeBooleanValue(!truth);
+		}
+		if (operator !== '&&' && operator !== '||') throw new Error(`Unknown logical operator "${operator}"`);
+		const operands: LogicalOperand[] = [];
+		const invalid: LocatedEvaluationError[] = [];
+		for (const [operandNode, side] of [[first, 'left'], [second, 'right']] as const) {
+			let value: RuntimeValue<ValueType>;
+			try {
+				value = computable(await this.evalNode(operandNode, scope));
+			} catch (error) {
+				if (error instanceof Error && isDefect(error)) throw error;
+				operands.push({ error });
+				continue;
+			}
+			try {
+				operands.push(this.atNode(operandNode, scope, () => operandBool(value, side)));
+			} catch (error) {
+				if (!(error instanceof LocatedEvaluationError)) throw error;
+				invalid.push(error);
+				operands.push(null);
+			}
+		}
+		if (invalid.length > 0) {
+			const [firstInvalid, ...rest] = invalid;
+			firstInvalid.further.push(...rest);
+			throw firstInvalid;
+		}
+		return makeBooleanValue(logicalOperation(operator, operands[0], operands[1]));
+	}
+
+	/**
 	 * Evaluates every operand of an expression. One that cannot be known yet does not stop the rest, so a fault
 	 * beside it, such as `local.nope` in `"${dependency.x.outputs.y}-${local.nope}"`, is still found.
 	 *
@@ -1913,19 +2133,12 @@ export class ConfigEvaluator {
 				return this.evalNode(node.children?.[0], scope);
 			case 'ternary_expression': {
 				const [condition, whenTrue, whenFalse] = node.children ?? [];
-				const truth = coerceToBool(computable(await this.evalNode(condition, scope)));
+				const value = computable(await this.evalNode(condition, scope));
+				const truth = this.atNode(condition, scope, () => conditionValue(value));
 				return truth ? this.evalNode(whenTrue, scope) : this.evalNode(whenFalse, scope);
 			}
-			case 'logical_expression': {
-				const operator = node.value === undefined ? '' : String(node.value);
-				if (operator === '!') {
-					return makeBooleanValue(!coerceToBool(computable(await this.evalNode(node.children?.[0], scope))));
-				}
-				const left = coerceToBool(computable(await this.evalNode(node.children?.[0], scope)));
-				if (operator === '&&') return makeBooleanValue(left && coerceToBool(computable(await this.evalNode(node.children?.[1], scope))));
-				if (operator === '||') return makeBooleanValue(left || coerceToBool(computable(await this.evalNode(node.children?.[1], scope))));
-				throw new Error(`Unknown logical operator "${operator}"`);
-			}
+			case 'logical_expression':
+				return this.evalLogical(node, scope);
 			case 'comparison_expression':
 				return this.evalComparison(node, scope);
 			case 'arithmetic_expression':
@@ -2560,11 +2773,13 @@ function iterateValue(value: RuntimeValue<ValueType>): Array<[string, RuntimeVal
  * @throws Error when the clause is null or does not convert to a bool, as HCL refuses it.
  */
 function comprehensionCondition(value: RuntimeValue<ValueType>): boolean {
-	if (value.type === 'boolean') return Boolean(value.value);
 	if (value.type === 'null') throw new Error('The "if" clause of a for expression must not be null');
-	if (value.type === 'string' && (value.value === 'true' || value.value === 'false')) return value.value === 'true';
-	const shown = value.type === 'string' ? ` ${JSON.stringify(value.value)}` : '';
-	throw new Error(`The "if" clause of a for expression must be a bool, got ${value.type}${shown}`);
+	try {
+		return convertToBool(value) as boolean;
+	} catch {
+		const shown = value.type === 'string' ? ` ${JSON.stringify(value.value)}` : '';
+		throw new Error(`The "if" clause of a for expression must be a bool, got ${value.type}${shown}`);
+	}
 }
 
 /**

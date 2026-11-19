@@ -4,7 +4,7 @@ import { gunzipSync } from 'node:zlib';
 import path from 'node:path';
 
 import { ConfigEvaluator, runtimeValueToPlain } from '../src/Evaluator';
-import { ENCRYPTED_SOPS_JSON, ENCRYPTED_SOPS_YAML, withoutSopsKey } from './sops-fixture';
+import { ENCRYPTED_SOPS_JSON, ENCRYPTED_SOPS_YAML, withoutSops, withoutSopsKey } from './sops-fixture';
 
 describe('semantic configuration evaluation', () => {
 	const evaluator = new ConfigEvaluator({
@@ -144,6 +144,133 @@ describe('semantic configuration evaluation', () => {
 
 		it('lets a variable shadow a namespace of the same name', async () => {
 			assert.deepEqual(await forInputs('[for local in [{ provider = "x" }] : local.provider]'), ['x']);
+		});
+
+		it('takes the strings "1" and "0" as a condition, as HCL converts them', async () => {
+			assert.deepEqual(await forInputs('[for v in [1, 2] : v if v > 1 ? "1" : "0"]'), [2]);
+		});
+	});
+
+	describe('bool operands and conditions', () => {
+		const evaluate = (expression: string) => evaluator.evaluateUnit(configPath, `inputs = {\n  x = ${expression}\n}\n`, process.cwd());
+		const value = async (expression: string): Promise<unknown> => {
+			const result = await evaluate(expression);
+			assert.equal(result.error, undefined, expression);
+			return (runtimeValueToPlain(result.inputs!) as Record<string, unknown>).x;
+		};
+		/** The one fault an expression has, and the columns of line 2 it is written at. */
+		const fault = async (expression: string): Promise<[string, number, number]> => {
+			const result = await evaluate(expression);
+			assert.equal(result.valid, false, expression);
+			assert.equal(result.unresolved, undefined, expression);
+			assert.equal(result.problems?.length, 1, `${expression}: ${result.error}`);
+			const [problem] = result.problems!;
+			assert.equal(problem.range.start.line, 1, expression);
+			return [problem.message, problem.range.start.character, problem.range.end.character];
+		};
+
+		it('takes a bool, and the strings HCL converts to one', async () => {
+			assert.equal(await value('true && "true"'), true);
+			assert.equal(await value('"1" && true'), true);
+			assert.equal(await value('!"0"'), true);
+			assert.equal(await value('"false" || "0"'), false);
+			assert.equal(await value('"1" ? "a" : "b"'), 'a');
+			assert.equal(await value('"0" ? "a" : "b"'), 'b');
+		});
+
+		it('takes null in && and || where the other side decides, as HCL does', async () => {
+			assert.equal(await value('null && true'), false);
+			assert.equal(await value('true && null'), false);
+			assert.equal(await value('null || true'), true);
+		});
+
+		it('drops a fault on the side that && or || does not need, as HCL does', async () => {
+			assert.equal(await value('false && local.nope'), false);
+			assert.equal(await value('local.nope && false'), false);
+			assert.equal(await value('true || local.nope'), true);
+			assert.match((await fault('true && local.nope'))[0], /Undefined local value "nope"/);
+		});
+
+		it('refuses an operand that is not a bool, where the operand is written', async () => {
+			assert.deepEqual(await fault('1 && true'), ['Unsuitable value for left operand: bool required, but have number.', 6, 7]);
+			assert.deepEqual(await fault('true || 0'), ['Unsuitable value for right operand: bool required, but have number.', 14, 15]);
+			assert.deepEqual(await fault('!1'), ['Unsuitable value for unary operand: bool required, but have number.', 7, 8]);
+			assert.deepEqual(await fault('"x" && true'), ['Unsuitable value for left operand: a bool is required.', 6, 9]);
+			assert.deepEqual(await fault('"TRUE" && true'), ['Unsuitable value for left operand: a bool is required; to convert from string, use lowercase "true".', 6, 12]);
+			assert.deepEqual(await fault('[] && true'), ['Unsuitable value for left operand: bool required, but have tuple.', 6, 8]);
+			assert.deepEqual(await fault('{} || false'), ['Unsuitable value for left operand: bool required, but have object.', 6, 8]);
+		});
+
+		it('refuses an operand that is not a bool even when the other side decides', async () => {
+			assert.deepEqual(await fault('false && 1'), ['Unsuitable value for right operand: bool required, but have number.', 15, 16]);
+			assert.deepEqual(await fault('true || 1'), ['Unsuitable value for right operand: bool required, but have number.', 14, 15]);
+		});
+
+		it('refuses both operands when neither is a bool', async () => {
+			const result = await evaluate('1 && "x"');
+			assert.deepEqual(result.problems?.map(problem => problem.message), [
+				'Unsuitable value for left operand: bool required, but have number.',
+				'Unsuitable value for right operand: a bool is required.'
+			]);
+		});
+
+		it('refuses null where nothing else decides', async () => {
+			assert.deepEqual(await fault('!null'), ['Error during operation: argument must not be null.', 6, 11]);
+			assert.deepEqual(await fault('null || false'), ['Error during operation: argument must not be null.', 6, 19]);
+		});
+
+		it('refuses a condition that is not a bool, or is null, where the condition is written', async () => {
+			assert.deepEqual(await fault('1 ? "a" : "b"'), ['The condition expression must be of type bool.', 6, 7]);
+			assert.deepEqual(await fault('"x" ? "a" : "b"'), ['The condition expression must be of type bool.', 6, 9]);
+			assert.deepEqual(await fault('"False" ? "a" : "b"'), ['The condition expression must be of type bool.', 6, 13]);
+			assert.deepEqual(await fault('[true] ? "a" : "b"'), ['The condition expression must be of type bool.', 6, 12]);
+			assert.deepEqual(await fault('null ? "a" : "b"'), ['The condition value is null. Conditions must either be true or false.', 6, 10]);
+		});
+
+		describe('in a template', () => {
+			let dir: string;
+			before(async () => {
+				const os = await import('node:os');
+				const fs = await import('node:fs/promises');
+				dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-template-bool-')));
+			});
+			after(async () => {
+				const fs = await import('node:fs/promises');
+				await fs.rm(dir, { recursive: true, force: true });
+			});
+			const render = async (template: string) => {
+				const fs = await import('node:fs/promises');
+				await fs.writeFile(path.join(dir, 't.tpl'), template);
+				return evaluator.evaluateUnit(path.join(dir, 'terragrunt.hcl'), 'inputs = { x = templatefile("t.tpl", {}) }', dir);
+			};
+			const rendered = async (template: string) => {
+				const result = await render(template);
+				assert.equal(result.error, undefined, template);
+				return (runtimeValueToPlain(result.inputs!) as Record<string, unknown>).x;
+			};
+			const refused = async (template: string) => {
+				const result = await render(template);
+				assert.equal(result.valid, false, template);
+				return result.error ?? '';
+			};
+
+			it('renders the branch an if takes, and only that one', async () => {
+				assert.equal(await rendered('%{ if true }yes%{ else }no%{ endif }'), 'yes');
+				assert.equal(await rendered('%{ if false }yes%{ else }no%{ endif }'), 'no');
+				assert.equal(await rendered('%{ if false }yes%{ endif }'), '');
+				assert.match(await refused('%{ if true }a%{ else }b%{ else }c%{ endif }'), /Unexpected else directive; Already in the else clause for the if/);
+			});
+
+			it('holds conditions and operators to the same', async () => {
+				assert.equal(await rendered('%{ if "1" }yes%{ else }no%{ endif }'), 'yes');
+				assert.equal(await rendered('${!"true"}'), 'false');
+				assert.equal(await rendered('${null && true}'), 'false');
+				assert.match(await refused('%{ if 1 }yes%{ else }no%{ endif }'), /The condition expression must be of type bool\./);
+				assert.match(await refused('%{ if null }yes%{ endif }'), /The condition value is null\. Conditions must either be true or false\./);
+				assert.match(await refused('${1 && true}'), /Unsuitable value for left operand: bool required, but have number\./);
+				assert.match(await refused('${"x" ? "a" : "b"}'), /The condition expression must be of type bool\./);
+				assert.match(await refused('${!null}'), /Error during operation: argument must not be null\./);
+			});
 		});
 	});
 
@@ -343,6 +470,25 @@ describe('semantic configuration evaluation', () => {
 					exposed: 'live/app'
 				});
 			});
+		});
+
+		it('takes an expose HCL converts to a bool, null as false, and refuses any other, as Terragrunt does', async () => {
+			const unit = (expose: string) => ({
+				'root.hcl': 'locals {\n  a = 1\n}\n',
+				'live/app/terragrunt.hcl': `include "root" {\n  path   = find_in_parent_folders("root.hcl")\n  expose = ${expose}\n}\n`
+			});
+			for (const expose of ['"1"', 'null', '"false"']) {
+				await withUnit(unit(expose), (_root, result) => assert.equal(result.valid, true, `${expose}: ${result.error}`));
+			}
+			for (const [expose, message, start, end] of [
+				['"yes"', 'Unsuitable value: a bool is required', 11, 16],
+				['1', 'Unsuitable value: bool required, but have number', 11, 12]
+			] as const) {
+				await withUnit(unit(expose), (_root, result) => {
+					assert.deepEqual(result.problems?.map(problem => [problem.message, problem.range.start.line, problem.range.start.character, problem.range.end.character]),
+						[[message, 2, start, end]], expose);
+				});
+			}
 		});
 
 		it('answers in the unit with the directory of the configuration it includes', async () => {
@@ -1179,6 +1325,56 @@ describe('semantic configuration evaluation', () => {
 		} finally {
 			await fs.rm(root, { recursive: true, force: true });
 		}
+	});
+
+	describe('without sops installed', () => {
+		const missing = (root: string, file: string) =>
+			`sops_decrypt_file cannot decrypt ${path.join(root, file)}: the sops program is not on PATH. ` +
+			'Install sops (https://github.com/getsops/sops/releases) and put it on PATH, or validate offline with ' +
+			'"hcl validate --offline" to read the file as written.';
+		const withEvaluator = async (options: { partialRender?: boolean; readEncryptedSops?: boolean }, check: (root: string, result: Awaited<ReturnType<ConfigEvaluator['evaluateUnit']>>) => void) => {
+			const fs = await import('node:fs/promises');
+			const root = await sopsWorkspace();
+			try {
+				const reader = new ConfigEvaluator({ environmentVariables: {}, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true, ...options });
+				check(root, await withoutSops(root, () => reader.evaluateUnit(path.join(root, 'terragrunt.hcl'), sopsUnit, root)));
+			} finally {
+				await fs.rm(root, { recursive: true, force: true });
+			}
+		};
+
+		it('fails naming sops and how to provide it', async () => {
+			await withEvaluator({}, (root, result) => {
+				assert.equal(result.valid, false);
+				assert.equal(result.unresolved, undefined);
+				assert.equal(result.error, missing(root, 'secrets.sops.yaml'));
+			});
+		});
+
+		it('fails a render too, rather than leaving the secrets out', async () => {
+			await withEvaluator({ partialRender: true }, (root, result) => {
+				assert.equal(result.unresolved, undefined);
+				assert.equal(result.error, missing(root, 'secrets.sops.yaml'));
+			});
+		});
+
+		it('reads the file as written when validating offline, which needs no sops', async () => {
+			await withEvaluator({ readEncryptedSops: true }, (_root, result) => assert.equal(result.valid, true, result.error));
+		});
+
+		it('fails offline on a file with no sops metadata to read as written, naming sops', async () => {
+			const fs = await import('node:fs/promises');
+			const root = await sopsWorkspace();
+			try {
+				await fs.writeFile(path.join(root, 'secrets.sops.yaml'), 'token: plain\n');
+				const reader = new ConfigEvaluator({ environmentVariables: {}, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true, readEncryptedSops: true });
+				const result = await withoutSops(root, () => reader.evaluateUnit(path.join(root, 'terragrunt.hcl'), sopsUnit, root));
+				assert.equal(result.error, `sops_decrypt_file cannot decrypt ${path.join(root, 'secrets.sops.yaml')}: the sops program is not on PATH. ` +
+					'Install sops (https://github.com/getsops/sops/releases) and put it on PATH.');
+			} finally {
+				await fs.rm(root, { recursive: true, force: true });
+			}
+		});
 	});
 
 	it('still fails on a file sops cannot decrypt that holds no sops metadata, even when asked to read keys', async () => {

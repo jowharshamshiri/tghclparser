@@ -6,7 +6,7 @@ import { expect } from 'chai';
 import type { CompletionItem, Position } from 'vscode-languageserver';
 import { URI } from 'vscode-uri';
 
-import { ConfigEvaluator } from '../../src/Evaluator';
+import { ConfigEvaluator, runtimeValueToPlain } from '../../src/Evaluator';
 import { ParsedDocument } from '../../src/ParsedDocument';
 import { Workspace } from '../../src/Workspace';
 import { ENCRYPTED_SOPS_YAML, withoutSopsKey } from '../sops-fixture';
@@ -292,6 +292,46 @@ inputs = {
 
 			const shadowed = await evaluatedUnit('[for c in values(local.containers) : [for c in local.sizes : c.name]]');
 			expect(labels(await complete(shadowed, '[for c in values(local.containers) : [for c in local.sizes : c.<|>]]'))).to.deep.equal(['name']);
+		});
+
+		it('offers the keys of a nested for expression\'s variable, whose collection reads the outer variable', async () => {
+			const nested = (body: string) => `[for c in values(local.containers) : [for k, v in c : ${body}]]`;
+			const previous = await evaluatedUnit(nested('k'));
+
+			// Every element the inner variable takes, over every element of the outer one, in the order HCL visits them.
+			expect(labels(await complete(previous, nested('v.<|>')))).to.deep.equal(['cidr']);
+
+			const deeper = (body: string) => `[for c in values(local.containers) : [for n in [c.network] : ${body}] if c.provider == "AWS"]`;
+			const network = await evaluatedUnit(deeper('n.cidr'));
+			expect(labels(await complete(network, deeper('n.<|>')))).to.deep.equal(['cidr']);
+		});
+
+		it('offers the keys of the elements of a literal collection', async () => {
+			const list = (body: string) => `[for s in [{ name = "M10", tier = 1 }, { name = "M20", disk = 40 }] : ${body}]`;
+			const fromList = await evaluatedUnit(list('s.name'));
+			expect((await complete(fromList, list('s.<|>'))).map(item => [item.label, item.detail])).to.deep.equal([
+				['name', '"M10"'],
+				['tier', '1'],
+				['disk', '40']
+			]);
+
+			const object = (body: string) => `{for k, z in { b = { name = "second" }, a = { label = "first" } } : k => ${body}}`;
+			const fromObject = await evaluatedUnit(object('z'));
+			expect(labels(await complete(fromObject, object('z.<|>')))).to.deep.equal(['label', 'name']);
+		});
+
+		it('keeps a collection\'s own value as its expression, and the elements its variable takes apart from it', async () => {
+			const document = await openUnit(unit('{for k, c in local.containers : k => c.provider}'));
+			const evaluator = new ConfigEvaluator({ environmentVariables: {}, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true });
+			const spans = await evaluator.evaluatedSpans(URI.parse(document.getUri()).fsPath, document.getContent(), directory);
+			const at = document.getContent().indexOf('local.containers :');
+			const covering = spans.filter(span => span.start === at && span.end === at + 'local.containers'.length);
+			const a = { provider: 'AWS', region: 'EU_WEST_2', network: { cidr: '10.0.0.0/21' } };
+			const b = { provider: 'GCP', priority: 7 };
+			expect(covering.map(span => [span.kind, runtimeValueToPlain(span.value)])).to.deep.equal([
+				['expression', { A: a, B: b }],
+				['elements', [a, b]]
+			]);
 		});
 
 		it('offers no element keys in the collection, outside the for expression, or once the variable is renamed', async () => {

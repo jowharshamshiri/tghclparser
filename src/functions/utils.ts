@@ -171,22 +171,96 @@ export function coerceToString(value: RuntimeValue<ValueType>): string {
     }
 }
 
-export function coerceToBool(value: RuntimeValue<ValueType>): boolean {
+/**
+ * A value converted to a bool as HCL converts one (cty's conversion): a bool as it is, null as null, and the strings
+ * "true" and "1", "false" and "0". Nothing else converts: no other string, number or collection.
+ *
+ * @returns the bool, or null for null.
+ * @throws Error saying why the value is not a bool, in cty's words.
+ */
+export function convertToBool(value: RuntimeValue<ValueType>): boolean | null {
     switch (value.type) {
         case 'boolean':
             return Boolean(value.value);
-        case 'string':
-            return String(value.value).length > 0;
-        case 'number':
-            return Number(value.value) !== 0;
+        case 'null':
+            return null;
+        case 'string': {
+            const text = String(value.value);
+            if (text === 'true' || text === '1') return true;
+            if (text === 'false' || text === '0') return false;
+            const lower = text.toLowerCase();
+            if (lower === 'true' || lower === 'false') {
+                throw new Error(`a bool is required; to convert from string, use lowercase "${lower}"`);
+            }
+            throw new Error('a bool is required');
+        }
         case 'array':
-            return (value.value as RuntimeValue<ValueType>[]).length > 0;
+            return failBool('tuple');
         case 'object':
         case 'block':
-            return (value.value as Map<string, RuntimeValue<ValueType>>).size > 0;
-        case 'null':
-            return false;
+            return failBool('object');
         default:
-            return false;
+            return failBool(value.type);
     }
+}
+
+function failBool(type: string): never {
+    throw new Error(`bool required, but have ${type}`);
+}
+
+/**
+ * A condition, of `?:` or of a template's `if`, as HCL takes it.
+ *
+ * @throws Error when the condition is null or does not convert to a bool, in HCL's words.
+ */
+export function conditionValue(value: RuntimeValue<ValueType>): boolean {
+    if (value.type === 'null') throw new Error('The condition value is null. Conditions must either be true or false.');
+    try {
+        return convertToBool(value) as boolean;
+    } catch {
+        throw new Error('The condition expression must be of type bool.');
+    }
+}
+
+/**
+ * An operand of `&&`, `||` or `!` converted to a bool as HCL converts it.
+ *
+ * @param side which operand it is, as HCL names it.
+ * @returns the bool, or null for null.
+ * @throws Error naming the operand when it does not convert, in HCL's words.
+ */
+export function operandBool(value: RuntimeValue<ValueType>, side: 'left' | 'right' | 'unary'): boolean | null {
+    try {
+        return convertToBool(value);
+    } catch (error) {
+        throw new Error(`Unsuitable value for ${side} operand: ${(error as Error).message}.`);
+    }
+}
+
+/** HCL refuses null where it is all `!`, `&&` or `||` has to decide by. */
+export const NULL_OPERAND = 'Error during operation: argument must not be null.';
+
+/** An operand of `&&` or `||` once evaluated and converted: a bool, null, or what evaluating it threw. */
+export type LogicalOperand = boolean | null | { error: unknown };
+
+/**
+ * `left && right` or `left || right` as HCL decides it, once both operands are evaluated and converted. A known
+ * operand that is false (for `&&`, null counting as false) or true (for `||`) decides, and what evaluating the other
+ * threw is dropped.
+ *
+ * @throws what an operand threw when the result needs it; an Error when null is all there is to decide by.
+ */
+export function logicalOperation(operator: '&&' | '||', left: LogicalOperand, right: LogicalOperand): boolean {
+    const known = (operand: LogicalOperand): operand is boolean | null => operand === null || typeof operand === 'boolean';
+    const decides = (operand: LogicalOperand) => known(operand) && (operator === '&&' ? operand !== true : operand === true);
+    if (!known(left)) {
+        if (decides(right)) return operator === '||';
+        throw left.error;
+    }
+    if (decides(left)) return operator === '||';
+    if (!known(right)) throw right.error;
+    if (decides(right)) return operator === '||';
+    // Neither decides: both true for &&; for ||, each false or null.
+    if (left === null || right === null) throw new Error(NULL_OPERAND);
+    return operator === '&&';
 }

@@ -100,14 +100,51 @@ describe('dependency resolution', () => {
 		assert.equal(result.unresolved, true, result.error);
 	});
 
-	it('does not take a local nothing reads for a fault when its dependency has no outputs yet', async () => {
-		await write('app/terragrunt.hcl', ['dependency "vpc" {', '  config_path = "../vpc"', '}', '', 'locals {', '  id = dependency.vpc.outputs.id', '}', '', 'inputs = { name = "app" }']);
-		const result = await evaluate(recording().evaluator);
-		assert.equal(result.valid, true, result.error);
-		assert.deepEqual(runtimeValueToPlain(result.inputs!), { name: 'app' });
+	it('decides && and || by a side that is known when the other has no outputs yet, as HCL does', async () => {
+		const inputs = async (expression: string) => {
+			await write('app/terragrunt.hcl', ['dependency "vpc" {', '  config_path = "../vpc"', '}', '', `inputs = { x = ${expression} }`]);
+			return evaluate(recording().evaluator);
+		};
+		for (const [expression, known] of [
+			['dependency.vpc.outputs.on && false', false],
+			['false && dependency.vpc.outputs.on', false],
+			['dependency.vpc.outputs.on || true', true],
+			['true || dependency.vpc.outputs.on', true]
+		] as const) {
+			const result = await inputs(expression);
+			assert.equal(result.valid, true, `${expression}: ${result.error}`);
+			assert.deepEqual(runtimeValueToPlain(result.inputs!), { x: known }, expression);
+		}
+		for (const expression of ['dependency.vpc.outputs.on && true', 'false || dependency.vpc.outputs.on', '!dependency.vpc.outputs.on']) {
+			assert.equal((await inputs(expression)).unresolved, true, expression);
+		}
+		assert.match((await inputs('dependency.vpc.outputs.on && 1')).error ?? '', /Unsuitable value for right operand: bool required, but have number\./);
 	});
 
-	it('reads, in a local nothing reads, a dependency declared in another include', async () => {
+	const localsOnly =(root: string) => `Locals can only reference these variables: local, include, feature, values. This expression references "${root}".`;
+
+	it('refuses a local that reads a dependency, as Terragrunt does, even one nothing reads and with outputs to give', async () => {
+		await write('app/terragrunt.hcl', ['dependency "vpc" {', '  config_path = "../vpc"', '}', '', 'locals {', '  id = dependency.vpc.outputs.id', '}', '', 'inputs = { name = "app" }']);
+		const { evaluator, requests } = recording({ vpc: { id: 'vpc-1' } });
+		const result = await evaluate(evaluator);
+		assert.equal(result.valid, false);
+		assert.equal(result.unresolved, undefined);
+		assert.equal(result.error, localsOnly('dependency'));
+		assert.deepEqual(result.problems, [{
+			message: localsOnly('dependency'),
+			filePath: path.join(root, 'app', 'terragrunt.hcl'),
+			range: { start: { line: 5, character: 7 }, end: { line: 5, character: 32 } }
+		}]);
+		assert.deepEqual(requests, []);
+	});
+
+	it('refuses a local that reads a dependency in a branch it would not take, since the reference alone decides', async () => {
+		await write('app/terragrunt.hcl', ['dependency "vpc" {', '  config_path = "../vpc"', '}', '', 'locals {', '  id = true ? "fixed" : dependency.vpc.outputs.id', '}']);
+		const result = await evaluate(recording({ vpc: { id: 'vpc-1' } }).evaluator);
+		assert.equal(result.error, localsOnly('dependency'));
+	});
+
+	it('refuses, in an included configuration, a local that reads a dependency another include declares', async () => {
 		await write('root.hcl', ['dependency "vpc" {', '  config_path = "../vpc"', '}']);
 		await write('common.hcl', ['locals {', '  id = dependency.vpc.outputs.id', '}']);
 		await write('app/terragrunt.hcl', [
@@ -117,8 +154,41 @@ describe('dependency resolution', () => {
 		]);
 		const { evaluator, requests } = recording({ vpc: { id: 'vpc-1' } });
 		const result = await evaluate(evaluator);
+		assert.equal(result.error, localsOnly('dependency'));
+		assert.equal(result.problems?.[0]?.filePath, path.join(root, 'common.hcl'));
+		assert.deepEqual(requests, []);
+	});
+
+	it('refuses a local that reads a local which reads a dependency', async () => {
+		await write('app/terragrunt.hcl', [
+			'dependency "vpc" {', '  config_path = "../vpc"', '}', '',
+			'locals {', '  id   = dependency.vpc.outputs.id', '  name = "app-${local.id}"', '}', '',
+			'inputs = { name = local.name }'
+		]);
+		const result = await evaluate(recording({ vpc: { id: 'vpc-1' } }).evaluator);
+		assert.equal(result.error, localsOnly('dependency'));
+	});
+
+	it('refuses every variable a local cannot see, naming each', async () => {
+		await write('app/terragrunt.hcl', ['locals {', '  a = var.region', '  b = terraform.workspace', '  c = nothing', '}']);
+		const result = await evaluate(recording().evaluator);
+		assert.deepEqual(result.problems?.map(problem => problem.message), [localsOnly('var'), localsOnly('terraform'), localsOnly('nothing')]);
+	});
+
+	it('lets a local read what locals can see, and a for expression\'s own variables whatever they are called', async () => {
+		await write('root.hcl', ['locals {', '  region = "eu-west-1"', '}']);
+		await write('app/terragrunt.hcl', [
+			'include "root" {', '  path   = find_in_parent_folders("root.hcl")', '  expose = true', '}', '',
+			'locals {',
+			'  region = include.root.locals.region',
+			'  names  = [for dependency in ["a", "b"] : "${dependency}-${local.region}"]',
+			'  keyed  = { for var, value in { x = 1 } : var => value }',
+			'}', '',
+			'inputs = { names = local.names, keyed = local.keyed }'
+		]);
+		const result = await evaluate(recording().evaluator);
 		assert.equal(result.valid, true, result.error);
-		assert.deepEqual(requests.map(request => request.name), ['vpc']);
+		assert.deepEqual(runtimeValueToPlain(result.inputs!), { names: ['a-eu-west-1', 'b-eu-west-1'], keyed: { x: 1 } });
 	});
 
 	it('reports a dependency declared nowhere the unit merges as a fault, without asking the resolver', async () => {
@@ -224,12 +294,11 @@ describe('dependency resolution', () => {
 	it('asks the resolver once however often a dependency is read', async () => {
 		await write('app/terragrunt.hcl', [
 			'dependency "vpc" {', '  config_path = "../vpc"', '}', '',
-			'locals {', '  id = dependency.vpc.outputs.id', '}', '',
-			'inputs = { a = dependency.vpc.outputs.id, b = local.id, c = "${dependency.vpc.outputs.id}-x" }'
+			'inputs = { a = dependency.vpc.outputs.id, b = upper(dependency.vpc.outputs.id), c = "${dependency.vpc.outputs.id}-x" }'
 		]);
 		const { evaluator, requests } = recording({ vpc: { id: 'vpc-123' } });
 		const result = await evaluate(evaluator);
-		assert.deepEqual(runtimeValueToPlain(result.inputs!), { a: 'vpc-123', b: 'vpc-123', c: 'vpc-123-x' });
+		assert.deepEqual(runtimeValueToPlain(result.inputs!), { a: 'vpc-123', b: 'VPC-123', c: 'vpc-123-x' });
 		assert.equal(requests.length, 1);
 	});
 

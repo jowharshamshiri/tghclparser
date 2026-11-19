@@ -88,7 +88,7 @@ describe('evaluated spans', () => {
 		]);
 	});
 
-	it('leaves out an expression that cannot be evaluated in the file scope, and keeps the one around it', async () => {
+	it('leaves out an expression that cannot be evaluated in the file scope, keeps the one around it, and gives the elements of its collection', async () => {
 		const content = [
 			'locals {',
 			'  names = ["a", "b"]',
@@ -99,7 +99,8 @@ describe('evaluated spans', () => {
 		assert.deepEqual(await spans(content), [
 			{ kind: 'name', text: 'loud', value: ['A', 'B'] },
 			{ kind: 'expression', text: '[for name in local.names : upper(name)]', value: ['A', 'B'] },
-			{ kind: 'expression', text: 'local.names', value: ['a', 'b'] }
+			{ kind: 'expression', text: 'local.names', value: ['a', 'b'] },
+			{ kind: 'elements', text: 'local.names', value: ['a', 'b'] }
 		]);
 	});
 

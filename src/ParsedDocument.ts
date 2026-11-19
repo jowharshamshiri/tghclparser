@@ -7,6 +7,7 @@ import { readInlineFunction, synthesizeDefinition, tokenToNode } from './inline-
 import type { FunctionContext, FunctionDefinition, ResolvedReference, RuntimeValue, TerragruntConfig, TokenType, ValueType } from './model';
 import { Token } from './model';
 import type { ModuleFileError, ModuleType, ModuleVariable } from './module-variables';
+import { conditionValue } from './functions/utils';
 import { TextChange } from './text-change';
 import { mergeObjectTypes, ValueTypeReader } from './value-types';
 import type { EvaluatedSpan } from './Evaluator';
@@ -382,22 +383,17 @@ export class ParsedDocument {
 	public setEvaluatedSpans(spans: EvaluatedSpan[]): void {
 		if (!this.parsed) return;
 		const names = new Map(spans.filter(span => span.kind === 'name').map(span => [`${span.start}:${span.end}`, span.value]));
-		const expressions = new Map(spans.filter(span => span.kind === 'expression').map(span => [`${span.start}:${span.end}`, span.value]));
+		const collections = new Map(spans.filter(span => span.kind === 'elements').map(span => [`${span.start}:${span.end}`, span.value]));
 		const forExpressions = new Map<number, EvaluatedForExpression>();
 		const visit = (node: any): void => {
 			if ((node.type === 'list_comprehension' || node.type === 'map_comprehension') && node.location) {
 				const children = node.children ?? [];
 				const variables = children[1]?.type === 'identifier' ? children.slice(0, 2) : children.slice(0, 1);
 				const collection = children[variables.length]?.location;
-				const value = collection && expressions.get(`${collection.start.offset}:${collection.end.offset}`);
-				// The elements in the order HCL visits them: an object's by key in lexical order.
-				const map = value?.type === 'object' || value?.type === 'block' ? value.value as Map<string, RuntimeValue<ValueType>> : undefined;
-				const elements = value?.type === 'array'
-					? value.value as RuntimeValue<ValueType>[]
-					: map
-						? [...map.keys()].sort().map(key => map.get(key)!)
-						: undefined;
-				if (elements) forExpressions.set(node.location.start.offset, { variable: String(variables.at(-1)?.value ?? ''), elements });
+				const elements = collection && collections.get(`${collection.start.offset}:${collection.end.offset}`);
+				if (elements?.type === 'array') {
+					forExpressions.set(node.location.start.offset, { variable: String(variables.at(-1)?.value ?? ''), elements: elements.value as RuntimeValue<ValueType>[] });
+				}
 			}
 			for (const child of node.children ?? []) visit(child);
 		};
@@ -684,7 +680,13 @@ export class ParsedDocument {
 				const condValue = await this.evaluateValue(condition);
 				if (!condValue) return undefined;
 
-				const condBool = this.coerceToBool(condValue);
+				// A condition HCL refuses has no value to show.
+				let condBool: boolean;
+				try {
+					condBool = conditionValue(condValue);
+				} catch {
+					return undefined;
+				}
 				return condBool ?
 					await this.evaluateValue(trueExpr) :
 					await this.evaluateValue(falseExpr);
@@ -744,29 +746,6 @@ export class ParsedDocument {
 		return undefined;
 	}
 
-	private coerceToBool(value: RuntimeValue<ValueType>): boolean {
-		switch (value.type) {
-			case 'boolean': {
-				return Boolean(value.value);
-			}
-			case 'string': {
-				return typeof value.value === 'string' && value.value.length > 0;
-			}
-			case 'number': {
-				return value.value !== 0;
-			}
-			case 'array': {
-				return Array.isArray(value.value) && value.value.length > 0;
-			}
-			case 'object':
-			case 'block': {
-				return value.value instanceof Map && value.value.size > 0;
-			}
-			default: {
-				return false;
-			}
-		}
-	}
 	private coerceToString(value: RuntimeValue<ValueType>): string {
 		switch (value.type) {
 			case 'string':

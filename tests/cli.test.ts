@@ -986,7 +986,7 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(made.root, {recursive: true, force: true});
 	});
 
-	it('keeps an unresolved output visible through a local alias', async () => {
+	it('refuses to render a local that aliases a dependency\'s outputs, as Terragrunt does', async () => {
 		const cli = path.resolve('dist/cli.cjs');
 		const body = dependencyBlock([]);
 		body.splice(body.indexOf('inputs = {'), 0,
@@ -997,9 +997,9 @@ describe('CLI configuration discovery', function () {
 		const made = await workspaceWithUnappliedDependency(body);
 		const result = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', made.consumer],
 			{cwd: made.consumer, encoding: 'utf8'});
-		expect(result.status).to.equal(2, result.stderr);
-		expect(JSON.parse(result.stdout).inputs).to.not.have.property('seen');
-		expect(result.stderr).to.contain('unresolved inputs.seen');
+		expect(result.status).to.equal(1, result.stderr);
+		expect(result.stdout).to.equal('');
+		expect(result.stderr).to.contain('Locals can only reference these variables: local, include, feature, values. This expression references "dependency".');
 		await fs.rm(made.root, {recursive: true, force: true});
 	});
 

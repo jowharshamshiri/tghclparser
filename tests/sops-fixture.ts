@@ -46,3 +46,22 @@ export async function withoutSopsKey<T>(directory: string, work: () => Promise<T
 		process.env.PATH = previous;
 	}
 }
+
+/**
+ * Runs `work` with no `sops` anywhere on `PATH`, as on a machine where it was never installed.
+ *
+ * @param directory a directory the empty `PATH` folder can be made under.
+ * @param work what to run while `PATH` holds only that folder.
+ * @returns whatever `work` returns.
+ */
+export async function withoutSops<T>(directory: string, work: () => Promise<T>): Promise<T> {
+	const bin = path.join(directory, 'empty-bin');
+	await fs.mkdir(bin, { recursive: true });
+	const previous = process.env.PATH;
+	process.env.PATH = bin;
+	try {
+		return await work();
+	} finally {
+		process.env.PATH = previous;
+	}
+}

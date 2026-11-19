@@ -1,5 +1,7 @@
 import type { FunctionContext, RuntimeValue, ValueType } from '../model';
-import { coerceToBool, coerceToString, makeBooleanValue, makeNullValue, makeNumberValue, makeStringValue } from './utils';
+import { isDefect } from '../unresolved';
+import type { LogicalOperand } from './utils';
+import { coerceToString, conditionValue, logicalOperation, makeBooleanValue, makeNullValue, makeNumberValue, makeStringValue, NULL_OPERAND, operandBool } from './utils';
 
 // Template rendering reproduces the template tokenizer and strip-marker
 // semantics of the upstream template language:
@@ -100,13 +102,17 @@ type TemplateNode =
 	| { kind: 'for'; key: string | null; val: string; coll: string; body: TemplateNode[] };
 
 type TemplateFrame =
-	| { kind: 'if'; nodes: TemplateNode[]; inElse: boolean; cond: string }
-	| { kind: 'for'; nodes: TemplateNode[]; inElse: boolean; key: string | null; val: string; coll: string };
+	| { kind: 'if'; nodes: TemplateNode[]; elseNodes: TemplateNode[] | null; cond: string }
+	| { kind: 'for'; nodes: TemplateNode[]; key: string | null; val: string; coll: string };
 
 function buildTemplateTree(tokens: TemplateToken[]): TemplateNode[] {
 	const root: TemplateNode[] = [];
 	const stack: TemplateFrame[] = [];
-	const current = (): TemplateNode[] => (stack.length > 0 ? stack[stack.length - 1].nodes : root);
+	const current = (): TemplateNode[] => {
+		const frame = stack.at(-1);
+		if (!frame) return root;
+		return frame.kind === 'if' && frame.elseNodes !== null ? frame.elseNodes : frame.nodes;
+	};
 
 	for (const token of tokens) {
 		if (token.kind === 'lit') {
@@ -116,14 +122,15 @@ function buildTemplateTree(tokens: TemplateToken[]): TemplateNode[] {
 		} else {
 			const directive = token.text;
 			if (directive.startsWith('if ')) {
-				stack.push({ kind: 'if', nodes: [], inElse: false, cond: directive.slice(3).trim() });
+				stack.push({ kind: 'if', nodes: [], elseNodes: null, cond: directive.slice(3).trim() });
 			} else if (directive.startsWith('for ')) {
 				const parsed = parseForDirective(directive.slice(4).trim());
-				stack.push({ kind: 'for', nodes: [], inElse: false, key: parsed.key, val: parsed.val, coll: parsed.coll });
+				stack.push({ kind: 'for', nodes: [], key: parsed.key, val: parsed.val, coll: parsed.coll });
 			} else if (directive === 'else' || directive.startsWith('else ')) {
 				const frame = stack[stack.length - 1];
 				if (!frame || frame.kind !== 'if') throw new Error('Template "else" without a matching "if"');
-				frame.inElse = true;
+				if (frame.elseNodes !== null) throw new Error('Unexpected else directive; Already in the else clause for the if');
+				frame.elseNodes = [];
 			} else if (directive === 'endif') {
 				const frame = stack.pop();
 				if (!frame || frame.kind !== 'if') throw new Error('Template "endif" without a matching "if"');
@@ -131,7 +138,7 @@ function buildTemplateTree(tokens: TemplateToken[]): TemplateNode[] {
 					kind: 'if',
 					cond: frame.cond,
 					then: frame.nodes,
-					else: null
+					else: frame.elseNodes
 				};
 				current().push(node);
 			} else if (directive === 'endfor') {
@@ -197,7 +204,7 @@ async function renderTemplateNodes(
 			}
 			case 'if': {
 				const condition = await evaluateTemplateExpression(node.cond, scope, context);
-				const branch = coerceToBool(condition) ? node.then : (node.else ?? []);
+				const branch = conditionValue(condition) ? node.then : (node.else ?? []);
 				output += await renderTemplateNodes(branch, scope, context);
 				break;
 			}
@@ -535,7 +542,11 @@ async function evaluateTemplateAst(
 		}
 		case 'unary': {
 			const operand = await evaluateTemplateAst(node.left!, scope, context);
-			if (node.value === '!') return makeBooleanValue(!coerceToBool(operand));
+			if (node.value === '!') {
+				const truth = operandBool(operand, 'unary');
+				if (truth === null) throw new Error(NULL_OPERAND);
+				return makeBooleanValue(!truth);
+			}
 			if (node.value === '-') {
 				if (operand.type !== 'number') throw new Error('Template unary minus requires a number');
 				return makeNumberValue(-Number(operand.value));
@@ -562,17 +573,23 @@ async function evaluateTemplateAst(
 			const right = await evaluateTemplateAst(node.right!, scope, context);
 			return templateCompare(left, right, node.value as string);
 		}
-		case 'and': {
-			const left = await evaluateTemplateAst(node.left!, scope, context);
-			if (!coerceToBool(left)) return makeBooleanValue(false);
-			const right = await evaluateTemplateAst(node.right!, scope, context);
-			return makeBooleanValue(coerceToBool(right));
-		}
+		case 'and':
 		case 'or': {
-			const left = await evaluateTemplateAst(node.left!, scope, context);
-			if (coerceToBool(left)) return makeBooleanValue(true);
-			const right = await evaluateTemplateAst(node.right!, scope, context);
-			return makeBooleanValue(coerceToBool(right));
+			// As HCL does: both operands are evaluated and must convert to a bool, and one that decides the result
+			// drops what evaluating the other threw.
+			const operands: LogicalOperand[] = [];
+			for (const [operand, side] of [[node.left!, 'left'], [node.right!, 'right']] as const) {
+				let value: RuntimeValue<ValueType>;
+				try {
+					value = await evaluateTemplateAst(operand, scope, context);
+				} catch (error) {
+					if (error instanceof Error && isDefect(error)) throw error;
+					operands.push({ error });
+					continue;
+				}
+				operands.push(operandBool(value, side));
+			}
+			return makeBooleanValue(logicalOperation(node.kind === 'and' ? '&&' : '||', operands[0], operands[1]));
 		}
 		case 'coalesce': {
 			const left = await evaluateTemplateAst(node.left!, scope, context);
@@ -581,7 +598,7 @@ async function evaluateTemplateAst(
 		}
 		case 'ternary': {
 			const condition = await evaluateTemplateAst(node.left!, scope, context);
-			return coerceToBool(condition)
+			return conditionValue(condition)
 				? evaluateTemplateAst(node.right!, scope, context)
 				: evaluateTemplateAst(node.args![0], scope, context);
 		}
