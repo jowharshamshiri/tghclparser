@@ -13,7 +13,7 @@ import { DiagnosticSeverity } from 'vscode-languageserver';
 import { CtyNumber } from './cty-number';
 import { ConfigEvaluator, UnresolvedDependencyOutputError, runtimeValueToPlain } from './Evaluator';
 import type { DependencyRequest } from './Evaluator';
-import { convertToRuntimeValue, makeObjectValue, parseJsonDocument } from './functions/utils';
+import { compareStrings, convertToRuntimeValue, makeObjectValue, parseJsonDocument } from './functions/utils';
 import type { RuntimeValue, ValueType } from './model';
 import type { FunctionDefinition } from './model';
 import { ambientCredentials } from './credentials';
@@ -1250,6 +1250,43 @@ function offsetPosition(content: string, offset: number): {line: number; charact
 	return {line: lines.length - 1, character: lines[lines.length - 1].length};
 }
 
+/**
+ * A rendered configuration as Terragrunt's `render --json` writes it: Terragrunt reads go-cty's JSON back with Go's
+ * encoding/json, which takes each number as the float64 nearest its decimal text, and writes that float64 in full
+ * digits, or with an exponent when it is below 1e-6 or from 1e21, and each object's keys in the order of their bytes.
+ *
+ * @param plain the configuration, as {@link runtimeValueToPlain} gives it.
+ * @returns the JSON text.
+ * @throws Error in Go's words for a number beyond the largest float64.
+ */
+function renderedJson(plain: unknown): string {
+	const write = (value: unknown, path: string): string => {
+		if (value instanceof CtyNumber) {
+			const text = value.toString();
+			const float = Number(text);
+			if (!Number.isFinite(float)) {
+				throw new Error(`json: cannot unmarshal number ${text} into Go struct field CtyJSONOutput.value${path} of type float64`);
+			}
+			return goJsonFloat(float);
+		}
+		if (Array.isArray(value)) return `[${value.map((item, index) => write(item, `${path}.${index}`)).join(',')}]`;
+		if (isRecord(value)) {
+			return `{${Object.keys(value).sort(compareStrings).map(key => `${JSON.stringify(key)}:${write(value[key], `${path}.${key}`)}`).join(',')}}`;
+		}
+		return JSON.stringify(value);
+	};
+	return write(plain, '');
+}
+
+/** A float64 as Go's encoding/json writes it. */
+function goJsonFloat(value: number): string {
+	const magnitude = Math.abs(value);
+	const exponent = magnitude !== 0 && (magnitude < 1e-6 || magnitude >= 1e21);
+	const text = CtyNumber.fromFloat64(value).text(exponent ? 'e' : 'f', -1);
+	// Go writes e-09 as e-9.
+	return exponent ? text.replace(/e-0(\d)$/u, 'e-$1') : text;
+}
+
 function hclValue(value: unknown): string {
 	if (typeof value === 'string') return JSON.stringify(value);
 	if (typeof value === 'boolean' || value instanceof CtyNumber) return String(value);
@@ -1428,12 +1465,12 @@ async function renderConfig(argv: string[]): Promise<number> {
 	if (realConfig.endsWith('.json')) {
 		const parsed: unknown = parseJsonDocument(content);
 		validateJSONShape(parsed, path.basename(realConfig));
-		process.stdout.write(`${JSON.stringify(parsed)}\n`);
+		process.stdout.write(`${renderedJson(parsed)}\n`);
 		return 0;
 	}
 	const evaluator = evaluatorFor({terraformCommand: 'render', partialRender: true});
 	const result = await evaluator.evaluateRenderedConfig(realConfig, content, root);
-	process.stdout.write(`${JSON.stringify(runtimeValueToPlain(result))}\n`);
+	process.stdout.write(`${renderedJson(runtimeValueToPlain(result))}\n`);
 	const unresolved = evaluator.unresolvedRenderFields();
 	for (const entry of unresolved) {
 		process.stderr.write(`unresolved ${entry.field} in ${entry.file}: ${entry.reason}\n`);

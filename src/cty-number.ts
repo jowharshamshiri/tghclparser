@@ -14,6 +14,15 @@ const MAX_EXP = 2147483647;
 /** The mantissa precision go-cty reads a decimal number with. */
 const PARSE_PRECISION = 512;
 
+/** The largest power of ten, either way, of a number Terragrunt writes out. */
+const MAX_DECIMAL_EXPONENT = 4096;
+
+/** Go's constant math.Ln2/math.Ln10, rounded once to a float64. */
+const LOG10_2 = 0.30102999566398119521373889472449302676818988146210854131;
+
+/** What Terragrunt says of a number beyond {@link MAX_DECIMAL_EXPONENT}. */
+export const NUMBER_OUT_OF_RANGE = `number is outside the supported range of 1e-${MAX_DECIMAL_EXPONENT} to 1e${MAX_DECIMAL_EXPONENT}`;
+
 /** The largest power of 5 Go's math/big keeps in a uint64 table before it computes one by squaring. */
 const POW5_TABLE_LIMIT = 27;
 
@@ -499,6 +508,15 @@ export class CtyNumber {
 	toJSON(): unknown {
 		if (this.form === 'inf') throw new Error('cannot serialize infinity as JSON');
 		return (JSON as unknown as { rawJSON(text: string): unknown }).rawJSON(this.toString());
+	}
+
+	/**
+	 * Whether Terragrunt writes the number out: its magnitude within 1e±4096, as Terragrunt's ctyhelper decides it from
+	 * the binary exponent. Zero and the infinities, whose exponent Go gives as 0, are within it.
+	 */
+	withinSupportedRange(): boolean {
+		const exponent = this.form === 'finite' ? this.exponent() : 0;
+		return (Math.abs(exponent) - 1) * LOG10_2 <= MAX_DECIMAL_EXPONENT;
 	}
 
 	/** The smallest precision the number is exact with, as Go's big.Float.MinPrec gives it; 0 for zero or an infinity. */
