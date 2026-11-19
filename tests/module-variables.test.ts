@@ -211,6 +211,28 @@ output "id" {
 		expect(outputs[3].type).to.deep.equal(any);
 	});
 
+	it('reads a template that is one interpolation as the type of its expression, and any other as a string', async () => {
+		await write('outputs.tf', `locals {
+  zones = ["a", "b"]
+}
+
+output "zones" {
+  value = "\${local.zones}"
+}
+
+output "label" {
+  value = "zone-\${local.zones[0]}"
+}`);
+
+		const { outputs } = await readModuleVariables(moduleDir);
+
+		const string = { kind: 'primitive', name: 'string', text: 'string' };
+		expect(outputs.map(output => [output.name, output.type])).to.deep.equal([
+			['zones', { kind: 'tuple', elements: [string, string], text: 'tuple' }],
+			['label', string]
+		]);
+	});
+
 	it('serves the cached result until a file changes or is added', async () => {
 		await write('variables.tf', 'variable "first" {}');
 		const cache = new ModuleVariableCache();

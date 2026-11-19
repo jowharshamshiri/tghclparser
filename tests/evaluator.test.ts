@@ -4,6 +4,8 @@ import { gunzipSync } from 'node:zlib';
 import path from 'node:path';
 
 import { ConfigEvaluator, runtimeValueToPlain } from '../src/Evaluator';
+import { makeArrayValue, makeSensitiveValue, makeStringValue } from '../src/functions/utils';
+import type { RuntimeValue, ValueType } from '../src/model';
 import { ENCRYPTED_SOPS_JSON, ENCRYPTED_SOPS_YAML, withoutSops, withoutSopsKey } from './sops-fixture';
 
 describe('semantic configuration evaluation', () => {
@@ -342,6 +344,97 @@ describe('semantic configuration evaluation', () => {
 			assert.deepEqual(await fault('"%{ for x in "ab" }${x}%{ endfor }"'), ['A value of type string cannot be used as the collection in a \'for\' expression.', 19, 23]);
 			assert.deepEqual(await fault('"%{ for x in 1 }${x}%{ endfor }"'), ['A value of type number cannot be used as the collection in a \'for\' expression.', 19, 20]);
 			assert.deepEqual(await fault('"%{ for x in null }${x}%{ endfor }"'), ['A null value cannot be used as the collection in a \'for\' expression.', 19, 23]);
+		});
+	});
+
+	// Each case is what Terragrunt v1.2.2 gives, or refuses, for the same source: its HCL passes a template that is one
+	// interpolation and nothing else through as that interpolation's value, and converts every interpolation of any
+	// other template to a string, refusing what does not convert.
+	describe('template values', () => {
+		const evaluate = (content: string) => evaluator.evaluateUnit(configPath, content, process.cwd());
+		const rendered = async (content: string): Promise<unknown> => {
+			const result = await evaluate(content);
+			assert.equal(result.error, undefined, content);
+			return (runtimeValueToPlain(result.inputs!) as Record<string, unknown>).x;
+		};
+		const value = (expression: string) => rendered(`inputs = {\n  x = ${expression}\n}\n`);
+		/** The one fault an expression has, and the columns of line 2 it is written at. */
+		const fault = async (expression: string): Promise<[string, number, number]> => {
+			const result = await evaluate(`inputs = {\n  x = ${expression}\n}\n`);
+			assert.equal(result.valid, false, expression);
+			assert.equal(result.problems?.length, 1, `${expression}: ${result.error}`);
+			const [problem] = result.problems!;
+			assert.equal(problem.range.start.line, 1, expression);
+			return [problem.message, problem.range.start.character, problem.range.end.character];
+		};
+		const nullValue = 'The expression result is null. Cannot include a null value in a string template.';
+		const tuple = 'Cannot include the given value in a string template: string required, but have tuple.';
+		const object = 'Cannot include the given value in a string template: string required, but have object.';
+
+		it('gives a template that is one interpolation the value of its expression, with its type', async () => {
+			assert.deepEqual(await value('"${["a", 1]}"'), ['a', 1]);
+			assert.deepEqual(await value('"${ { a = 1 } }"'), { a: 1 });
+			assert.equal(await value('"${2}"'), 2);
+			assert.equal(await value('"${true}"'), true);
+			assert.equal(await value('"${null}"'), null);
+			assert.deepEqual(await value('"${~ ["a"] ~}"'), ['a']);
+			assert.deepEqual(await rendered([
+				'locals {',
+				'  zones = ["a", "b"]',
+				'  copy  = "${local.zones}"',
+				'}',
+				'inputs = { x = local.copy }'
+			].join('\n')), ['a', 'b']);
+		});
+
+		it('converts the values of a longer template to strings', async () => {
+			assert.equal(await value('"a${2}b${true}"'), 'a2btrue');
+			assert.equal(await value('"${"a"}${"b"}"'), 'ab');
+		});
+
+		it('refuses null in a longer template, where its expression is written', async () => {
+			assert.deepEqual(await fault('"a${null}"'), [nullValue, 10, 14]);
+			assert.deepEqual(await fault('"${null}b"'), [nullValue, 9, 13]);
+		});
+
+		it('refuses a collection in a longer template, where its expression is written', async () => {
+			assert.deepEqual(await fault('"a${["b"]}"'), [tuple, 10, 15]);
+			assert.deepEqual(await fault('"a${ { b = 1 } }"'), [object, 11, 20]);
+			// v1.2.2 says "list of string" and "map of string": values keep no list or map type of their own until the
+			// card "values keep cty's collection types" (PVTI_lAHOAHykxc4BqpFPzhKISso) gives them one.
+			assert.deepEqual(await fault('"a${tolist(["b"])}"'), [tuple, 10, 23]);
+			assert.deepEqual(await fault('"a${tomap({ b = "c" })}"'), [object, 10, 28]);
+		});
+
+		it('takes a literal a strip marker empties for a part, so the template is no longer one interpolation', async () => {
+			assert.deepEqual(await fault('" ${~ ["a"] }"'), [tuple, 12, 17]);
+			assert.deepEqual(await fault('"${ ["a"] ~} "'), [tuple, 10, 15]);
+		});
+
+		it('converts a heredoc\'s interpolation, its last line break being a part', async () => {
+			assert.equal(await value('<<EOT\n${2}\nEOT\n'), '2\n');
+			const result = await evaluate('inputs = {\n  x = <<EOT\n${["a"]}\nEOT\n}\n');
+			assert.equal(result.valid, false);
+			assert.equal(result.problems?.[0]?.message, tuple);
+		});
+
+		it('converts a lone interpolation in a directive\'s branch or loop, which is a template of its own', async () => {
+			assert.equal(await value('"%{ if true }${2}%{ endif }"'), '2');
+			assert.deepEqual(await fault('"%{ if true }${["a"]}%{ endif }"'), [tuple, 21, 26]);
+			assert.deepEqual(await fault('"%{ if true }${null}%{ endif }"'), [nullValue, 21, 25]);
+			assert.deepEqual(await fault('"%{ for x in [["a"]] }${x}%{ endfor }"'), [tuple, 30, 31]);
+			assert.deepEqual(await fault('"%{ for x in [null] }${x}%{ endfor }"'), [nullValue, 29, 30]);
+		});
+
+		it('keeps a sensitive value sensitive, passed through or rendered into a string', async () => {
+			const raw = async (expression: string) => {
+				const result = await evaluate(`inputs = {\n  x = ${expression}\n}\n`);
+				assert.equal(result.error, undefined, expression);
+				return (result.inputs!.value as Map<string, RuntimeValue<ValueType>>).get('x');
+			};
+			assert.deepEqual(await raw('"${sensitive(["a"])}"'), makeSensitiveValue(makeArrayValue([makeStringValue('a')])));
+			assert.deepEqual(await raw('"a${sensitive("b")}"'), makeSensitiveValue(makeStringValue('ab')));
+			assert.deepEqual(await raw('"%{ for x in ["a"] }${sensitive(x)}%{ endfor }"'), makeSensitiveValue(makeStringValue('a')));
 		});
 	});
 
