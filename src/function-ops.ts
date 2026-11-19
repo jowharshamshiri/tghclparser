@@ -6,10 +6,12 @@ export const FUNCTION_ARGS_KEY = 'tghclp.function.args';
 export const FUNCTION_NAME_KEY = 'tghclp.function.name';
 export const FUNCTION_CONTEXT_KEY = 'tghclp.function.context';
 
+// The dry context holds JSON, where a negative zero is written as 0, so the serialized form states its sign.
 type SerializedRuntimeValue = {
 	type: ValueType | 'sensitive';
 	value: unknown;
 	encrypted?: true;
+	negativeZero?: true;
 };
 
 export type FunctionOperationHandler = (
@@ -32,6 +34,7 @@ function serializeRuntimeValue(value: RuntimeValue<ValueType>): SerializedRuntim
 	if ((value.type as string) === 'sensitive') {
 		return { type: 'sensitive', value: serializeRuntimeValue(value.value as RuntimeValue<ValueType>) };
 	}
+	if (value.type === 'number' && Object.is(value.value, -0)) return { type: value.type, value: 0, negativeZero: true };
 	return value.encrypted ? { type: value.type, value: value.value, encrypted: true } : { type: value.type, value: value.value };
 }
 
@@ -51,6 +54,7 @@ function deserializeRuntimeValue(value: SerializedRuntimeValue): RuntimeValue<Va
 	if (value.type === 'sensitive') {
 		return { type: 'sensitive' as ValueType, value: deserializeRuntimeValue(value.value as SerializedRuntimeValue) as never };
 	}
+	if (value.negativeZero) return { type: 'number', value: -0 as never };
 	return value.encrypted ? { type: value.type, value: value.value as never, encrypted: true } : { type: value.type, value: value.value as never };
 }
 

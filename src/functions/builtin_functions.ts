@@ -292,7 +292,7 @@ function csvDecode(content: string): RuntimeValue<'array'> {
 
 /** A string as Go's encoding/json writes it for go-cty: as JSON does, and with <, >, &, U+2028 and U+2029 escaped. */
 function jsonString(text: string): string {
-	return JSON.stringify(text).replace(/[<>&  ]/g, character => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`);
+	return JSON.stringify(text).replace(/[<>&\u2028\u2029]/g, character => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`);
 }
 
 /** A number as go-cty writes it into JSON: every digit in full with no exponent, and a negative zero as -0. */
