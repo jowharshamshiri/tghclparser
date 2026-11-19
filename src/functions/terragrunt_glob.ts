@@ -1,6 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { Dirent } from 'node:fs';
+
+import { goQuoted } from '../go-quote';
+import { isWithin, resolveForCompare, walkDirectory } from './file_walk';
 
 function isEscaped(value: string, index: number): boolean {
 	let slashes = 0;
@@ -52,17 +54,6 @@ function escapeRegex(character: string): string {
 	return /[.*+?^${}()|[\]\\]/.test(character) ? `\\${character}` : character;
 }
 
-function unescapePattern(value: string): string {
-	let result = '';
-	for (let index = 0; index < value.length; index++) {
-		if (value[index] === '\\') {
-			if (index + 1 >= value.length) throw new Error(`Trailing escape in glob: ${value}`);
-			result += value[++index];
-		} else result += value[index];
-	}
-	return result;
-}
-
 function globRegex(pattern: string): RegExp {
 	let source = '^';
 	for (let index = 0; index < pattern.length; index++) {
@@ -99,27 +90,39 @@ function globRegex(pattern: string): RegExp {
 	return new RegExp(`${source}$`);
 }
 
-function hasMeta(pattern: string): boolean {
-	for (let index = 0; index < pattern.length; index++) {
-		if ('*?['.includes(pattern[index]) && !isEscaped(pattern, index)) return true;
-	}
-	return false;
+// The pattern stays '/'-separated from end to end, as Terragrunt keeps it, so
+// a '\' in it is always the escape it was written as.
+function toSlash(value: string): string {
+	return path.sep === '/' ? value : value.split(path.sep).join('/');
 }
 
-function walkRoot(pattern: string): string {
-	let firstMeta = pattern.length;
-	for (let index = 0; index < pattern.length; index++) {
-		if ('*?['.includes(pattern[index]) && !isEscaped(pattern, index)) {
-			firstMeta = index;
-			break;
-		}
-	}
-	const prefix = pattern.slice(0, firstMeta);
-	return unescapePattern(prefix.endsWith('/') ? prefix.slice(0, -1) || '/' : path.dirname(prefix));
+function fromSlash(value: string): string {
+	return path.sep === '/' ? value : value.split('/').join(path.sep);
 }
 
+// Go's path.Clean: '.' and '..' resolved lexically, and repeated and trailing
+// separators dropped.
+function cleanSlashPath(value: string): string {
+	const cleaned = path.posix.normalize(value);
+	return cleaned.length > 1 && cleaned.endsWith('/') ? cleaned.slice(0, -1) : cleaned;
+}
+
+// The walk starts from the longest leading directory of the pattern that holds
+// none of *?[{\, so a brace or an escape ends it as a wildcard does, before
+// any brace is expanded. A pattern holding none of them names one path, which
+// is its own root.
+function splitRoot(pattern: string): { root: string; hasMeta: boolean } {
+	const metaIndex = pattern.search(/[*?[{\\]/);
+	if (metaIndex < 0) return { root: fromSlash(pattern), hasMeta: false };
+	const separator = pattern.lastIndexOf('/', metaIndex);
+	const prefix = separator < 0 ? '.' : pattern.slice(0, separator) || '/';
+	return { root: fromSlash(prefix), hasMeta: true };
+}
+
+// The enclosing Git repository's root, found from the working directory with
+// its symbolic links resolved, as Terragrunt finds it.
 async function gitBoundary(startDirectory: string): Promise<string | undefined> {
-	let directory = path.resolve(startDirectory);
+	let directory = await resolveForCompare(startDirectory);
 	while (true) {
 		try {
 			await fs.access(path.join(directory, '.git'));
@@ -134,31 +137,14 @@ async function gitBoundary(startDirectory: string): Promise<string | undefined> 
 	}
 }
 
-function assertWithinBoundary(directory: string, boundary: string | undefined, pattern: string): void {
-	if (!boundary) return;
-	const relative = path.relative(boundary, directory);
-	if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-		throw new Error(`Glob walk for ${pattern} starts outside Terragrunt boundary ${boundary}`);
-	}
-}
-
-async function filesBelow(directory: string): Promise<string[]> {
-	const files: string[] = [];
-	let entries: Dirent[];
-	try {
-		entries = await fs.readdir(directory, { withFileTypes: true });
-	} catch (error) {
-		const code = (error as NodeJS.ErrnoException).code;
-		if (code === 'ENOENT' || code === 'ENOTDIR') return [];
-		throw error;
-	}
-	for (const entry of entries) {
-		const target = path.join(directory, entry.name);
-		if (entry.isDirectory()) files.push(...await filesBelow(target));
-		else if (entry.isFile()) files.push(target);
-	}
-	return files;
-}
+// Go's text for the failures a stat of a named path can meet.
+const statFailures: Record<string, string> = {
+	EACCES: 'permission denied',
+	ELOOP: 'too many levels of symbolic links',
+	ENAMETOOLONG: 'file name too long',
+	ENOTDIR: 'not a directory',
+	EPERM: 'operation not permitted'
+};
 
 const boundaryFlag = '--terragrunt-boundary';
 
@@ -177,7 +163,7 @@ function parseBoundary(args: string[], workingDirectory: string): { boundary?: s
 	} else if (args[0].startsWith(`${boundaryFlag}=`)) {
 		configuredBoundary = args[0].slice(boundaryFlag.length + 1);
 		rest = args.slice(1);
-	} else throw new Error(`unrecognized flag ${JSON.stringify(args[0])} for mark_glob_as_read`);
+	} else throw new Error(`unrecognized flag ${goQuoted(args[0])} for mark_glob_as_read`);
 	if (!configuredBoundary) throw new Error(`${boundaryFlag} requires a non-empty directory value`);
 	return { boundary: path.resolve(workingDirectory, configuredBoundary), rest };
 }
@@ -186,26 +172,31 @@ export async function expandTerragruntGlob(args: string[], workingDirectory: str
 	const { boundary: configuredBoundary, rest } = parseBoundary(args, workingDirectory);
 	if (rest.length !== 1) throw new Error(`Expected 1 params for function mark_glob_as_read, but got ${rest.length}`);
 	const boundary = configuredBoundary ?? await gitBoundary(workingDirectory);
+	const raw = rest[0];
 	// An empty pattern names the working directory, which is no file.
-	const pattern = rest[0];
-	const matches = new Set<string>();
-	for (const expandedPattern of expandBraces(path.isAbsolute(pattern) ? path.normalize(pattern) : path.resolve(workingDirectory, pattern))) {
-		const root = walkRoot(expandedPattern);
-		assertWithinBoundary(root, boundary, expandedPattern);
-		if (!hasMeta(expandedPattern)) {
-			try {
-				const literalPath = unescapePattern(expandedPattern);
-				if ((await fs.stat(literalPath)).isFile()) matches.add(path.resolve(literalPath));
-			} catch (error) {
-				const code = (error as NodeJS.ErrnoException).code;
-				if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
-			}
-			continue;
-		}
-		const matcher = globRegex(expandedPattern);
-		for (const candidate of await filesBelow(root)) {
-			if (matcher.test(candidate.split(path.sep).join('/'))) matches.add(path.resolve(candidate));
+	const pattern = cleanSlashPath(path.isAbsolute(raw) ? raw : `${toSlash(workingDirectory)}/${raw}`);
+	const { root, hasMeta } = splitRoot(pattern);
+	if (boundary && !await isWithin(boundary, root)) {
+		throw new Error(`mark_glob_as_read pattern ${goQuoted(raw)} resolves outside the boundary ${goQuoted(boundary)}; `
+			+ `widen the boundary by passing ${boundaryFlag} as the first argument, `
+			+ `for example mark_glob_as_read(${goQuoted(`${boundaryFlag}=/`)}, ${goQuoted(raw)}): `
+			+ `glob pattern resolves outside the configured boundary: ${goQuoted(root)} is outside ${goQuoted(boundary)}`);
+	}
+	if (!hasMeta) {
+		try {
+			return (await fs.stat(root)).isDirectory() ? [] : [root];
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code ?? '';
+			if (code === 'ENOENT') return [];
+			if (statFailures[code] === undefined) throw error;
+			throw new Error(`could not expand glob ${goQuoted(raw)}: stat ${root}: ${statFailures[code]}`);
 		}
 	}
-	return [...matches].sort();
+	const matchers = expandBraces(pattern).map(globRegex);
+	// The matches come in the order the walk meets them, which is Terragrunt's.
+	const matches: string[] = [];
+	await walkDirectory(root, async (entry, kind) => {
+		if (!kind.isDirectory() && matchers.some(matcher => matcher.test(toSlash(entry)))) matches.push(entry);
+	});
+	return matches;
 }

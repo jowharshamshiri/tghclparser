@@ -5,6 +5,7 @@ import bcrypt from 'bcryptjs';
 
 import { graphemeClusters } from '../grapheme-clusters';
 import type { FunctionContext, RuntimeValue, ValueType } from '../model';
+import { fileset } from './fileset';
 import { expandTerragruntGlob } from './terragrunt_glob';
 import {
 	convertToRuntimeValue,
@@ -440,12 +441,11 @@ export const builtinFunctionGroup = {
 		contains: async (args: RuntimeValue<ValueType>[]) => booleanValue(arrayArgument(args, 0, 'contains').some(item => valueEquals(item, requireArgument(args, 1, 'contains')))),
 		csvdecode: async (args: RuntimeValue<ValueType>[]) => csvDecode(stringArgument(args, 0, 'csvdecode')),
 		dirname: async (args: RuntimeValue<ValueType>[]) => stringValue(path.dirname(stringArgument(args, 0, 'dirname'))),
-		fileset: async (args: RuntimeValue<ValueType>[], context: FunctionContext) => {
-			const base = stringArgument(args, 0, 'fileset');
-			const pattern = stringArgument(args, 1, 'fileset');
-			const matches = await expandTerragruntGlob([path.join(base, pattern)], context.workingDirectory);
-			return arrayValue(matches.map(match => stringValue(path.relative(context.workingDirectory, match).split(path.sep).join('/'))));
-		},
+		fileset: async (args: RuntimeValue<ValueType>[], context: FunctionContext) => arrayValue((await fileset(
+			stringArgument(args, 0, 'fileset'),
+			stringArgument(args, 1, 'fileset'),
+			context.workingDirectory
+		)).map(stringValue)),
 		distinct: async (args: RuntimeValue<ValueType>[]) => {
 			const items = arrayArgument(args, 0, 'distinct');
 			const distinct: RuntimeValue<ValueType>[] = [];

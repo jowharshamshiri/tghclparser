@@ -1899,7 +1899,7 @@
 		},
 		{
 			"name": "fileset",
-			"description": "Enumerates files that match a glob pattern.\n\n* Returns a list of files that match the specified pattern.\n* Supports standard glob syntax.\n* Path is relative to the configuration file.",
+			"description": "Enumerates the files below a directory that match a glob pattern.\n\n* Returns the regular files whose path relative to the directory matches the pattern, relative to the directory and in lexical order; directories that symbolic links in it resolve to are searched too.\n* The pattern uses doublestar syntax: `*` and `?` within one path segment, `**` as a whole segment for any number of directories, `[...]` classes, `{a,b}` alternatives and `\\` escapes.\n* A relative directory resolves from the configuration file's directory, and no boundary applies.",
 			"parameters": [
 				{
 					"name": "path",
@@ -1918,7 +1918,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Glob pattern to match files"
+					"description": "Doublestar pattern matched against each file's path relative to the directory"
 				}
 			],
 			"returnType": {
@@ -4186,7 +4186,7 @@
 		},
 		{
 			"name": "mark_glob_as_read",
-			"description": "Expands a gobwas-compatible glob and marks every matching file as read. Relative patterns resolve from the current working directory. Expansion is confined to the enclosing Git repository unless a leading --terragrunt-boundary argument explicitly changes the boundary, given inline (\"--terragrunt-boundary=<directory>\", pattern) or as the next argument (\"--terragrunt-boundary\", directory, pattern); a relative boundary resolves from the current working directory.",
+			"description": "Expands a gobwas-compatible glob and marks every matching file as read. Relative patterns resolve from the current working directory. Expansion is confined to the enclosing Git repository unless a leading --terragrunt-boundary argument explicitly changes the boundary, given inline (\"--terragrunt-boundary=<directory>\", pattern) or as the next argument (\"--terragrunt-boundary\", directory, pattern); a relative boundary resolves from the current working directory. The walk starts at the pattern's longest leading directory before its first `*`, `?`, `[`, `{` or `\\`, or at the path itself when it has none, and is refused when that directory is not within the boundary, symbolic links resolved. Matches come in the order the walk meets them.",
 			"parameters": [
 				{ "name": "boundary_or_pattern", "types": ["string"], "required": true, "description": "The pattern, or the boundary: --terragrunt-boundary=<directory>, or --terragrunt-boundary followed by the directory" },
 				{ "name": "directory_or_pattern", "types": ["string"], "required": false, "description": "The pattern after --terragrunt-boundary=<directory>, or the boundary directory after --terragrunt-boundary" },

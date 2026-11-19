@@ -310,7 +310,7 @@ dependency "network" {
 		workspace.setWorkspaceRoot(URI.file(directory).toString());
 
 		const message = await rejectionMessage(workspace.refreshDependencyTree());
-		expect(message).to.include('starts outside Terragrunt boundary');
+		expect(message).to.include(`mark_glob_as_read pattern "../*.yaml" resolves outside the boundary ${JSON.stringify(directory)}`);
 	});
 
 	it('resolves repository path functions in reading expressions', async () => {

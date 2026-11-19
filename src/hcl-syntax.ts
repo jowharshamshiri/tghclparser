@@ -13,6 +13,7 @@
  * what is reported here.
  */
 
+import { goQuoted } from './go-quote';
 import { graphemeClusters } from './grapheme-clusters';
 import { scanHclTokens } from './hcl-scanner';
 import type { HclToken, HclTokenType } from './hcl-scanner';
@@ -220,7 +221,7 @@ class SyntaxChecker {
 				if (name === undefined) continue;
 				const existing = attributes.get(name);
 				if (existing) {
-					throw new Problem('Attribute redefined', earlier => `The argument ${quoted(name)} was already set at ${earlier}. Each argument may be set only once.`, next, existing);
+					throw new Problem('Attribute redefined', earlier => `The argument ${goQuoted(name)} was already set at ${earlier}. Each argument may be set only once.`, next, existing);
 				}
 				attributes.set(name, next);
 				continue;
@@ -777,27 +778,6 @@ function isKeyword(token: HclToken, keyword: string): boolean {
 }
 
 /**
- * Quotes text the way Go's `%q` does, which is how the parser shows a character in a message: printable characters
- * as they are, and the rest as escapes.
- *
- * @param text the text.
- * @returns the text in double quotes.
- */
-function quoted(text: string): string {
-	const named: Record<string, string> = { '\x07': '\\a', '\b': '\\b', '\f': '\\f', '\n': '\\n', '\r': '\\r', '\t': '\\t', '\v': '\\v', '"': '\\"', '\\': '\\\\' };
-	let out = '';
-	for (const character of text) {
-		const code = character.codePointAt(0)!;
-		if (named[character] !== undefined) out += named[character];
-		else if (/[\p{L}\p{M}\p{N}\p{P}\p{S} ]/u.test(character)) out += character;
-		else if (code < 0x80) out += `\\x${code.toString(16).padStart(2, '0')}`;
-		else if (code < 0x10000) out += `\\u${code.toString(16).padStart(4, '0')}`;
-		else out += `\\U${code.toString(16).padStart(8, '0')}`;
-	}
-	return `"${out}"`;
-}
-
-/**
  * Counts the single-character insertions, deletions and substitutions that turn one string into another.
  *
  * @param from one string.
@@ -907,7 +887,7 @@ function checkEscapes(token: HclToken): void {
 			if (code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF)) throw invalid(`Cannot encode character U+${code.toString(16).padStart(4, '0')} in UTF-8.`);
 			return;
 		}
-		if (!'nrt"\\'.includes(selector)) throw invalid(`The symbol ${quoted(piece.slice(1))} is not a valid escape sequence selector.`);
+		if (!'nrt"\\'.includes(selector)) throw invalid(`The symbol ${goQuoted(piece.slice(1))} is not a valid escape sequence selector.`);
 	});
 }
 
