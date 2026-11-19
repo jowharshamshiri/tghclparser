@@ -11,22 +11,35 @@ function byBytes(left: string, right: string): number {
 }
 
 /**
+ * The directory fileset searches, which Terragrunt also joins each match to when it records the match as read.
+ *
+ * @param directory the directory as given.
+ * @param workingDirectory the directory a relative one resolves from.
+ * @returns the directory, joined to the working directory when relative.
+ */
+export function filesetRoot(directory: string, workingDirectory: string): string {
+	return path.isAbsolute(directory) ? directory : path.join(workingDirectory, directory);
+}
+
+/**
  * fileset as Terragrunt v1.2.2 has it: the regular files below a directory, the directories symbolic links in it
  * resolve to included, whose '/'-separated path relative to the directory matches a doublestar pattern, answered
  * relative to it in lexical order. A relative directory resolves from the working directory, no boundary applies,
- * and a directory that is not there has no files.
+ * and a directory that is not there has no files. A refusal names the directory joined to the pattern, or
+ * `(sensitive value)` in their place when either is sensitive.
  *
  * @param directory the directory to search.
  * @param pattern the pattern its files' relative paths are matched against.
  * @param workingDirectory the directory a relative one resolves from.
+ * @param sensitive whether the directory or the pattern is sensitive.
  * @returns the matching files' paths relative to the directory.
  */
-export async function fileset(directory: string, pattern: string, workingDirectory: string): Promise<string[]> {
-	const root = path.isAbsolute(directory) ? directory : path.join(workingDirectory, directory);
+export async function fileset(directory: string, pattern: string, workingDirectory: string, sensitive: boolean): Promise<string[]> {
+	const root = filesetRoot(directory, workingDirectory);
 	const failure = () => {
 		const joined = path.join(root, pattern);
 		const cleaned = joined.length > 1 && joined.endsWith(path.sep) ? joined.slice(0, -1) : joined;
-		return new Error(`failed to glob pattern ${goQuoted(cleaned)}: syntax error in pattern`);
+		return new Error(`failed to glob pattern ${sensitive ? '(sensitive value)' : goQuoted(cleaned)}: syntax error in pattern`);
 	};
 	if (!validDoublestarPattern(pattern)) throw failure();
 	const matches = new Set<string>();
