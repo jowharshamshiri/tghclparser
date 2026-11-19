@@ -441,11 +441,18 @@ export const builtinFunctionGroup = {
 		contains: async (args: RuntimeValue<ValueType>[]) => booleanValue(arrayArgument(args, 0, 'contains').some(item => valueEquals(item, requireArgument(args, 1, 'contains')))),
 		csvdecode: async (args: RuntimeValue<ValueType>[]) => csvDecode(stringArgument(args, 0, 'csvdecode')),
 		dirname: async (args: RuntimeValue<ValueType>[]) => stringValue(path.dirname(stringArgument(args, 0, 'dirname'))),
-		fileset: async (args: RuntimeValue<ValueType>[], context: FunctionContext) => arrayValue((await fileset(
-			stringArgument(args, 0, 'fileset'),
-			stringArgument(args, 1, 'fileset'),
-			context.workingDirectory
-		)).map(stringValue)),
+		fileset: async (args: RuntimeValue<ValueType>[], context: FunctionContext) => {
+			// Terragrunt takes a sensitive directory or pattern, and marks the files it answers sensitive.
+			const sensitive = args.some(argument => (argument.type as string) === 'sensitive');
+			const plain = args.map(unwrapSensitive);
+			const files = arrayValue((await fileset(
+				stringArgument(plain, 0, 'fileset'),
+				stringArgument(plain, 1, 'fileset'),
+				context.workingDirectory,
+				sensitive
+			)).map(stringValue));
+			return sensitive ? makeSensitiveValue(files) : files;
+		},
 		distinct: async (args: RuntimeValue<ValueType>[]) => {
 			const items = arrayArgument(args, 0, 'distinct');
 			const distinct: RuntimeValue<ValueType>[] = [];

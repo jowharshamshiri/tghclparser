@@ -327,7 +327,7 @@ const dependents = await workspace.getDependents(unitUri);
 console.log(dependencies.map((config) =&gt; config.targetPath));
 console.log(dependents.map((config) =&gt; config.targetPath));</code></pre></div>
 
-        <div class="callout"><strong>What counts as an edge?</strong><p>The graph records <code>include</code> relationships, <code>dependency</code> blocks, <code>dependencies.paths</code>, files consumed by <code>read_terragrunt_config</code>, and explicit <code>unit</code> or <code>stack</code> targets.</p></div>
+        <div class="callout"><strong>What counts as an edge?</strong><p>The graph records <code>include</code> relationships, <code>dependency</code> blocks, <code>dependencies.paths</code>, explicit <code>unit</code> or <code>stack</code> targets, and the files a unit reads: those read by <code>read_terragrunt_config</code>, <code>read_tfvars_file</code> and <code>sops_decrypt_file</code>, those <code>mark_as_read</code> and <code>mark_glob_as_read</code> mark in <code>locals</code>, and those <code>fileset</code> answers where Terragrunt's discovery evaluates it, such as in <code>locals</code> but not in <code>inputs</code> or <code>generate</code>. Only a file read by <code>read_terragrunt_config</code> is parsed in turn, so the files it reads count as read too.</p></div>
         <div class="next-page"><a href="#how-to-validate-ci">← Validate in CI</a><a href="#how-to-language-features">Next: Language features →</a></div>
       </article>
 

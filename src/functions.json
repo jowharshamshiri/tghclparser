@@ -1899,7 +1899,7 @@
 		},
 		{
 			"name": "fileset",
-			"description": "Enumerates the files below a directory that match a glob pattern.\n\n* Returns the regular files whose path relative to the directory matches the pattern, relative to the directory and in lexical order; directories that symbolic links in it resolve to are searched too.\n* The pattern uses doublestar syntax: `*` and `?` within one path segment, `**` as a whole segment for any number of directories, `[...]` classes, `{a,b}` alternatives and `\\` escapes.\n* A relative directory resolves from the configuration file's directory, and no boundary applies.",
+			"description": "Enumerates the files below a directory that match a glob pattern.\n\n* Returns the regular files whose path relative to the directory matches the pattern, relative to the directory and in lexical order; directories that symbolic links in it resolve to are searched too.\n* The pattern uses doublestar syntax: `*` and `?` within one path segment, `**` as a whole segment for any number of directories, `[...]` classes, `{a,b}` alternatives and `\\` escapes.\n* A relative directory resolves from the configuration file's directory, an empty one is that directory itself, and no boundary applies.\n* Each file it answers counts as read by the unit where Terragrunt's discovery evaluates the call, such as in locals, but not in inputs or generate.\n* A sensitive directory or pattern makes the answer sensitive, and a refusal shows `(sensitive value)` in its place.",
 			"parameters": [
 				{
 					"name": "path",
@@ -1907,10 +1907,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Base directory for the search",
-					"validation": {
-						"pattern": "^[^<>:;,?\"*|]+$"
-					}
+					"description": "Base directory for the search"
 				},
 				{
 					"name": "pattern",

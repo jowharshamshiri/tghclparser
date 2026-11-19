@@ -17,7 +17,10 @@ import { RemoteModuleStore } from './remote-modules';
 import { ParsedDocument } from './ParsedDocument';
 import { Schema } from './Schema';
 import { unlessUnresolved } from './unresolved';
+import { discoveryEvaluates } from './discovery-reads';
+import { fileset, filesetRoot } from './functions/fileset';
 import { expandTerragruntGlob } from './functions/terragrunt_glob';
+import { unwrapSensitive } from './functions/utils';
 
 /** @returns true for an error from the filesystem, such as a directory that cannot be listed or a file that cannot be read. */
 function isFileSystemError(error: unknown): error is NodeJS.ErrnoException {
@@ -110,6 +113,8 @@ interface ConfigRelationships {
 	includes: string[];
 	dependencies: string[];
 	reads: string[];
+	/** The reads read_terragrunt_config parses, whose own reads the file reads too; any other read is only read. */
+	configurations: string[];
 }
 
 /**
@@ -332,7 +337,7 @@ export class Workspace {
 			if (ownerUri === uri) dependencyPaths.push(resolvedPath);
 		}
 
-		const readPaths = await this.resolveReadPaths(doc, resolveFrom);
+		const { reads: readPaths, configurations: readConfigurations } = await this.resolveReadPaths(doc, resolveFrom);
 		for (const readUri of readPaths) {
 			let readConfig = this.configMap.get(readUri);
 			if (!readConfig) {
@@ -357,17 +362,18 @@ export class Workspace {
 		this.setContextRelationships(unitUri, uri, {
 			includes: includePaths,
 			dependencies: [...dependencyPaths, ...componentPaths],
-			reads: readPaths
+			reads: readPaths,
+			configurations: readConfigurations
 		});
 		for (const [ownerUri, dependencies] of ownedDependencies) {
 			if (ownerUri === uri) continue;
-			this.setContextRelationships(unitUri, ownerUri, { includes: [], dependencies, reads: [] });
+			this.setContextRelationships(unitUri, ownerUri, { includes: [], dependencies, reads: [], configurations: [] });
 		}
 		this.configMap.set(uri, currentConfig);
 
 		// HCL files consumed with read_terragrunt_config can themselves include or
 		// read other files. Preserve that transitive lineage instead of flattening it.
-		const readableHclPaths = readPaths.filter(readUri => path.extname(URI.parse(readUri).fsPath) === '.hcl');
+		// A file only marked read, or listed by fileset, is not parsed.
 		// Only includes inherit this unit; a read or dependency target is a config in its own right.
 		for (const refUri of includePaths) {
 			if (refUri && !processedContexts.has(`${unitUri}\0${refUri}`)) {
@@ -375,7 +381,7 @@ export class Workspace {
 				if (refDoc) await this.updateConfigMap(refDoc, processedContexts, unitUri);
 			}
 		}
-		for (const refUri of [...dependencyPaths, ...readableHclPaths]) {
+		for (const refUri of [...dependencyPaths, ...readConfigurations]) {
 			if (refUri && !processedContexts.has(`${refUri}\0${refUri}`)) {
 				const refDoc = await this.getParsedDocument(refUri);
 				if (refDoc) await this.updateConfigMap(refDoc, processedContexts, refUri);
@@ -396,7 +402,8 @@ export class Workspace {
 		unitContexts.set(sourceUri, {
 			includes: [...new Set(relationships.includes)].sort(),
 			dependencies: [...new Set(relationships.dependencies)].sort(),
-			reads: [...new Set(relationships.reads)].sort()
+			reads: [...new Set(relationships.reads)].sort(),
+			configurations: [...new Set(relationships.configurations)].sort()
 		});
 	}
 
@@ -404,11 +411,12 @@ export class Workspace {
 		const relationships = this.configContexts.get(unitUri)?.get(source.uri);
 		if (relationships) return relationships;
 
-		const extension = path.extname(URI.parse(source.uri).fsPath);
-		const nonHclRead = source.dependencyType === 'read' && extension !== '.hcl';
+		// A file that is only read, never parsed as a configuration, has no relationships of its own.
+		const unparsedRead = source.dependencyType === 'read' && ![...this.configContexts.values()]
+			.some(contexts => [...contexts.values()].some(relationships => relationships.configurations.includes(source.uri)));
 		const ungeneratedComponent = (source.dependencyType === 'unit' || source.dependencyType === 'stack')
 			&& !this.documents.has(source.uri);
-		if (nonHclRead || ungeneratedComponent) return { includes: [], dependencies: [], reads: [] };
+		if (unparsedRead || ungeneratedComponent) return { includes: [], dependencies: [], reads: [], configurations: [] };
 
 		throw new Error(`Missing workspace context for ${source.uri} while evaluating ${unitUri}`);
 	}
@@ -1232,11 +1240,13 @@ export class Workspace {
 			default: throw new Error(`Unsupported path interpolation expression: ${token.type}`);
 		}
 	}
+	/** `reveal` takes a sensitive result as the string it holds, as a read path does. */
 	private async evaluatePathFunction(
 		token: Token,
 		sourceDir: string,
 		sourceUri = URI.file(sourceDir).toString(),
-		seen: ReadonlySet<string> = new Set()
+		seen: ReadonlySet<string> = new Set(),
+		reveal = false
 	): Promise<string> {
 		const functionIdentifier = token.children.find(c => c.type === 'function_identifier');
 		const funcName = functionIdentifier?.value as string;
@@ -1270,13 +1280,19 @@ export class Workspace {
 			})));
 
 		const result = await this.schema.getFunctionRegistry().evaluateFunction(funcName, args, context);
-		if (!result || result.type !== 'string' || typeof result.value !== 'string') {
+		// A read path may be sensitive: Terragrunt still reads the file, and records it read.
+		const value = reveal ? unwrapSensitive(result) : result;
+		if (value.type !== 'string' || typeof value.value !== 'string') {
 			throw new Error(`Path function ${funcName} did not return a string`);
 		}
-		return result.value;
+		return value.value;
 	}
 
-	private async resolveReadPaths(document: ParsedDocument, unitDir?: string): Promise<string[]> {
+	/**
+	 * The files a configuration reads, and of those the configurations read_terragrunt_config parses, which can
+	 * themselves include and read other files.
+	 */
+	private async resolveReadPaths(document: ParsedDocument, unitDir?: string): Promise<{ reads: string[]; configurations: string[] }> {
 		const trackedFunctions = new Set([
 			'mark_as_read',
 			'mark_glob_as_read',
@@ -1284,6 +1300,7 @@ export class Workspace {
 			'read_tfvars_file',
 			'sops_decrypt_file'
 		]);
+		const kind = this.schema.getFileKind(document.getUri());
 		const calls: Token[] = [];
 		const isInsideLocals = (token: Token): boolean => {
 			let ancestor = token.parent;
@@ -1296,7 +1313,11 @@ export class Workspace {
 		const visit = (token: Token): void => {
 			const name = token.value?.toString() ?? '';
 			const queueMarker = name === 'mark_as_read' || name === 'mark_glob_as_read';
-			if (token.type === 'function_call' && trackedFunctions.has(name) && (!queueMarker || isInsideLocals(token))) calls.push(token);
+			if (token.type === 'function_call') {
+				if (name === 'fileset') {
+					if (discoveryEvaluates(token, kind)) calls.push(token);
+				} else if (trackedFunctions.has(name) && (!queueMarker || isInsideLocals(token))) calls.push(token);
+			}
 			for (const child of token.children) visit(child);
 		};
 		for (const token of document.getTokens()) visit(token);
@@ -1307,10 +1328,28 @@ export class Workspace {
 		// bare relative paths authored in an included configuration.
 		const resolveFrom = unitDir ?? sourceDir;
 		const reads = new Set<string>();
+		const configurations = new Set<string>();
 		for (const call of calls) {
 			const arguments_ = call.children.filter(child => child.type !== 'function_identifier');
 			const argument = arguments_[0];
 			if (!argument) throw new Error(`${call.value} requires a file path argument`);
+			if (call.value === 'fileset') {
+				if (arguments_.length !== 2) throw new Error(`fileset requires a path and a pattern, got ${arguments_.length} arguments`);
+				let directory: string;
+				let pattern: string;
+				try {
+					[directory, pattern] = await Promise.all(arguments_.map(value => this.evaluateReadPath(value, resolveFrom, sourceUri)));
+				} catch (error) {
+					if (error instanceof UnresolvableReadPath) continue;
+					throw error;
+				}
+				// Terragrunt's fileset resolves from the directory of the file it is called in, and records each
+				// match read joined to the directory it searched. A read path is evaluated without its sensitive
+				// mark, so a refusal here names the path; the evaluator reports the call's own refusal redacted.
+				const root = filesetRoot(directory, sourceDir);
+				for (const match of await fileset(directory, pattern, sourceDir, false)) reads.add(URI.file(path.join(root, match)).toString());
+				continue;
+			}
 			if (call.value === 'mark_glob_as_read') {
 				let values: string[];
 				try {
@@ -1337,8 +1376,9 @@ export class Workspace {
 			const resolvedPath = path.isAbsolute(configuredPath) ? configuredPath : path.resolve(resolveFrom, configuredPath);
 			if (!await this.fileExists(resolvedPath)) throw new Error(`${call.value} target not found: ${resolvedPath}`);
 			reads.add(URI.file(resolvedPath).toString());
+			if (call.value === 'read_terragrunt_config' && path.extname(resolvedPath) === '.hcl') configurations.add(URI.file(resolvedPath).toString());
 		}
-		return [...reads].sort();
+		return { reads: [...reads].sort(), configurations: [...configurations].sort() };
 	}
 
 	/** The value token of `local.<name>`, found in the locals block of the file the reference sits in. */
@@ -1369,7 +1409,7 @@ export class Workspace {
 		seen: ReadonlySet<string> = new Set()
 	): Promise<string> {
 		if (token.type === 'string_lit') return String(token.value);
-		if (token.type === 'function_call') return this.evaluatePathFunction(token, sourceDir, sourceUri, seen);
+		if (token.type === 'function_call') return this.evaluatePathFunction(token, sourceDir, sourceUri, seen, true);
 		if (token.type === 'local_reference') {
 			const name = token.children
 				.find(child => child.type === 'access_chain')?.children
@@ -1392,11 +1432,13 @@ export class Workspace {
 				if (child.type === 'interpolation' && child.children[0]) {
 					return this.evaluateReadPath(child.children[0], sourceDir, sourceUri, seen);
 				}
-				throw new Error(`Unsupported read path segment: ${child.type}`);
+				throw new UnresolvableReadPath(`a ${child.type} in a read path needs the configuration evaluated`);
 			}));
 			return parts.join('');
 		}
-		throw new Error(`Unsupported read path expression: ${token.type}`);
+		// A conditional, a for expression, a reference other than a local and the like have a value only once the
+		// configuration is evaluated.
+		throw new UnresolvableReadPath(`a ${token.type} in a read path needs the configuration evaluated`);
 	}
 
 	private async buildDependencyTree(): Promise<void> {
@@ -1486,8 +1528,9 @@ export class Workspace {
 			for (const transitiveUri of this.collectReading(unitUri, includeUri, nextAncestry)) reading.add(transitiveUri);
 		}
 		for (const readUri of relationships.reads) {
-			const readConfig = this.configMap.get(readUri);
-			if (!readConfig) throw new Error(`Reading lineage references missing file ${readUri}`);
+			if (!this.configMap.has(readUri)) throw new Error(`Reading lineage references missing file ${readUri}`);
+		}
+		for (const readUri of relationships.configurations) {
 			for (const transitiveUri of this.collectReading(readUri, readUri, nextAncestry)) reading.add(transitiveUri);
 		}
 		return [...reading].sort();
