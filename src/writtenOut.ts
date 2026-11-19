@@ -1,3 +1,4 @@
+import { CtyNumber } from './cty-number';
 import type { RuntimeValue, ValueType } from './model';
 
 interface SourceNode {
@@ -52,7 +53,7 @@ export function isWrittenOut(node: SourceNode, value: RuntimeValue<ValueType>, c
 			return text === quoted(written);
 		}
 		case 'number':
-			return HCL_NUMBER.test(text) && Number(text) === value.value;
+			return HCL_NUMBER.test(text) && CtyNumber.parse(text).compare(value.value as CtyNumber) === 0;
 		case 'boolean':
 			return text === String(value.value);
 		case 'null':

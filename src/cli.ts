@@ -1282,13 +1282,25 @@ function renderedJson(plain: unknown): string {
 	return write(plain, '');
 }
 
-/** A float64 as Go's encoding/json writes it. */
+/**
+ * A float64 as Go's encoding/json writes it: the fewest digits that read back to it, as strconv gives them and as
+ * JavaScript's toExponential gives them too, with an exponent below 1e-6 or from 1e21, written `e-7` or `e+21`.
+ */
 function goJsonFloat(value: number): string {
+	const sign = value < 0 || Object.is(value, -0) ? '-' : '';
 	const magnitude = Math.abs(value);
-	const exponent = magnitude !== 0 && (magnitude < 1e-6 || magnitude >= 1e21);
-	const text = CtyNumber.fromFloat64(value).text(exponent ? 'e' : 'f', -1);
-	// Go writes e-09 as e-9.
-	return exponent ? text.replace(/e-0(\d)$/u, 'e-$1') : text;
+	if (magnitude === 0) return `${sign}0`;
+	const [mantissa, exponentText] = magnitude.toExponential().split('e');
+	const digits = mantissa.replace('.', '');
+	const exponent = Number(exponentText);
+	if (magnitude < 1e-6 || magnitude >= 1e21) {
+		const fraction = digits.length > 1 ? `.${digits.slice(1)}` : '';
+		return `${sign}${digits[0]}${fraction}e${exponent < 0 ? '-' : '+'}${Math.abs(exponent)}`;
+	}
+	const point = exponent + 1;
+	if (point <= 0) return `${sign}0.${'0'.repeat(-point)}${digits}`;
+	if (point >= digits.length) return `${sign}${digits}${'0'.repeat(point - digits.length)}`;
+	return `${sign}${digits.slice(0, point)}.${digits.slice(point)}`;
 }
 
 function hclValue(value: unknown): string {

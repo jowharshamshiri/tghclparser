@@ -267,7 +267,7 @@ describe('semantic configuration evaluation', () => {
 				range: { start: { line: 1, character: 6 }, end: { line: 1, character: 16 } }
 			},
 			{
-				message: 'Arithmetic requires numbers',
+				message: 'Unsuitable value for right operand: a number is required.',
 				filePath: configPath,
 				range: { start: { line: 2, character: 6 }, end: { line: 2, character: 13 } }
 			}

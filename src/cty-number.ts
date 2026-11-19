@@ -17,8 +17,11 @@ const PARSE_PRECISION = 512;
 /** The largest power of ten, either way, of a number Terragrunt writes out. */
 const MAX_DECIMAL_EXPONENT = 4096;
 
-/** Go's constant math.Ln2/math.Ln10, rounded once to a float64. */
-const LOG10_2 = 0.30102999566398119521373889472449302676818988146210854131;
+/**
+ * Go's constant math.Ln2/math.Ln10, which Go computes exactly and rounds once to a float64: the float64 nearest
+ * log10(2). Dividing JavaScript's Math.LN2 by Math.LN10 rounds twice and gives the float64 below it.
+ */
+const LOG10_2 = 0.3010299956639812;
 
 /** What Terragrunt says of a number beyond {@link MAX_DECIMAL_EXPONENT}. */
 export const NUMBER_OUT_OF_RANGE = `number is outside the supported range of 1e-${MAX_DECIMAL_EXPONENT} to 1e${MAX_DECIMAL_EXPONENT}`;
