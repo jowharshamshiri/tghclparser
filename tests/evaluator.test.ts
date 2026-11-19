@@ -274,6 +274,77 @@ describe('semantic configuration evaluation', () => {
 		});
 	});
 
+	// Each case is what Terragrunt v1.2.2 renders, or refuses, for the same source.
+	describe('template directives', () => {
+		const evaluate = (content: string) => evaluator.evaluateUnit(configPath, content, process.cwd());
+		const rendered = async (content: string): Promise<unknown> => {
+			const result = await evaluate(content);
+			assert.equal(result.error, undefined, content);
+			return (runtimeValueToPlain(result.inputs!) as Record<string, unknown>).x;
+		};
+		const value = (expression: string) => rendered(`inputs = {\n  x = ${expression}\n}\n`);
+		/** The one fault an expression has, and the columns of line 2 it is written at. */
+		const fault = async (expression: string): Promise<[string, number, number]> => {
+			const result = await evaluate(`inputs = {\n  x = ${expression}\n}\n`);
+			assert.equal(result.valid, false, expression);
+			assert.equal(result.problems?.length, 1, `${expression}: ${result.error}`);
+			const [problem] = result.problems!;
+			assert.equal(problem.range.start.line, 1, expression);
+			return [problem.message, problem.range.start.character, problem.range.end.character];
+		};
+
+		it('renders the branch an if takes, and nothing for a false if with no else', async () => {
+			assert.equal(await value('"%{ if true }yes%{ endif }"'), 'yes');
+			assert.equal(await value('"%{ if false }yes%{ endif }"'), '');
+			assert.equal(await value('"a%{ if false }yes%{ else }no%{ endif }b"'), 'anob');
+			assert.equal(await value('"%{ if "true" }yes%{ else }no%{ endif }"'), 'yes');
+		});
+
+		it('leaves the branch an if does not take unevaluated', async () => {
+			assert.equal(await value('"%{ if true }ok%{ else }${local.missing}%{ endif }"'), 'ok');
+		});
+
+		it('renders a for once for each element, in the collection\'s order, and joins the renderings', async () => {
+			assert.equal(await value('"%{ for x in ["a", "b"] }${x};%{ endfor }"'), 'a;b;');
+			assert.equal(await value('"%{ for i, x in ["a", "b"] }${i}=${x} %{ endfor }"'), '0=a 1=b ');
+			assert.equal(await value('"%{ for k, v in { b = 2, a = 1 } }${k}${v}%{ endfor }"'), 'a1b2');
+			assert.equal(await value('"[%{ for x in [] }${x}%{ endfor }]"'), '[]');
+			assert.equal(await value('"%{ for x in [1, 2] }%{ if x == 2 }two%{ else }${x},%{ endif }%{ endfor }"'), '1,two');
+		});
+
+		it('binds a for variable in a local without taking it for a variable the local reads', async () => {
+			assert.equal(await rendered([
+				'locals {',
+				'  letters = ["a", "b"]',
+				'  joined  = "%{ for letter in local.letters }${letter}%{ endfor }"',
+				'}',
+				'inputs = { x = local.joined }'
+			].join('\n')), 'ab');
+		});
+
+		it('strips the space beside a sequence its ~ marks, escapes decoded first', async () => {
+			assert.equal(await value('"a  %{~ if true ~}  b  %{~ endif ~}  c"'), 'abc');
+			assert.equal(await value('"a ${~ "x" ~} b"'), 'axb');
+			assert.equal(await value('"a\\n%{~ if true ~}\\n b%{ endif }"'), 'ab');
+		});
+
+		it('evaluates directives in a heredoc, where a strip marker reaches only to the end of its line', async () => {
+			assert.equal(await value('<<EOT\n%{ for x in ["a", "b"] ~}\n- ${x}\n%{ endfor ~}\nEOT\n'), '- a\n- b\n');
+			assert.equal(await value('<<EOT\na\n%{ if true ~}\n  b\n%{~ endif }\nEOT\n'), 'a\n  b\n');
+		});
+
+		it('refuses an if condition that is not a bool, or is null, where the condition is written', async () => {
+			assert.deepEqual(await fault('"%{ if 1 }yes%{ endif }"'), ['The condition expression must be of type bool.', 13, 14]);
+			assert.deepEqual(await fault('"%{ if null }yes%{ endif }"'), ['The condition value is null. Conditions must either be true or false.', 13, 17]);
+		});
+
+		it('refuses a for collection that is null or not a collection, where the collection is written', async () => {
+			assert.deepEqual(await fault('"%{ for x in "ab" }${x}%{ endfor }"'), ['A value of type string cannot be used as the collection in a \'for\' expression.', 19, 23]);
+			assert.deepEqual(await fault('"%{ for x in 1 }${x}%{ endfor }"'), ['A value of type number cannot be used as the collection in a \'for\' expression.', 19, 20]);
+			assert.deepEqual(await fault('"%{ for x in null }${x}%{ endfor }"'), ['A null value cannot be used as the collection in a \'for\' expression.', 19, 23]);
+		});
+	});
+
 	describe('substr', () => {
 		const substr = async (args: string): Promise<unknown> => {
 			const result = await evaluator.evaluateUnit(configPath, `inputs = {\n  x = substr(${args})\n}\n`, process.cwd());
@@ -873,6 +944,27 @@ describe('semantic configuration evaluation', () => {
 		} finally {
 			await fs.rm(base, { recursive: true, force: true });
 		}
+	});
+
+	// What Terragrunt v1.2.2 renders for the same heredocs.
+	it('keeps the line break that ends a heredoc\'s last line', async () => {
+		const content = [
+			'inputs = {',
+			'  plain = <<EOT',
+			'a',
+			'b',
+			'EOT',
+			'  flush = <<-EOT',
+			'    a',
+			'    b',
+			'    EOT',
+			'  empty = <<EOT',
+			'EOT',
+			'}'
+		].join('\n');
+		const result = await evaluator.evaluateUnit(configPath, content, process.cwd());
+		assert.equal(result.error, undefined);
+		assert.deepEqual(runtimeValueToPlain(result.inputs!), { plain: 'a\nb\n', flush: 'a\nb\n', empty: '' });
 	});
 
 	it('reduces the template escapes the way Terragrunt does', async () => {

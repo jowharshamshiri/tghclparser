@@ -646,13 +646,13 @@ export class ParsedDocument {
 				return await this.schema.getFunctionRegistry().evaluateFunction(funcName, args, context);
 			}
 			case 'interpolated_string': {
-				// Handle interpolated strings by evaluating each child and concatenating
+				// Handle interpolated strings by evaluating each child and concatenating. A part with no value here,
+				// such as a template directive, leaves the string with none, rather than with the text of the rest.
 				const parts: string[] = [];
 				for (const child of node.children) {
 					const evaluated = await this.evaluateValue(child);
-					if (evaluated) {
-						parts.push(this.coerceToString(evaluated));
-					}
+					if (!evaluated) return undefined;
+					parts.push(this.coerceToString(evaluated));
 				}
 				return {
 					type: 'string',

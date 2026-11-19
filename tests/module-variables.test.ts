@@ -60,7 +60,7 @@ variable "region" {
 		expect(result.variables.map(variable => variable.name)).to.deep.equal(['settings', 'tags', 'token', 'region']);
 
 		const [settings, tags, token, region] = result.variables;
-		expect(settings.description).to.equal('Service\nsettings');
+		expect(settings.description).to.equal('Service\nsettings\n');
 		expect(settings.typeText).to.equal('object({ name = string replicas = number })');
 		expect(settings.typeKind).to.equal('object');
 		expect(settings.type).to.deep.equal({

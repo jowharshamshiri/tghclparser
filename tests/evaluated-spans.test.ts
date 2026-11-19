@@ -83,8 +83,8 @@ describe('evaluated spans', () => {
 		].join('\n');
 
 		assert.deepEqual(await spans(content), [
-			{ kind: 'name', text: 'trimmed', value: 'indented' },
-			{ kind: 'expression', text: '<<-EOT\n    indented\n    EOT', value: 'indented' }
+			{ kind: 'name', text: 'trimmed', value: 'indented\n' },
+			{ kind: 'expression', text: '<<-EOT\n    indented\n    EOT', value: 'indented\n' }
 		]);
 	});
 

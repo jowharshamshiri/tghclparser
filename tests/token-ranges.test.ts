@@ -26,7 +26,7 @@ function covered(document: ParsedDocument, type: string): string[] {
 describe('token ranges', () => {
 	it('gives each literal part of an interpolated string the text it was written as', () => {
 		const document = parse('a = "x\\ny${local.n}-${local.m}tail"\nb = <<EOT\none ${local.n}\ntwo\nEOT\n');
-		expect(covered(document, 'string_lit')).to.deep.equal(['x\\ny', '-', 'tail', 'one ', '\ntwo']);
+		expect(covered(document, 'string_lit')).to.deep.equal(['x\\ny', '-', 'tail', 'one ', '\ntwo\n']);
 	});
 
 	it('hovers a reference in a later interpolation of a string as it does the first', async () => {

@@ -89,8 +89,6 @@ export type TokenType =
 	// Directives
 	| 'if_directive'
 	| 'for_directive'
-	| 'else_directive'
-	| 'endif_directive'
 
 	// Comments and whitespace
 	| 'block_comment'

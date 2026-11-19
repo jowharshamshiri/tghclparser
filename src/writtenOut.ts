@@ -79,14 +79,11 @@ function isWrittenOutEntry(attribute: SourceNode, entries: Map<string, RuntimeVa
 	return entry !== undefined && isWrittenOut(bound, entry, content);
 }
 
-/** The text between a heredoc's opening line and its closing marker line. */
+/** The text between a heredoc's opening line and its closing marker line, the last line's line break included. */
 function heredocBody(text: string): string | undefined {
 	const opener = HEREDOC_OPENER.exec(text);
 	if (!opener) return undefined;
-	const closing = text.lastIndexOf('\n');
-	if (closing < opener[0].length) return '';
-	const end = text[closing - 1] === '\r' ? closing - 1 : closing;
-	return text.slice(opener[0].length, end);
+	return text.slice(opener[0].length, text.lastIndexOf('\n') + 1);
 }
 
 /** A template's literal text written so that it reads back as itself: `${` and `%{` doubled. */

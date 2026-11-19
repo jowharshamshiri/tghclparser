@@ -43,6 +43,126 @@
       parts.map(part => part.literal !== undefined ? makeNode('string_lit', part.literal, part.location) : part));
   }
 
+  // Whether a UTF-16 code unit is space a strip marker removes: a character Go's unicode.IsSpace accepts, each of
+  // which is one code unit.
+  function isGoSpace(code) {
+    return (code >= 0x09 && code <= 0x0D) || code === 0x20 || code === 0x85 || code === 0xA0 || code === 0x1680
+      || (code >= 0x2000 && code <= 0x200A) || code === 0x2028 || code === 0x2029 || code === 0x202F
+      || code === 0x205F || code === 0x3000;
+  }
+
+  function trimStartSpace(text) {
+    let start = 0;
+    while (start < text.length && isGoSpace(text.charCodeAt(start))) start++;
+    return text.slice(start);
+  }
+
+  function trimEndSpace(text) {
+    let end = text.length;
+    while (end > 0 && isGoSpace(text.charCodeAt(end - 1))) end--;
+    return text.slice(0, end);
+  }
+
+  // Applies a template's strip markers as HCL does, before anything else reads its literal text. HCL's scanner cuts
+  // the literal text into tokens, and a marker trims only the one token beside it: a `~` just after the opening
+  // marker of a sequence trims the space at the end of the token just before the sequence, and a `~` just before
+  // its closing brace the space at the start of the token just after it. A `$` or `%` that starts no sequence, and
+  // the doubled `$$` or `%%` that escapes one, is a token of its own, and in a heredoc a token ends with its line. A
+  // quoted string's escapes are decoded before the trim.
+  //
+  // parts: the template's characters, each with its `literal` and `location`, marked `sigil` or `lineEnd` where a
+  // token ends after it, and its sequences, each with `stripBefore` and `stripAfter`.
+  // Returns the literal tokens and the sequences, in order.
+  function stripTemplate(parts) {
+    const tokens = [];
+    let extendable = false;
+    for (const part of parts) {
+      if (part.literal === undefined) {
+        tokens.push(part);
+        extendable = false;
+        continue;
+      }
+      const last = tokens[tokens.length - 1];
+      if (extendable && !part.sigil) {
+        tokens[tokens.length - 1] = { literal: last.literal + part.literal, location: { ...last.location, end: part.location.end } };
+      } else {
+        tokens.push({ literal: part.literal, location: part.location });
+      }
+      extendable = !part.sigil && !part.lineEnd;
+    }
+    let trimNext = false;
+    let afterLiteral = false;
+    tokens.forEach((token, index) => {
+      const trim = trimNext;
+      const trimPrevious = afterLiteral;
+      trimNext = false;
+      afterLiteral = token.literal !== undefined;
+      if (token.literal !== undefined) {
+        if (trim) token.literal = trimStartSpace(token.literal);
+        return;
+      }
+      if (token.stripBefore && trimPrevious) tokens[index - 1].literal = trimEndSpace(tokens[index - 1].literal);
+      trimNext = token.stripAfter;
+    });
+    return tokens;
+  }
+
+  // Builds a template's directives into what HCL lowers them to: an `if` into a conditional between the template of
+  // each branch, a `for` into the template it repeats for each element of its collection. The syntax check has
+  // refused a template whose directives are not balanced before the grammar runs.
+  //
+  // parts: the template's literal parts, its interpolations, each holding its `node`, and its directives, each with
+  // its `directive` keyword and location.
+  // location: where the whole template is written.
+  function templateNode(parts, location) {
+    let position = 0;
+    const span = (from, to) => ({ ...from, end: to.end });
+    // The template of a branch or a loop: the empty string, where nothing is written, at `at`.
+    const body = (items, at) => items.length === 0
+      ? makeNode('string_lit', '', { ...location, start: at, end: at })
+      : stringNode(items, span(items[0].location, items[items.length - 1].location));
+    const sequence = ends => {
+      const items = [];
+      while (position < parts.length) {
+        const part = parts[position];
+        if (ends.includes(part.directive)) return items;
+        position++;
+        if (part.literal !== undefined) {
+          items.push(part);
+        } else if (part.directive === 'if') {
+          const whenTrue = sequence(['else', 'endif']);
+          let close = parts[position++];
+          let whenFalse = [];
+          if (close.directive === 'else') {
+            whenFalse = sequence(['endif']);
+            close = parts[position++];
+          }
+          items.push(makeNode('if_directive', null, span(part.location, close.location), [
+            part.condition,
+            body(whenTrue, part.location.end),
+            body(whenFalse, close.location.start)
+          ]));
+        } else if (part.directive === 'for') {
+          const repeated = sequence(['endfor']);
+          const close = parts[position++];
+          items.push(makeNode('for_directive', null, span(part.location, close.location), [
+            ...(part.key ? [part.key] : []),
+            part.value,
+            part.collection,
+            body(repeated, part.location.end)
+          ]));
+        } else if (part.directive !== undefined) {
+          throw new Error(`Unexpected ${part.directive} directive in a template`);
+        } else {
+          items.push(part.node);
+        }
+      }
+      if (ends.length > 0) throw new Error(`A template directive is missing its ${ends[ends.length - 1]}`);
+      return items;
+    };
+    return stringNode(sequence([]), location);
+  }
+
   function getNextId() {
     return nextId++;
   }
@@ -514,24 +634,23 @@ Object = "{" _ pairs:(Pair (_ ","? _ Pair)* (_ ",")?)? _ "}" {
 StringLiteral = QuotedString / Heredoc
 Heredoc = "<<" trim:"-"? marker:beginMarker newline content:heredocContent endMarkerLine {
   popHeredocMarker();
+  const literals = consolidateLiteralParts(stripTemplate(content));
   // `<<-` trims every line of the literal text.
   const parts = trim === "-"
-    ? content.map(part => part.literal !== undefined ? { ...part, literal: part.literal.split('\n').map(line => line.trim()).join('\n') } : part)
-    : content;
-  return stringNode(parts, location());
+    ? literals.map(part => part.literal !== undefined ? { ...part, literal: part.literal.split('\n').map(line => line.trim()).join('\n') } : part)
+    : literals;
+  return templateNode(parts, location());
 }
 
+// A heredoc's characters and sequences, as stripTemplate takes them: a line ends a literal token.
 heredocContent = parts:(
     !endMarkerLine part:(
-      InterpolatedExpr /
-      "$$" "{" { return "\x24" + String.fromCharCode(123); } /
-      "%%" "{" { return "%" + String.fromCharCode(123); } /
-          "\r" { return text(); } /
-      [^\r] { return text(); }
-    ) { return typeof part === 'string' ? { literal: part, location: location() } : part; }
-)* {
-  return consolidateLiteralParts(parts);
-}
+      TemplateSequence /
+      TemplateSigil /
+      "\n" { return { literal: text(), location: location(), lineEnd: true }; } /
+      [^\n] { return { literal: text(), location: location() }; }
+    ) { return part; }
+)*
 
 beginMarker = marker:$([A-Z][A-Z0-9_]*) {
   pushHeredocMarker(marker);
@@ -540,35 +659,36 @@ beginMarker = marker:$([A-Z][A-Z0-9_]*) {
 
 newline = "\n" / "\r\n"
 
-whitespace = [ \t]* 
+whitespace = [ \t]*
 
+// The line that closes a heredoc. The line break before it belongs to the heredoc's last line, and so to its value.
 endMarkerLine =
   &{
-    const match = input.slice(offset()).match(/^\r?\n[ \t]*([A-Z][A-Z0-9_]*)[ \t]*(?=\r?\n)/);
+    if (input[offset() - 1] !== '\n') return false;
+    const match = input.slice(offset()).match(/^[ \t]*([A-Z][A-Z0-9_]*)[ \t]*(?=\r?\n)/);
     return match !== null && match[1] === peekHeredocMarker();
   }
-  newline
   whitespace
-  marker:$[A-Z][A-Z0-9_]* 
+  marker:$[A-Z][A-Z0-9_]*
   whitespace
   &newline
 
 
 QuotedString = '"' parts:QuotedStringPart* '"' {
-  return stringNode(consolidateLiteralParts(parts), location());
+  return templateNode(consolidateLiteralParts(stripTemplate(parts)), location());
 }
 
-// A character of a quoted string, with the source it was written as, or an interpolation.
-QuotedStringPart = char:DoubleStringChar {
-  return typeof char === 'string' ? { literal: char, location: location() } : char;
-}
+// A character of a quoted string, with the source it was written as, or a sequence, as stripTemplate takes them.
+QuotedStringPart =
+  TemplateSequence /
+  TemplateSigil /
+  char:(EscapedChar / [^"\\]) { return { literal: char, location: location() }; }
 
-DoubleStringChar =
-  "$$" "{" { return "\x24" + String.fromCharCode(123); } /
-  "%%" "{" { return "%" + String.fromCharCode(123); } /
-  InterpolatedExpr /
-  EscapedChar /
-  [^"\\]
+// A `$` or `%` that starts no sequence, or the `$${` or `%%{` that escapes one: a literal token of its own.
+TemplateSigil =
+  "$$" "{" { return { literal: "\x24" + String.fromCharCode(123), location: location(), sigil: true }; } /
+  "%%" "{" { return { literal: "%" + String.fromCharCode(123), location: location(), sigil: true }; } /
+  char:[$%] { return { literal: char, location: location(), sigil: true }; }
 
 EscapeSequence = "\\" . { return text(); }
 EscapedChar = "\\" escaped:. {
@@ -582,64 +702,32 @@ EscapedChar = "\\" escaped:. {
     default: return escaped;
   }
 }
-InterpolatedExpr = (
-  DirectiveInterpolation /
-  TemplateInterpolation
-)
 
-StringContent = chars:(
-  [^%] /
-  "%" ![{}] /
-  InterpolatedExpr
-)* {
-  // If no interpolations, join as simple string
-  if (chars.every(c => typeof c === 'string')) {
-    return makeNode('string_lit', chars.join(''), location());
-  }
-  
-  // Otherwise create interpolated string with proper structure
-  return makeNode('string_content', null, location(),
-    chars.map(c => {
-      if (typeof c === 'string') {
-        return makeNode('string_lit', c, location());
-      }
-      return c;
-    })
-  );
+// An interpolation or a directive, with whether `~` strips the space before and after it.
+TemplateSequence = TemplateInterpolation / TemplateDirective
+
+TemplateInterpolation = "${" before:"~"? _ expr:Expression _ after:"~"? "}" {
+  return { node: makeNode('interpolation', null, location(), [expr]), location: location(), stripBefore: before !== null, stripAfter: after !== null };
 }
 
-TemplateInterpolation = "${" _ expr:Expression _ "}" {
-  return makeNode('interpolation', null, location(), [expr]);
+TemplateDirective = "%{" before:"~"? _ directive:DirectiveBody _ after:"~"? "}" {
+  return { ...directive, location: location(), stripBefore: before !== null, stripAfter: after !== null };
 }
 
-DirectiveInterpolation = RawDirective
+DirectiveBody =
+  "if" !DirectiveNameRest _ condition:Expression { return { directive: 'if', condition }; } /
+  "for" !DirectiveNameRest _ first:DirectiveVariable _ second:("," _ DirectiveVariable)? _ "in" !DirectiveNameRest _ collection:Expression {
+    return { directive: 'for', key: second ? first : null, value: second ? second[2] : first, collection };
+  } /
+  "else" !DirectiveNameRest { return { directive: 'else' }; } /
+  "endif" !DirectiveNameRest { return { directive: 'endif' }; } /
+  "endfor" !DirectiveNameRest { return { directive: 'endfor' }; }
 
-RawDirective = "%{" body:$([^}]*) "}" {
-  return makeNode('template_directive', body, location());
+DirectiveVariable = name:$(([a-zA-Z_] / [^\0-\x7F]) DirectiveNameRest*) {
+  return makeIdentifierNode(name, location());
 }
 
-IfDirective = "%{" _ "if" _ condition:Expression _ "}" content:StringContent {
-  return makeNode('if_directive', null, location(), [
-    condition,
-    content
-  ]);
-}
-
-ForDirective = "%{" _ "for" _ item:Identifier _ "in" _ collection:Expression _ "}" content:StringContent {
-  return makeNode('for_directive', null, location(), [
-    makeIdentifierNode(item, location()),
-    collection,
-    content
-  ]);
-}
-
-ElseDirective = "%{" _ "else" _ "}" content:StringContent {
-  return makeNode('else_directive', null, location(), [content]);
-}
-
-EndifDirective = "%{" _ "endif" _ "}" {
-  return makeNode('endif_directive', null, location());
-}
+DirectiveNameRest = [a-zA-Z0-9_\-] / [^\0-\x7F]
 
 Number = OctalNumber / LegacyOctal / DecimalNumber
 

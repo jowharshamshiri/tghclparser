@@ -24,6 +24,7 @@ import {
 	makeNullValue,
 	makeNumberValue,
 	makeObjectValue,
+	makeSensitiveValue,
 	makeStringValue,
 	runtimeToPlain,
 	unwrapSensitive
@@ -183,7 +184,7 @@ function variableRoots(node: TNode, bound: ReadonlySet<string> = new Set()): str
 		?? (node.type === 'reference' || node.type === 'traversal_reference' ? String(node.value ?? '') : undefined);
 	if (root !== undefined) return bound.has(root) ? [] : [root];
 	const children = node.children ?? [];
-	if (node.type === 'list_comprehension' || node.type === 'map_comprehension' || node.type === 'for_expression') {
+	if (node.type === 'list_comprehension' || node.type === 'map_comprehension' || node.type === 'for_expression' || node.type === 'for_directive') {
 		const names = children.filter(child => child.type === 'identifier').map(child => String(child.value ?? ''));
 		const [collection, ...body] = children.filter(child => child.type !== 'identifier');
 		const inner = new Set([...bound, ...names]);
@@ -933,8 +934,11 @@ export class ConfigEvaluator {
 				const value = node.children?.find(child => child.type !== 'attribute_identifier');
 				if (identifier?.location && value) await add(identifier.location, 'name', value);
 			}
-			// The literal fragments of an interpolated string carry the whole string's location; the string is the span.
-			const fragment = node.type === 'string_lit' && parent?.type === 'interpolated_string';
+			// The literal fragments of an interpolated string, and the templates of a directive's branches and loop, are
+			// parts of the string; the string is the span.
+			const fragment = (node.type === 'string_lit' && parent?.type === 'interpolated_string')
+				|| (parent?.type === 'if_directive' && parent.children?.[0] !== node)
+				|| (parent?.type === 'for_directive' && parent.children?.at(-1) === node);
 			if (node.location && EXPRESSION_SPAN_TYPES.has(node.type) && !fragment) await add(node.location, 'expression', node);
 			for (const child of node.children ?? []) await visit(child, node);
 		};
@@ -955,7 +959,7 @@ export class ConfigEvaluator {
 	private async forElements(scope: Scope): Promise<EvaluatedSpan[]> {
 		const gathered = new Map<TNode, RuntimeValue<ValueType>[]>();
 		const visit = async (node: TNode): Promise<void> => {
-			if (node.type !== 'list_comprehension' && node.type !== 'map_comprehension') {
+			if (node.type !== 'list_comprehension' && node.type !== 'map_comprehension' && node.type !== 'for_directive') {
 				for (const child of node.children ?? []) await visit(child);
 				return;
 			}
@@ -2131,6 +2135,10 @@ export class ConfigEvaluator {
 				return this.evalInterpolatedString(node, scope);
 			case 'interpolation':
 				return this.evalNode(node.children?.[0], scope);
+			case 'if_directive':
+				return this.evalTemplateIf(node, scope);
+			case 'for_directive':
+				return this.evalTemplateFor(node, scope);
 			case 'ternary_expression': {
 				const [condition, whenTrue, whenFalse] = node.children ?? [];
 				const value = computable(await this.evalNode(condition, scope));
@@ -2262,15 +2270,64 @@ export class ConfigEvaluator {
 	}
 
 	private async evalInterpolatedString(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
-		const parts = await this.settleOperands((node.children ?? []).flatMap((child): (() => Promise<string>)[] => {
-			if (child.type === 'string_lit') return [async () => String(child.value ?? '')];
-			if (child.type === 'interpolation') return [async () => coerceToString(computable(await this.evalNode(child.children?.[0], scope)))];
-			if (child.type === 'if_directive' || child.type === 'for_directive' || child.type === 'else_directive' || child.type === 'endif_directive') {
-				return [async () => { throw new Error('Template directives inside quoted strings are not supported'); }];
+		const parts = await this.settleOperands((node.children ?? []).map(child => {
+			if (child.type === 'string_lit') return async () => String(child.value ?? '');
+			if (child.type === 'interpolation' || child.type === 'if_directive' || child.type === 'for_directive') {
+				return async () => coerceToString(computable(await this.evalNode(child, scope)));
 			}
-			return [];
+			throw new Error(`A template cannot hold a ${child.type}`);
 		}));
 		return makeStringValue(parts.join(''));
+	}
+
+	/**
+	 * Evaluates a template's `%{ if }` as HCL evaluates the conditional it lowers one to: the condition converts to a
+	 * bool as any condition does, and the template of the branch it takes is rendered.
+	 *
+	 * @param node the if_directive: its condition, and the template of each branch.
+	 * @param scope the scope of the file it is written in.
+	 * @returns the rendered branch.
+	 */
+	private async evalTemplateIf(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
+		const [condition, whenTrue, whenFalse] = node.children ?? [];
+		const value = computable(await this.evalNode(condition, scope));
+		const truth = this.atNode(condition, scope, () => conditionValue(value));
+		return this.evalNode(truth ? whenTrue : whenFalse, scope);
+	}
+
+	/**
+	 * Evaluates a template's `%{ for }` as HCL evaluates the for expression it lowers one to, joined: the template it
+	 * repeats is rendered for each element of the collection in the collection's order, with the value variable
+	 * bound to the element and the key variable to its index or key, and the renderings are concatenated.
+	 *
+	 * @param node the for_directive: its key variable if it has one, its value variable, the collection and the
+	 *   template it repeats.
+	 * @param scope the scope of the file it is written in.
+	 * @returns the concatenated renderings, sensitive when the collection is.
+	 * @throws Error at the collection when it is null or cannot be iterated, in HCL's words.
+	 */
+	private async evalTemplateFor(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
+		const children = node.children ?? [];
+		const variables = children.slice(0, children.length - 2);
+		const [collection, template] = children.slice(variables.length);
+		const marked = computable(await this.evalNode(collection, scope));
+		const collectionValue = unwrapSensitive(marked);
+		const items = this.atNode(collection, scope, () => iterateValue(collectionValue));
+		let rendered = '';
+		for (const [key, item] of items) {
+			const frame = new Map<string, RuntimeValue<ValueType>>();
+			if (variables.length === 2) {
+				frame.set(String(variables[0].value ?? ''), collectionValue.type === 'array' ? makeNumberValue(Number(key)) : makeStringValue(key));
+			}
+			frame.set(String(variables[variables.length - 1].value ?? ''), item);
+			scope.comprehension.push(frame);
+			try {
+				rendered += coerceToString(computable(await this.evalNode(template, scope)));
+			} finally {
+				scope.comprehension.pop();
+			}
+		}
+		return marked === collectionValue ? makeStringValue(rendered) : makeSensitiveValue(makeStringValue(rendered));
 	}
 
 	private async evalComparison(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
@@ -2753,6 +2810,8 @@ function makeRootScope(filePath: string, content: string, workspaceRoot = path.d
 /**
  * The elements of a for expression's collection, in the order HCL visits them: a list by index, an object by key in
  * lexical order, as `keys` and `values` give them.
+ *
+ * @throws Error when the collection is null or is not a collection, in HCL's words.
  */
 function iterateValue(value: RuntimeValue<ValueType>): Array<[string, RuntimeValue<ValueType>]> {
 	const items: Array<[string, RuntimeValue<ValueType>]> = [];
@@ -2761,8 +2820,11 @@ function iterateValue(value: RuntimeValue<ValueType>): Array<[string, RuntimeVal
 	} else if (value.type === 'object' || value.type === 'block') {
 		const map = value.value as Map<string, RuntimeValue<ValueType>>;
 		for (const key of [...map.keys()].sort()) items.push([key, map.get(key)!]);
+	} else if (value.type === 'null') {
+		throw new Error('A null value cannot be used as the collection in a \'for\' expression.');
 	} else {
-		throw new Error(`Comprehension collection must be a list or object, got ${value.type}`);
+		const type = value.type === 'boolean' ? 'bool' : value.type;
+		throw new Error(`A value of type ${type} cannot be used as the collection in a 'for' expression.`);
 	}
 	return items;
 }

@@ -260,7 +260,7 @@ export class HoverProvider {
 				contents.push(
 					'## If Directive',
 					'',
-					'Conditionally includes or excludes configuration blocks.',
+					'Renders the template up to `%{ else }` when the condition is true, and the template after it, if any, when it is false.',
 					'',
 					'```hcl',
 					`${token.getDisplayText()}`,
@@ -272,7 +272,7 @@ export class HoverProvider {
 				contents.push(
 					'## For Directive',
 					'',
-					'Generates multiple blocks or values from an iteration.',
+					'Renders the template up to `%{ endfor }` once for each element of the collection, and joins the renderings.',
 					'',
 					'```hcl',
 					`${token.getDisplayText()}`,
@@ -280,7 +280,6 @@ export class HoverProvider {
 				);
 				break;
 			}
-			// Add other directives...
 		}
 
 		return contents;
