@@ -7,6 +7,7 @@ import { expect } from 'chai';
 
 import { safeKnownPrefix } from '../src/cty-strings';
 import { ConfigEvaluator } from '../src/Evaluator';
+import { base64Gzip } from '../src/go-gzip';
 import { base64GzipCompat } from '../src/gzip-compat';
 import { plainValue } from './plain-values';
 
@@ -176,6 +177,46 @@ describe('OpenTofu functions of Terragrunt v1.2.2', () => {
 		} finally {
 			await fs.rm(directory, { recursive: true, force: true });
 		}
+	});
+});
+
+describe('base64gzip of Terragrunt v1.2.2', () => {
+	const digests = (count: number) => Array.from({ length: count }, (_, index) => `${index}-${createHash('md5').update(String(index)).digest('hex')};`).join('');
+	const codePoints = Array.from({ length: 4096 }, (_, index) => String.fromCodePoint((index * 7919) % 55295 + 1)).join('');
+	const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
+
+	it('stores short input, then ends with an empty stored block and an empty fixed block, as Go\'s gzip writer does', () => {
+		expect(base64Gzip('')).to.equal('H4sIAAAAAAAA/wAAAP//AwAAAAAAAAAAAA==');
+		expect(base64Gzip('hello')).to.equal('H4sIAAAAAAAA/wAFAPr/aGVsbG8AAAD//wMAhqYQNgUAAAA=');
+		expect(base64Gzip('hello hello hello hello hello hello')).to.equal('H4sIAAAAAAAA/wAjANz/aGVsbG8gaGVsbG8gaGVsbG8gaGVsbG8gaGVsbG8gaGVsbG8AAAD//wMAVzdihSMAAAA=');
+		expect(base64Gzip('héllo wörld ✓ héllo wörld ✓')).to.equal('H4sIAAAAAAAA/wAjANz/aMOpbGxvIHfDtnJsZCDinJMgaMOpbGxvIHfDtnJsZCDinJMAAAD//wMAoK4tMSMAAAA=');
+		expect(base64Gzip('\u0000\u0001\t\u007f€😀')).to.equal('H4sIAAAAAAAA/wALAPT/AAEJf+KCrPCfmIAAAAD//wMAl/UPCwsAAAA=');
+	});
+
+	it('codes repeats with its level 6 matcher, up to a whole window', () => {
+		expect(base64Gzip('abcab'.repeat(400))).to.equal('H4sIAAAAAAAA/0pMSk5MGiVGiVFilBglRolRYkgTAAAAAP//AwDkCZkM0AcAAA==');
+		expect(base64Gzip('x'.repeat(65535))).to.equal('H4sIAAAAAAAA/+zAAQ0AAAABsNri29TwBwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgHNTAAAA//8DAOBhrGL//wAA');
+	});
+
+	it('codes text, stores what does not compress, and carries its table across blocks of input larger than its window', () => {
+		const vectors: [string, number, string][] = [
+			[digests(1024), 27748, 'c358dd8af6e58a8708a7384c86b2033522961ba403a94f8144dd9cbb3489032b'],
+			[digests(3072), 84556, '9c87c473e90e647f6b6c126fb722680b19e496ae52d8c7d6b0e9927cfd470dba'],
+			[codePoints, 16196, 'a47cec9c322a887c35d47056e31f924a7f56225900482f74526fb7f11fca182a'],
+			[digests(3072) + codePoints + digests(1024), 131272, '91dd318fd4ad31840f4029beba247c7612d0b3a8742b734b0d867ebb1e32caa7']
+		];
+		for (const [input, length, digest] of vectors) {
+			const encoded = base64Gzip(input);
+			expect(encoded.length).to.equal(length);
+			expect(sha256(encoded)).to.equal(digest);
+		}
+	});
+
+	it('is what a configuration\'s base64gzip evaluates to', async () => {
+		expect(await inputsOf({ empty: 'base64gzip("")', compressed: 'base64gzip("hello")' })).to.deep.equal({
+			empty: 'H4sIAAAAAAAA/wAAAP//AwAAAAAAAAAAAA==',
+			compressed: 'H4sIAAAAAAAA/wAFAPr/aGVsbG8AAAD//wMAhqYQNgUAAAA='
+		});
 	});
 });
 

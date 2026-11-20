@@ -8,6 +8,8 @@
  * compressor step for step: its match finder, its block choice and its Huffman code construction.
  */
 
+import { gzipMember } from './go-gzip';
+
 const logWindowSize = 15;
 const windowSize = 1 << logWindowSize;
 const windowMask = windowSize - 1;
@@ -703,29 +705,8 @@ function compress(data: Uint8Array): Uint8Array {
 	return compressor.writer.bytes();
 }
 
-const crcTable = (() => {
-	const table = new Uint32Array(256);
-	for (let n = 0; n < 256; n++) {
-		let c = n;
-		for (let bit = 0; bit < 8; bit++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-		table[n] = c >>> 0;
-	}
-	return table;
-})();
-
-function crc32(data: Uint8Array): number {
-	let crc = 0xffffffff;
-	for (const byte of data) crc = crcTable[(crc ^ byte) & 0xff] ^ (crc >>> 8);
-	return (crc ^ 0xffffffff) >>> 0;
-}
-
-const gzipHeader = [0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff];
-
 /** The gzip stream Terragrunt v1.1.3's base64gzip wrote for input, base64 encoded. */
 export function base64GzipCompat(input: string): string {
 	const data = Buffer.from(input, 'utf8');
-	const trailer = Buffer.alloc(8);
-	trailer.writeUInt32LE(crc32(data), 0);
-	trailer.writeUInt32LE(data.length >>> 0, 4);
-	return Buffer.concat([Buffer.from(gzipHeader), compress(data), trailer]).toString('base64');
+	return gzipMember(data, compress(data)).toString('base64');
 }

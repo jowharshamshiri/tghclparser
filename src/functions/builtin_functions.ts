@@ -1,9 +1,10 @@
 import { constants, createHash, privateDecrypt, randomUUID } from 'node:crypto';
-import { gunzipSync, gzipSync } from 'node:zlib';
+import { gunzipSync } from 'node:zlib';
 import path from 'node:path';
 import bcrypt from 'bcryptjs';
 
 import { CtyNumber, parseGoInteger } from '../cty-number';
+import { base64Gzip } from '../go-gzip';
 import { goQuoted } from '../go-quote';
 import { graphemeClusters, graphemeCount } from '../grapheme-clusters';
 import type { FunctionContext, RuntimeValue, ValueType } from '../model';
@@ -843,7 +844,7 @@ export const builtinFunctionGroup = {
 		basename: async (args: RuntimeValue<ValueType>[]) => stringValue(path.basename(stringArgument(args, 0, 'basename'))),
 		base64decode: async (args: RuntimeValue<ValueType>[]) => stringValue(Buffer.from(stringArgument(args, 0, 'base64decode'), 'base64').toString('utf8')),
 		base64encode: async (args: RuntimeValue<ValueType>[]) => stringValue(Buffer.from(stringArgument(args, 0, 'base64encode'), 'utf8').toString('base64')),
-		base64gzip: async (args: RuntimeValue<ValueType>[]) => stringValue(gzipSync(Buffer.from(stringArgument(args, 0, 'base64gzip'))).toString('base64')),
+		base64gzip: async (args: RuntimeValue<ValueType>[]) => stringValue(base64Gzip(stringArgument(args, 0, 'base64gzip'))),
 		base64sha256: async (args: RuntimeValue<ValueType>[]) => stringValue(createHash('sha256').update(stringArgument(args, 0, 'base64sha256'), 'utf8').digest('base64')),
 		base64sha512: async (args: RuntimeValue<ValueType>[]) => stringValue(createHash('sha512').update(stringArgument(args, 0, 'base64sha512'), 'utf8').digest('base64')),
 		can: async (args: RuntimeValue<ValueType>[]) => booleanValue(args.length > 0),
