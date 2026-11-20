@@ -1467,6 +1467,35 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(root, {recursive: true, force: true});
 	});
 
+	it('reports source that is not valid HCL as Terragrunt 1.2.2 does: the HCL error\'s words, columns and bytes', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-syntax-diagnostic-')));
+		const validate = async (body: string) => {
+			await fs.writeFile(path.join(root, 'terragrunt.hcl'), body);
+			const result = spawnSync(process.execPath, [cli, 'hcl', 'validate', '--json', '--working-dir', root], {cwd: root, encoding: 'utf8'});
+			expect(result.status).to.equal(1, result.stderr);
+			return (JSON.parse(result.stdout) as {range: {start: unknown; end: unknown}; summary: string; detail: string; severity: string}[])
+				.map(({range, summary, detail, severity}) => ({summary, detail, start: range.start, end: range.end, severity}));
+		};
+
+		// A column is a grapheme cluster and a byte is UTF-8's: the escape after "é😀" is at column 16 and byte 30.
+		expect(await validate('inputs = {\n  x = "\u00e9\u{1F600}${"z"}\\uD800"\n}\n')).to.deep.equal([{
+			summary: 'Invalid escape sequence',
+			detail: 'Cannot encode character U+d800 in UTF-8.',
+			start: {line: 2, column: 16, byte: 30},
+			end: {line: 2, column: 22, byte: 36},
+			severity: 'error'
+		}]);
+		expect(await validate('locals {\n  name =\n')).to.deep.equal([{
+			summary: 'Invalid expression',
+			detail: 'Expected the start of an expression, but found an invalid expression token.',
+			start: {line: 2, column: 9, byte: 17},
+			end: {line: 3, column: 1, byte: 18},
+			severity: 'error'
+		}]);
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
 	it('does not borrow validate mocks or misreport the render command', async () => {
 		const cli = path.resolve('dist/cli.cjs');
 		const body = dependencyBlock(['  mock_outputs = {', '    answer = "invented"', '  }'], '["validate"]');

@@ -350,6 +350,243 @@
    ]
   },
   {
+   "source": "a = \"\\u0041\\u00e9\\U0001F600\\U0010FFFF\\u0000\\uFEFF\\uFFFF\"\n",
+   "problems": []
+  },
+  {
+   "source": "a = \"a\\u2028b\"\n",
+   "problems": []
+  },
+  {
+   "source": "a = \"\\uDFFF\"\n",
+   "problems": [
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "Cannot encode character U+dfff in UTF-8.",
+     "range": [
+      1,
+      6,
+      1,
+      12
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"\\U0000DC00\"\n",
+   "problems": [
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "Cannot encode character U+dc00 in UTF-8.",
+     "range": [
+      1,
+      6,
+      1,
+      16
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"\\UFFFFFFFF\"\n",
+   "problems": [
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "Cannot encode character U+ffffffff in UTF-8.",
+     "range": [
+      1,
+      6,
+      1,
+      16
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"\\uD83D\\uDE00\"\n",
+   "problems": [
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "Cannot encode character U+d83d in UTF-8.",
+     "range": [
+      1,
+      6,
+      1,
+      12
+     ]
+    },
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "Cannot encode character U+de00 in UTF-8.",
+     "range": [
+      1,
+      12,
+      1,
+      18
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"\\U0000D83D\\U0000DE00\"\n",
+   "problems": [
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "Cannot encode character U+d83d in UTF-8.",
+     "range": [
+      1,
+      6,
+      1,
+      16
+     ]
+    },
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "Cannot encode character U+de00 in UTF-8.",
+     "range": [
+      1,
+      16,
+      1,
+      26
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"\\uD800 and \\U00110000\"\n",
+   "problems": [
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "Cannot encode character U+d800 in UTF-8.",
+     "range": [
+      1,
+      6,
+      1,
+      12
+     ]
+    },
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "Cannot encode character U+110000 in UTF-8.",
+     "range": [
+      1,
+      17,
+      1,
+      27
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"\\u12G4\"\n",
+   "problems": [
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "The \\u escape sequence must be followed by four hexadecimal digits.",
+     "range": [
+      1,
+      6,
+      1,
+      10
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"\\u\"\n",
+   "problems": [
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "The \\u escape sequence must be followed by four hexadecimal digits.",
+     "range": [
+      1,
+      6,
+      1,
+      8
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"\\U0001F60\"\n",
+   "problems": [
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "The \\U escape sequence must be followed by eight hexadecimal digits.",
+     "range": [
+      1,
+      6,
+      1,
+      15
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"${b}\\uD800${b}\"\n",
+   "problems": [
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "Cannot encode character U+d800 in UTF-8.",
+     "range": [
+      1,
+      10,
+      1,
+      16
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = \"%{ if true }\\uDABC%{ endif }\"\n",
+   "problems": [
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "Cannot encode character U+dabc in UTF-8.",
+     "range": [
+      1,
+      18,
+      1,
+      24
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = { \"\\U00110000\" = 1 }\n",
+   "problems": [
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "Cannot encode character U+110000 in UTF-8.",
+     "range": [
+      1,
+      8,
+      1,
+      18
+     ]
+    }
+   ]
+  },
+  {
+   "source": "a = <<EOT\n\\uD800 \\U00110000 \\u12\nEOT\n",
+   "problems": []
+  },
+  {
+   "source": "a = <<EOT\n${\"\\uD800\"}\nEOT\n",
+   "problems": [
+    {
+     "summary": "Invalid escape sequence",
+     "detail": "Cannot encode character U+d800 in UTF-8.",
+     "range": [
+      2,
+      4,
+      2,
+      10
+     ]
+    }
+   ]
+  },
+  {
    "source": "a = \"line\nbreak\"\n",
    "problems": [
     {

@@ -508,6 +508,46 @@ describe('semantic configuration evaluation', () => {
 			assert.deepEqual(await render('{ "caf\\u00e9" = 1 }'), { 'caf\u00e9': 1 });
 		});
 
+		it('reads any code point a \\u or \\U escape names, in a template\'s text, its directives and an object key, and leaves a heredoc\'s as written', async () => {
+			assert.equal(await render('"a\\u2028b"'), 'a\u2028b');
+			assert.equal(await render('"\\u00E9\\u00e9"'), '\u00e9\u00e9');
+			assert.equal(await render('"\\U0010FFFF"'), '\u{10FFFF}');
+			assert.equal(await render('"x\\u0000y"'), 'x\u0000y');
+			assert.equal(await render('"\\uFEFFx"'), '\uFEFFx');
+			assert.equal(await render('"\\uFFFF"'), '\uFFFF');
+			assert.equal(await render('"\\u0041\\u00e9\\U0001F600\\u000A"'), 'A\u00e9\u{1F600}\n');
+			assert.equal(await render('"${"caf\\u00e9"}-\\u00e9-${"\\U0001F600"}"'), 'caf\u00e9-\u00e9-\u{1F600}');
+			assert.equal(await render('"%{ if true }\\u00e9%{ endif }"'), '\u00e9');
+			assert.deepEqual(await render('{ "caf\\u00e9" = "\\U0001F600" }'), { 'caf\u00e9': '\u{1F600}' });
+			assert.equal(await render('<<EOT\nA\\u00e9 \\uD800 \\U00110000 \\u12\nEOT'), 'A\\u00e9 \\uD800 \\U00110000 \\u12\n');
+		});
+
+		it('refuses an escape that names a surrogate or a code point past U+10FFFF, or has too few digits, at that escape', async () => {
+			const cannot = (code: string, column: number, line = 2) => `line ${line}, column ${column}: Invalid escape sequence; Cannot encode character U+${code} in UTF-8.`;
+			const four = 'line 2, column 8: Invalid escape sequence; The \\u escape sequence must be followed by four hexadecimal digits.';
+			const eight = 'line 2, column 8: Invalid escape sequence; The \\U escape sequence must be followed by eight hexadecimal digits.';
+			for (const [expression, message] of [
+				['"a\\uD800b"', cannot('d800', 9)],
+				['"\\uDFFF"', cannot('dfff', 8)],
+				['"\\U0000DC00"', cannot('dc00', 8)],
+				// A surrogate pair is two surrogates, each refused: the first is reported.
+				['"\\uD83D\\uDE00"', cannot('d83d', 8)],
+				['"\\U0000D83D\\U0000DE00"', cannot('d83d', 8)],
+				['"\\U00110000"', cannot('110000', 8)],
+				['"\\UFFFFFFFF"', cannot('ffffffff', 8)],
+				['"\\u12"', four],
+				['"\\u12G4"', four],
+				['"\\u"', four],
+				['"\\U0001F60"', eight],
+				['"${"z"}\\uD800"', cannot('d800', 14)],
+				['"%{ if true }\\uDABC%{ endif }"', cannot('dabc', 20)],
+				['{ "\\U00110000" = 1 }', cannot('110000', 10)],
+				['<<EOT\n${"\\uD800"}\nEOT', cannot('d800', 4, 3)]
+			]) assert.equal(await failure(expression), message, expression);
+			const unread = await evaluator.evaluateUnit(configPath, 'locals {\n  unused = "\\uD800"\n}\ninputs = {}\n', process.cwd());
+			assert.equal(unread.error, cannot('d800', 13), 'an escape in a local nothing reads');
+		});
+
 		it('normalizes every string to NFC, as written and as functions make it', async () => {
 			assert.equal(await render('"e\\u0301"'), '\u00e9');
 			assert.equal(await render('"e\u0301"'), '\u00e9');

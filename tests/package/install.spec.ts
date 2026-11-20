@@ -85,7 +85,7 @@ describe('published package', function () {
 	it('reports invalid HCL through the installed bin and exits 1', () => {
 		const result = exec(bin, ['hcl', 'validate'], path.join(consumer, 'invalid'));
 		expect(result.status).to.equal(1, result.output);
-		expect(result.output).to.contain('HCL validation error');
+		expect(result.output).to.contain('Invalid expression: Expected the start of an expression, but found an invalid expression token.');
 	});
 
 	it('prints the package version through the installed bin', async () => {

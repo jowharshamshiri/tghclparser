@@ -1125,7 +1125,7 @@ export class ParsedDocument {
 			this.parsed = false;
 			if (error instanceof HclSyntaxError) {
 				// The problem's own line and column are the HCL library's, counted its way. An editor counts from the
-				// offsets.
+				// offsets; the problem itself goes with the diagnostic, for what reports it as Terragrunt does.
 				const content = this.content;
 				const editorPosition = (offset: number) => {
 					const lineStart = content.lastIndexOf('\n', offset - 1) + 1;
@@ -1137,7 +1137,8 @@ export class ParsedDocument {
 					severity: 1,
 					range: { start: editorPosition(error.problem.start.offset), end: editorPosition(error.problem.end.offset) },
 					message: `${error.problem.summary}: ${error.problem.detail}`,
-					source: 'terragrunt'
+					source: 'terragrunt',
+					data: { hcl: error.problem }
 				});
 			} else if (error instanceof SyntaxError && error.location) {
 				// Convert the parser's location format to VSCode's format

@@ -21,6 +21,7 @@ import { isArchiveSource } from './module-source';
 import { isLocalSource, splitModuleSource } from './module-variables';
 import { formatHcl } from './hcl-format';
 import { HclSyntaxError } from './hcl-syntax';
+import type { HclPosition, HclSyntaxProblem } from './hcl-syntax';
 import { ParsedDocument } from './ParsedDocument';
 import { filterFiles, FilterSyntaxError, parseFilter } from './terragrunt-filter';
 import type { Filter } from './terragrunt-filter';
@@ -2366,6 +2367,13 @@ function offsetAt(content: string, line: number, character: number): number {
 }
 
 function diagnostic(filename: string, content: string, item: any): DiagnosticOutput {
+	// Source that is not valid HCL is reported as Terragrunt reports it: the HCL library's own problem, in its words
+	// and at its range, its lines and columns counted its way.
+	const problem = (item.data as { hcl?: HclSyntaxProblem } | undefined)?.hcl;
+	if (problem) {
+		const position = (at: HclPosition) => ({ line: at.line, column: at.column, byte: Buffer.byteLength(content.slice(0, at.offset), 'utf8') });
+		return { range: { filename, start: position(problem.start), end: position(problem.end) }, summary: problem.summary, detail: problem.detail, severity: 'error' };
+	}
 	const start = item.range?.start ?? { line: 0, character: 0 };
 	const end = item.range?.end ?? start;
 	const summary = item.message.startsWith('Unknown block') ? 'Unsupported block type' :
