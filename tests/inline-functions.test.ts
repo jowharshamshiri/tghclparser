@@ -599,10 +599,11 @@ describe('inline function failure reporting', () => {
 	});
 
 	it('bounds each evaluation by its own nesting when evaluations share an evaluator', async () => {
-		// A language server keeps one evaluator and evaluates files concurrently. Each recursion below is 100 deep,
-		// within the limit of 128; only their sum is not.
+		// A language server keeps one evaluator and evaluates files concurrently. Each recursion below is 71 calls
+		// deep, within the limit of 128; only their sum, 142, is not. Every call costs about a millisecond, so the
+		// recursions are no deeper than that sum needs.
 		const shared = evaluator();
-		const content = 'function down(n) {\n  if (n <= 0) return 0;\n  return await tg.call("down", n - 1);\n}\n\ninputs = { d = down(100) }\n';
+		const content = 'function down(n) {\n  if (n <= 0) return 0;\n  return await tg.call("down", n - 1);\n}\n\ninputs = { d = down(70) }\n';
 		const dirs = await Promise.all([0, 1].map(() => fs.mkdtemp(path.join(os.tmpdir(), 'inline-fn-'))));
 		try {
 			const results = await Promise.all(dirs.map(async dir => {

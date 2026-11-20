@@ -6,6 +6,7 @@ import { expect } from 'chai';
 import { URI } from 'vscode-uri';
 
 import { ConfigEvaluator, runtimeValueToPlain } from '../src/Evaluator';
+import { goRepoRoot } from '../src/functions/git_repo_root';
 import { Workspace } from '../src/Workspace';
 
 // Every answer here is what Terragrunt v1.2.2 (109a529e, its release binary)
@@ -222,21 +223,32 @@ inputs = {
 
 	// The walk examines 1024 directories at most, the start among them, as
 	// internal/git/repo_root.go bounds it; a macOS path cannot be deep enough
-	// for a release binary to show it there.
-	it('finds a root 1023 directories above the unit, and gives up one further', async () => {
+	// for a release binary to show it there. The walk is asked directly, as
+	// get_repo_root asks it: evaluating a unit this deep would first search all
+	// of its directories for the workspace's root.hcl, a second walk that is
+	// not under test and that tripled the walks' time. The get_repo_root tests
+	// above cover the route through an evaluation.
+	//
+	// Every step names a path of over a thousand components, so the kernel
+	// looks each one up again: on a 4-CPU Linux guest at rest, making the tree
+	// takes about 170 ms, the two walks about 450 ms and removing the tree about
+	// 550 ms. It is removed here rather than in afterEach so that its time is
+	// counted against this test's timeout, which allows for a machine loaded
+	// several times over.
+	it('finds a root 1023 directories above the unit, and gives up one further', async function () {
+		this.timeout(10000);
 		const root = path.join(real, 'base');
 		const within = path.join(root, ...Array.from({ length: 1023 }, () => 'd'));
 		const beyond = path.join(within, 'd');
 		await fs.mkdir(beyond, { recursive: true });
-		const repoRoot = (unit: string) => new ConfigEvaluator({ environmentVariables: {}, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true })
-			.evaluateUnit(path.join(unit, 'terragrunt.hcl'), 'inputs = { root = get_repo_root() }', unit);
-
-		const found = await repoRoot(within);
-		expect(found.error).to.equal(undefined);
-		expect(runtimeValueToPlain(found.inputs!)).to.deep.equal({ root });
-		const refused = await repoRoot(beyond);
-		expect(refused.valid).to.equal(false);
-		expect(refused.error).to.include('go_repo_root: depth 1024: repository-root walk exceeded max depth');
+		try {
+			expect(await goRepoRoot(within, {})).to.equal(root);
+			let message = '';
+			await goRepoRoot(beyond, {}).catch((error: Error) => { message = error.message; });
+			expect(message).to.equal('go_repo_root: depth 1024: repository-root walk exceeded max depth');
+		} finally {
+			await fs.rm(path.join(root, 'd'), { recursive: true, force: true });
+		}
 	});
 
 	// Terragrunt's walk ends on any failure to describe a `.git` entry but its
@@ -244,7 +256,6 @@ inputs = {
 	// os.ErrNotExist matches only ENOENT. No Terragrunt command starts the walk
 	// at a file, so this follows internal/git/repo_root.go rather than a run.
 	it('ends the walk at a start that is a file, saying why', async () => {
-		const { goRepoRoot } = await import('../src/functions/git_repo_root');
 		const file = path.join(real, 'base', 'shared.yaml');
 		let message = '';
 		await goRepoRoot(file, {}).catch((error: Error) => { message = error.message; });
