@@ -1048,6 +1048,189 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(root, {recursive: true, force: true});
 	});
 
+	describe('mock_outputs_merge_strategy_with_state', () => {
+		// Terragrunt v1.2.2 merges a dependency's mocks with the outputs it really has only as the block says: with no
+		// strategy, or no_merge, the real outputs stand alone; shallow fills the outputs they lack; deep_map_only
+		// merges maps at every depth. The real value wins wherever both have one.
+		const realOutputs = {
+			vpc_id: 'vpc-real',
+			tags: {env: 'real', nested: {a: 'real-a'}},
+			zones: ['real-1']
+		};
+		const mocks = [
+			'  mock_outputs = {',
+			'    vpc_id    = "vpc-mock"',
+			'    subnet_id = "subnet-mock"',
+			'    tags = {',
+			'      env    = "mock"',
+			'      owner  = "mock-owner"',
+			'      nested = { a = "mock-a", b = "mock-b" }',
+			'    }',
+			'    zones = ["mock-1", "mock-2"]',
+			'  }'
+		];
+		const shallow = {...realOutputs, subnet_id: 'subnet-mock'};
+		const deepMapOnly = {
+			vpc_id: 'vpc-real',
+			subnet_id: 'subnet-mock',
+			tags: {env: 'real', owner: 'mock-owner', nested: {a: 'real-a', b: 'mock-b'}},
+			zones: ['real-1']
+		};
+
+		// An executable that answers `output -json` as OpenTofu does for a dependency that has been applied.
+		async function appliedTfStub(root: string, outputs: Record<string, unknown>): Promise<string> {
+			const answer = path.join(root, 'outputs.json');
+			await fs.writeFile(answer, JSON.stringify(Object.fromEntries(
+				Object.entries(outputs).map(([name, value]) => [name, {sensitive: false, value}])
+			)));
+			const stub = path.join(root, 'tf-stub');
+			await fs.writeFile(stub, ['#!/bin/sh', `if [ "$1" = output ]; then cat '${answer}'; exit 0; fi`, 'exit 1'].join('\n'), {mode: 0o755});
+			return stub;
+		}
+
+		// The consumer's whole view of the dependency, as `render --json` gives it.
+		const seenBody = (block: string[], includes: string[] = []) => [
+			'include "root" {',
+			'  path = find_in_parent_folders("terragrunt.hcl")',
+			'}',
+			...includes,
+			'',
+			'dependency "producer" {',
+			'  config_path = "../producer"',
+			...block,
+			'}',
+			'',
+			'inputs = {',
+			'  seen = dependency.producer.outputs',
+			'}'
+		];
+
+		async function render(body: string[], outputs: Record<string, unknown>, files: Record<string, string> = {}) {
+			const cli = path.resolve('dist/cli.cjs');
+			const made = await workspaceWithUnappliedDependency(body);
+			for (const [name, content] of Object.entries(files)) await fs.writeFile(path.join(made.root, name), content);
+			const stub = await appliedTfStub(made.root, outputs);
+			const result = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', made.consumer],
+				{cwd: made.consumer, encoding: 'utf8', env: {...process.env, TG_TF_PATH: stub}});
+			await fs.rm(made.root, {recursive: true, force: true});
+			return result;
+		}
+
+		const cases: Array<[string, string[], Record<string, unknown>]> = [
+			['no strategy', [], realOutputs],
+			['no_merge', ['  mock_outputs_merge_strategy_with_state = "no_merge"'], realOutputs],
+			['shallow', ['  mock_outputs_merge_strategy_with_state = "shallow"'], shallow],
+			['deep_map_only', ['  mock_outputs_merge_strategy_with_state = "deep_map_only"'], deepMapOnly],
+			['the deprecated mock_outputs_merge_with_state = true', ['  mock_outputs_merge_with_state = true'], shallow],
+			['the deprecated mock_outputs_merge_with_state = false', ['  mock_outputs_merge_with_state = false'], realOutputs],
+			[
+				'a strategy beside the deprecated bool, which the strategy overrides',
+				['  mock_outputs_merge_strategy_with_state = "no_merge"', '  mock_outputs_merge_with_state = true'],
+				realOutputs
+			]
+		];
+		for (const [how, block, expected] of cases) {
+			it(`merges real outputs with the mocks as Terragrunt does for ${how}`, async () => {
+				const result = await render(seenBody([...mocks, ...block]), realOutputs);
+				expect(result.status).to.equal(0, result.stderr);
+				expect(JSON.parse(result.stdout).inputs.seen).to.deep.equal(expected);
+			});
+		}
+
+		for (const strategy of ['deep', 'bogus']) {
+			it(`refuses to merge with the strategy ${strategy}, as Terragrunt does`, async () => {
+				const result = await render(seenBody([...mocks, `  mock_outputs_merge_strategy_with_state = "${strategy}"`]), realOutputs);
+				expect(result.status).to.not.equal(0);
+				expect(result.stderr).to.contain(`mock_outputs_merge_strategy_with_state "${strategy}"`);
+				expect(result.stderr).to.contain('no_merge, shallow or deep_map_only');
+			});
+		}
+
+		it('takes no strategy where nothing is merged: no real outputs, or mocks the command may not see', async () => {
+			// Terragrunt reads the strategy only to merge, so a strategy it would refuse stops nothing until then.
+			const bogus = '  mock_outputs_merge_strategy_with_state = "bogus"';
+			const unapplied = await render(seenBody([...mocks, bogus]), {});
+			expect(unapplied.status).to.equal(0, unapplied.stderr);
+			expect(JSON.parse(unapplied.stdout).inputs.seen).to.have.property('subnet_id', 'subnet-mock');
+
+			const notAllowed = await render(seenBody([...mocks, bogus, '  mock_outputs_allowed_terraform_commands = ["plan"]']), realOutputs);
+			expect(notAllowed.status).to.equal(0, notAllowed.stderr);
+			expect(JSON.parse(notAllowed.stdout).inputs.seen).to.deep.equal(realOutputs);
+		});
+
+		it('renders the mocks in place of outputs it cannot read, merged with themselves by the strategy', async () => {
+			// Terragrunt's render reads the mocks as the outputs when reading them fails, and then merges them as it
+			// merges real ones: every strategy it takes gives the mocks, and one it does not is refused.
+			const cli = path.resolve('dist/cli.cjs');
+			const renderUnreadable = async (strategy: string) => {
+				const made = await workspaceWithUnappliedDependency(seenBody([...mocks, `  mock_outputs_merge_strategy_with_state = "${strategy}"`]));
+				const stub = path.join(made.root, 'tf-stub');
+				await fs.writeFile(stub, '#!/bin/sh\necho "state backend unreachable" >&2\nexit 1\n', {mode: 0o755});
+				const result = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', made.consumer],
+					{cwd: made.consumer, encoding: 'utf8', env: {...process.env, TG_TF_PATH: stub}});
+				await fs.rm(made.root, {recursive: true, force: true});
+				return result;
+			};
+			for (const strategy of ['no_merge', 'shallow', 'deep_map_only']) {
+				const result = await renderUnreadable(strategy);
+				expect(result.status).to.equal(0, `${strategy}: ${result.stderr}`);
+				expect(JSON.parse(result.stdout).inputs.seen, strategy).to.have.property('subnet_id', 'subnet-mock');
+			}
+			const refused = await renderUnreadable('deep');
+			expect(refused.status).to.not.equal(0);
+			expect(refused.stderr).to.contain('mock_outputs_merge_strategy_with_state "deep"');
+		});
+
+		it('validates any strategy and the deprecated bool, as Terragrunt does', async () => {
+			const cli = path.resolve('dist/cli.cjs');
+			for (const block of [
+				['  mock_outputs_merge_strategy_with_state = "bogus"'],
+				['  mock_outputs_merge_strategy_with_state = "deep"'],
+				['  mock_outputs_merge_with_state = true']
+			]) {
+				const made = await workspaceWithUnappliedDependency(seenBody([...mocks, ...block]));
+				const validate = spawnSync(process.execPath, [cli, 'hcl', 'validate', '--working-dir', made.consumer],
+					{cwd: made.consumer, encoding: 'utf8'});
+				await fs.rm(made.root, {recursive: true, force: true});
+				expect(validate.status).to.equal(0, `${block[0]}: ${validate.stdout}${validate.stderr}`);
+			}
+		});
+
+		it('keeps the strategy of a deep-merged include\'s block and drops the unit\'s, as Terragrunt does', async () => {
+			// Terragrunt deep-merges a unit's dependency block into the included one, carrying config_path, the mocks
+			// and the allowed commands, and not the merge strategy: the included block's stands.
+			const deepInclude = ['include "deep" {', '  path           = find_in_parent_folders("deep.hcl")', '  merge_strategy = "deep"', '}'];
+			const parent = (strategy: string[]) => ['dependency "producer" {', '  config_path = "../producer"', ...strategy, '}', ''].join('\n');
+
+			const unitStrategyDropped = await render(
+				seenBody([...mocks, '  mock_outputs_merge_strategy_with_state = "shallow"'], deepInclude),
+				realOutputs,
+				{'deep.hcl': parent([])}
+			);
+			expect(unitStrategyDropped.status).to.equal(0, unitStrategyDropped.stderr);
+			expect(JSON.parse(unitStrategyDropped.stdout).inputs.seen).to.deep.equal(realOutputs);
+
+			const includedStrategyKept = await render(
+				seenBody(mocks, deepInclude),
+				realOutputs,
+				{'deep.hcl': parent(['  mock_outputs_merge_strategy_with_state = "deep_map_only"'])}
+			);
+			expect(includedStrategyKept.status).to.equal(0, includedStrategyKept.stderr);
+			expect(JSON.parse(includedStrategyKept.stdout).inputs.seen).to.deep.equal(deepMapOnly);
+		});
+
+		it('replaces a shallow-merged include\'s block whole, its strategy with it', async () => {
+			const shallowInclude = ['include "shallow" {', '  path = find_in_parent_folders("shallow.hcl")', '}'];
+			const result = await render(
+				seenBody(mocks, shallowInclude),
+				realOutputs,
+				{'shallow.hcl': ['dependency "producer" {', '  config_path = "../producer"', '  mock_outputs_merge_strategy_with_state = "shallow"', '}', ''].join('\n')}
+			);
+			expect(result.status).to.equal(0, result.stderr);
+			expect(JSON.parse(result.stdout).inputs.seen).to.deep.equal(realOutputs);
+		});
+	});
+
 	it('prints known inputs and reports an unapplied dependency as incomplete', async () => {
 		const cli = path.resolve('dist/cli.cjs');
 		const body = dependencyBlock([]);

@@ -374,7 +374,8 @@ export class DiagnosticsProvider {
 		if (definition.validation?.allowedValues && !definition.validation.allowedValues.includes(token.value)) {
 			diagnostics.push(this.diagnostic(
 				token,
-				`Invalid value for "${definition.name}". Expected one of: ${definition.validation.allowedValues.join(', ')}`
+				`Invalid value for "${definition.name}". Expected one of: ${definition.validation.allowedValues.join(', ')}`,
+				definition.validation.advisory ? DiagnosticSeverity.Warning : DiagnosticSeverity.Error
 			));
 		}
 	}

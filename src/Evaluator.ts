@@ -114,6 +114,12 @@ export interface DependencyRequest {
 	mockOutputs?: RuntimeValue<ValueType>;
 	/** The evaluated `mock_outputs_allowed_terraform_commands`, merged across included blocks; absent when none is declared. */
 	mockOutputsAllowedTerraformCommands?: string[];
+	/**
+	 * How the mocks merge with outputs the dependency really has, as Terragrunt decides it: the evaluated
+	 * `mock_outputs_merge_strategy_with_state`, else `shallow` where the deprecated `mock_outputs_merge_with_state` is
+	 * true, else `no_merge`. A strategy Terragrunt refuses is kept as written, since it is refused only when merging.
+	 */
+	mockOutputsMergeStrategy: string;
 }
 
 /** A value a render cannot resolve: the field that reads it is omitted and reported rather than failing the render. */
@@ -409,13 +415,16 @@ interface DependencyAttribute {
 
 /**
  * A `dependency` block after Terragrunt's include merge: `config_path` from the highest-priority block that sets
- * it, and the mock settings of every block deep-merged into it, lowest priority first.
+ * it, the mocks and allowed commands of every block deep-merged into it, lowest priority first, and the merge
+ * strategy of the block deep-merged into, which Terragrunt's deep merge does not carry.
  */
 interface DependencyDeclaration {
 	declaredIn: string;
 	configPath?: DependencyAttribute;
 	mockOutputs: DependencyAttribute[];
 	mockOutputsAllowedTerraformCommands: DependencyAttribute[];
+	mockOutputsMergeStrategyWithState?: DependencyAttribute;
+	mockOutputsMergeWithState?: DependencyAttribute;
 }
 
 /**
@@ -1808,6 +1817,29 @@ export class ConfigEvaluator {
 			mockOutputsAllowedTerraformCommands = [...(mockOutputsAllowedTerraformCommands ?? []), ...commands as string[]];
 		}
 
+		// Terragrunt decodes the strategy as a string and the deprecated attribute as a bool, each as cty converts one,
+		// and a null as not set. The strategy wins where both are set.
+		let mockOutputsMergeStrategy = 'no_merge';
+		if (declaration.mockOutputsMergeWithState) {
+			const { node, scope } = declaration.mockOutputsMergeWithState;
+			let merge: boolean | null;
+			try {
+				merge = convertToBool(await this.evalNode(node, scope));
+			} catch (error) {
+				throw new Error(`dependency "${name}" in ${scope.filePath}: mock_outputs_merge_with_state: ${error instanceof Error ? error.message : String(error)}`);
+			}
+			if (merge) mockOutputsMergeStrategy = 'shallow';
+		}
+		if (declaration.mockOutputsMergeStrategyWithState) {
+			const { node, scope } = declaration.mockOutputsMergeStrategyWithState;
+			const value = await this.evalNode(node, scope);
+			if (value.type === 'string' || value.type === 'number' || value.type === 'boolean') {
+				mockOutputsMergeStrategy = String(value.value);
+			} else if (value.type !== 'null') {
+				throw new Error(`dependency "${name}" in ${scope.filePath}: mock_outputs_merge_strategy_with_state must be a string`);
+			}
+		}
+
 		const request: DependencyRequest = {
 			name,
 			unitPath: unit.unitPath,
@@ -1815,7 +1847,8 @@ export class ConfigEvaluator {
 			targetConfigPath,
 			targetDir: path.dirname(targetConfigPath),
 			...(mockOutputs !== undefined ? { mockOutputs } : {}),
-			...(mockOutputsAllowedTerraformCommands !== undefined ? { mockOutputsAllowedTerraformCommands } : {})
+			...(mockOutputsAllowedTerraformCommands !== undefined ? { mockOutputsAllowedTerraformCommands } : {}),
+			mockOutputsMergeStrategy
 		};
 		return this.options.resolveDependency?.(request);
 	}
@@ -1824,7 +1857,8 @@ export class ConfigEvaluator {
 	 * The unit's `dependency` blocks by name after Terragrunt's include merge. The sibling autoinclude's block
 	 * replaces the unit's of the same name; each direct include is then merged beneath, the last include first: a
 	 * shallow include's block is replaced whole by a higher one of the same name, a deep include's has `config_path`
-	 * overridden, its `mock_outputs` deep-merged and its allowed commands concatenated. An include with
+	 * overridden, its `mock_outputs` deep-merged and its allowed commands concatenated, and keeps its own merge
+	 * strategy. An include with
 	 * `merge_strategy = "no_merge"` contributes nothing.
 	 */
 	private async dependencyDeclarations(unit: UnitContext, referencingScope: Scope): Promise<Map<string, DependencyDeclaration>> {
@@ -1858,7 +1892,9 @@ export class ConfigEvaluator {
 						declaredIn: higher.declaredIn,
 						configPath: higher.configPath ?? lower.configPath,
 						mockOutputs: [...lower.mockOutputs, ...higher.mockOutputs],
-						mockOutputsAllowedTerraformCommands: [...lower.mockOutputsAllowedTerraformCommands, ...higher.mockOutputsAllowedTerraformCommands]
+						mockOutputsAllowedTerraformCommands: [...lower.mockOutputsAllowedTerraformCommands, ...higher.mockOutputsAllowedTerraformCommands],
+						mockOutputsMergeStrategyWithState: lower.mockOutputsMergeStrategyWithState,
+						mockOutputsMergeWithState: lower.mockOutputsMergeWithState
 					});
 				}
 			}
@@ -2986,7 +3022,9 @@ function dependencyDeclaration(block: TNode, scope: Scope): DependencyDeclaratio
 		declaredIn: scope.filePath,
 		configPath: attribute('config_path'),
 		mockOutputs: mockOutputs ? [mockOutputs] : [],
-		mockOutputsAllowedTerraformCommands: allowed ? [allowed] : []
+		mockOutputsAllowedTerraformCommands: allowed ? [allowed] : [],
+		mockOutputsMergeStrategyWithState: attribute('mock_outputs_merge_strategy_with_state'),
+		mockOutputsMergeWithState: attribute('mock_outputs_merge_with_state')
 	};
 }
 

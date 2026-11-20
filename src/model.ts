@@ -268,6 +268,11 @@ export interface AttributeDefinition {
 		min?: number;
 		max?: number;
 		allowedValues?: any[];
+		/**
+		 * A value outside `allowedValues` is advice, a warning, rather than an error: Terragrunt takes any value as
+		 * written and refuses one only where it uses it.
+		 */
+		advisory?: boolean;
 		customValidator?: (value: any) => boolean;
 	};
 	/** The keys an object value takes, whatever else it holds. */

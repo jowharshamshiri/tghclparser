@@ -1678,9 +1678,12 @@ async function dependencyOutputs(
 	// nothing, carries on past them: with a mock the author allowed for it, or with the reads reported. Every
 	// other command stops, even with a mock allowed for it -- a plan must not proceed on invented values because
 	// credentials expired or the working directory was never initialised.
+	//
+	// A render reads the mocks in place of the outputs, as Terragrunt does, which then merges them with themselves by
+	// the block's strategy, refusing one it does not merge by.
 	const unreadable = (reason: string): RuntimeValue<ValueType> | undefined => {
 		if (!rendering) throw new Error(`dependency "${name}" ${reason} in ${target}`);
-		if (mocksApply) return outputsValue(new Map(mocks));
+		if (mocksApply) return outputsValue(mocks.size > 0 ? mergeMockOutputs(request, new Map(mocks), mocks) : new Map(mocks));
 		return outputsValue(new EmptyRenderOutputs(name, reason));
 	};
 
@@ -1711,15 +1714,15 @@ async function dependencyOutputs(
 		}
 		outputs.set(key, convertToRuntimeValue(entry.value));
 	}
+	// Outputs the dependency really has stand as they are, merged with the mocks only where the block's strategy asks
+	// for it and the command may see them, as Terragrunt merges them.
+	if (outputs.size > 0) return outputsValue(mocksApply ? mergeMockOutputs(request, outputs, mocks) : outputs);
 	// A unit that has never been applied is this case, not the one above:
 	// `tofu output -json` prints {} and exits 0 when there is no state, so the
 	// "never applied" path arrives here with an empty map rather than as an
-	// error. Mocks fill what is missing and never shadow what is real, so a
-	// value that exists is always preferred to one that was invented.
+	// error. The mocks stand in for it where the command may see them.
 	if (mocksApply) {
-		for (const [key, value] of mocks) {
-			if (!outputs.has(key)) outputs.set(key, value);
-		}
+		return outputsValue(new Map(mocks));
 	} else if (declared !== undefined) {
 		// A mock is declared, this command may not see it, and the real output
 		// it would have stood in for is not there either. Saying so here beats
@@ -1730,10 +1733,9 @@ async function dependencyOutputs(
 		// one of these, and a `destroy` that proceeds on the strength of an
 		// output nobody produced is exactly the undefined state mocks are
 		// scoped to prevent.
-		const absent = [...declared.keys()].filter(key => !outputs.has(key));
-		if (absent.length > 0 && terraformCommand !== 'render') {
+		if (declared.size > 0 && !rendering) {
 			throw new Error(
-				`dependency "${name}" has no ${absent.join(', ')} to read from ${target}, ` +
+				`dependency "${name}" has no ${[...declared.keys()].join(', ')} to read from ${target}, ` +
 				`and its mock_outputs are allowed only for: ${allowed.join(', ')} ` +
 				`-- not ${terraformCommand || '(no command)'}.\n` +
 				'Apply that unit, or add this command to ' +
@@ -1742,7 +1744,69 @@ async function dependencyOutputs(
 			);
 		}
 	}
-	return outputsValue(terraformCommand === 'render' && outputs.size === 0 ? new EmptyRenderOutputs(name) : outputs);
+	return outputsValue(rendering ? new EmptyRenderOutputs(name) : outputs);
+}
+
+/**
+ * Outputs a dependency really has, merged with the mocks its block allows the command, as Terragrunt merges them by
+ * the block's strategy: `no_merge` leaves the outputs as they are, `shallow` adds the mocks the outputs lack, and
+ * `deep_map_only` merges maps at every depth. Where both have a value that is not two maps, the real one wins.
+ *
+ * @param request the dependency, whose strategy decides the merge.
+ * @param outputs the outputs the dependency really has, at least one.
+ * @param mocks the mocks the running command may see.
+ * @returns the merged outputs.
+ * @throws when the strategy is not one Terragrunt merges mocks by: `deep`, which it takes for an include, or any
+ *   other.
+ */
+function mergeMockOutputs(
+	request: DependencyRequest,
+	outputs: Map<string, RuntimeValue<ValueType>>,
+	mocks: Map<string, RuntimeValue<ValueType>>
+): Map<string, RuntimeValue<ValueType>> {
+	switch (request.mockOutputsMergeStrategy) {
+		case 'no_merge': {
+			return outputs;
+		}
+		case 'shallow': {
+			const merged = new Map(outputs);
+			for (const [key, value] of mocks) {
+				if (!merged.has(key)) merged.set(key, value);
+			}
+			return merged;
+		}
+		case 'deep_map_only': {
+			return mergeMapsOnly(mocks, outputs);
+		}
+		default: {
+			throw new Error(
+				`dependency "${request.name}" in ${request.declaredIn}: mock_outputs_merge_strategy_with_state ` +
+				`"${request.mockOutputsMergeStrategy}" is not a strategy mocks merge with real outputs by; ` +
+				'use no_merge, shallow or deep_map_only'
+			);
+		}
+	}
+}
+
+/**
+ * `target` with `source` merged into it as Terragrunt's `deep_map_only` merges (mergo with override): two maps under
+ * one key merge key by key at every depth, and any other value of `source` replaces the one in `target`, a list whole.
+ */
+function mergeMapsOnly(
+	target: Map<string, RuntimeValue<ValueType>>,
+	source: Map<string, RuntimeValue<ValueType>>
+): Map<string, RuntimeValue<ValueType>> {
+	const merged = new Map(target);
+	for (const [key, value] of source) {
+		const existing = merged.get(key);
+		merged.set(key, existing?.type === 'object' && value.type === 'object'
+			? makeObjectValue(mergeMapsOnly(
+				existing.value as Map<string, RuntimeValue<ValueType>>,
+				value.value as Map<string, RuntimeValue<ValueType>>
+			))
+			: value);
+	}
+	return merged;
 }
 
 async function materializeGeneratedFiles(

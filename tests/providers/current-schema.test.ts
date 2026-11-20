@@ -1,5 +1,5 @@
 import { expect } from 'chai';
-import { CompletionItemKind } from 'vscode-languageserver';
+import { CompletionItemKind, DiagnosticSeverity } from 'vscode-languageserver';
 
 import { ConfigEvaluator } from '../../src/Evaluator';
 import functionsJson from '../../src/functions.json';
@@ -478,6 +478,22 @@ generate = {
 			expect(diagnosticsFor(unit, `remote_state {\n  backend = ${backend}\n  config = {\n    anything = "x"\n  }\n}`), backend).to.deep.equal([]);
 		}
 		expect(diagnosticsFor(unit, 'remote_state {\n  config = {\n    anything = "x"\n  }\n}')).to.deep.equal(['Missing required attribute: backend']);
+	});
+
+	it('warns of a mock merge strategy Terragrunt refuses only when it merges, and takes the deprecated bool', () => {
+		const dependency = (attribute: string) => new ParsedDocument(new Workspace(), unit,
+			`dependency "vpc" {\n  config_path = "../vpc"\n  mock_outputs = { vpc_id = "vpc-1" }\n  ${attribute}\n}\n`
+		).getDiagnostics().map(diagnostic => [diagnostic.severity, diagnostic.message]);
+		for (const strategy of ['no_merge', 'shallow', 'deep_map_only']) {
+			expect(dependency(`mock_outputs_merge_strategy_with_state = "${strategy}"`), strategy).to.deep.equal([]);
+		}
+		for (const strategy of ['deep', 'bogus']) {
+			expect(dependency(`mock_outputs_merge_strategy_with_state = "${strategy}"`), strategy).to.deep.equal([[
+				DiagnosticSeverity.Warning,
+				'Invalid value for "mock_outputs_merge_strategy_with_state". Expected one of: no_merge, shallow, deep_map_only'
+			]]);
+		}
+		expect(dependency('mock_outputs_merge_with_state = true')).to.deep.equal([]);
 	});
 
 	it('reports nothing inside values whose keys the schema does not describe', () => {

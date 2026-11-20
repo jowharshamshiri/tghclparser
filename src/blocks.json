@@ -539,7 +539,8 @@
         { "name": "skip_outputs", "description": "Skips output retrieval.", "required": false, "types": ["boolean"] },
         { "name": "mock_outputs", "description": "Outputs used when real outputs are unavailable.", "required": false, "types": ["object"] },
         { "name": "mock_outputs_allowed_terraform_commands", "description": "Commands allowed to consume mock outputs.", "required": false, "types": ["array"] },
-        { "name": "mock_outputs_merge_strategy_with_state", "description": "How state outputs merge into mocks.", "required": false, "types": ["string"], "validation": { "allowedValues": ["no_merge", "shallow", "deep_map_only"] } }
+        { "name": "mock_outputs_merge_strategy_with_state", "description": "How the mocks merge with outputs the dependency really has: no_merge, the default, uses only the real outputs; shallow adds the mocked outputs they lack; deep_map_only also merges maps at every depth. The real value wins wherever both have one.", "required": false, "types": ["string"], "validation": { "allowedValues": ["no_merge", "shallow", "deep_map_only"], "advisory": true } },
+        { "name": "mock_outputs_merge_with_state", "description": "When true, merges the mocks with outputs the dependency really has as mock_outputs_merge_strategy_with_state = \"shallow\" does.", "required": false, "types": ["boolean"], "deprecated": true, "deprecationMessage": "Use `mock_outputs_merge_strategy_with_state` instead." }
       ]
     },
     {

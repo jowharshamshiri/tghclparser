@@ -60,7 +60,8 @@ describe('dependency resolution', () => {
 		targetConfigPath: path.relative(root, request.targetConfigPath),
 		targetDir: path.relative(root, request.targetDir),
 		mockOutputs: request.mockOutputs === undefined ? undefined : plainValue(request.mockOutputs),
-		mockOutputsAllowedTerraformCommands: request.mockOutputsAllowedTerraformCommands
+		mockOutputsAllowedTerraformCommands: request.mockOutputsAllowedTerraformCommands,
+		mockOutputsMergeStrategy: request.mockOutputsMergeStrategy
 	});
 
 	it('reports a declared dependency with no outputs as unresolved rather than as a fault', async () => {
@@ -232,7 +233,8 @@ describe('dependency resolution', () => {
 			targetConfigPath: path.join('vpc', 'terragrunt.hcl'),
 			targetDir: 'vpc',
 			mockOutputs: { id: 'vpc-mock' },
-			mockOutputsAllowedTerraformCommands: ['plan']
+			mockOutputsAllowedTerraformCommands: ['plan'],
+			mockOutputsMergeStrategy: 'no_merge'
 		}]);
 	});
 
@@ -253,7 +255,7 @@ describe('dependency resolution', () => {
 		await evaluate(evaluator);
 		assert.deepEqual(requests.map(plain), [{
 			name: 'vpc', declaredIn: path.join('app', 'terragrunt.hcl'), targetConfigPath: path.join('vpc', 'terragrunt.hcl'),
-			targetDir: 'vpc', mockOutputs: undefined, mockOutputsAllowedTerraformCommands: undefined
+			targetDir: 'vpc', mockOutputs: undefined, mockOutputsAllowedTerraformCommands: undefined, mockOutputsMergeStrategy: 'no_merge'
 		}]);
 	});
 
@@ -272,8 +274,59 @@ describe('dependency resolution', () => {
 		assert.deepEqual(requests.map(plain), [{
 			name: 'vpc', declaredIn: path.join('app', 'terragrunt.hcl'), targetConfigPath: path.join('vpc', 'terragrunt.hcl'), targetDir: 'vpc',
 			mockOutputs: { a: 'root', b: 'unit', nested: { x: 'root', y: 'unit' } },
-			mockOutputsAllowedTerraformCommands: ['plan', 'validate']
+			mockOutputsAllowedTerraformCommands: ['plan', 'validate'],
+			mockOutputsMergeStrategy: 'no_merge'
 		}]);
+	});
+
+	describe('the mock merge strategy', () => {
+		const strategyOf = async (block: string[]) => {
+			await write('app/terragrunt.hcl', ['dependency "vpc" {', '  config_path = "../vpc"', ...block, '}', '', 'inputs = { id = dependency.vpc.outputs.id }']);
+			const { evaluator, requests } = recording({ vpc: { id: 'vpc-123' } });
+			const result = await evaluate(evaluator);
+			return { result, strategy: requests[0]?.mockOutputsMergeStrategy };
+		};
+
+		it('reads the strategy as cty converts a string, the deprecated bool as it converts a bool, and null as unset', async () => {
+			const cases: Array<[string[], string]> = [
+				[[], 'no_merge'],
+				[['  mock_outputs_merge_strategy_with_state = "deep_map_only"'], 'deep_map_only'],
+				[['  mock_outputs_merge_strategy_with_state = 1'], '1'],
+				[['  mock_outputs_merge_strategy_with_state = null'], 'no_merge'],
+				[['  mock_outputs_merge_with_state = true'], 'shallow'],
+				[['  mock_outputs_merge_with_state = "true"'], 'shallow'],
+				[['  mock_outputs_merge_with_state = null'], 'no_merge'],
+				[['  mock_outputs_merge_with_state = false'], 'no_merge'],
+				[['  mock_outputs_merge_strategy_with_state = null', '  mock_outputs_merge_with_state = true'], 'shallow'],
+				[['  mock_outputs_merge_strategy_with_state = "no_merge"', '  mock_outputs_merge_with_state = true'], 'no_merge']
+			];
+			for (const [block, expected] of cases) {
+				const { result, strategy } = await strategyOf(block);
+				assert.equal(result.valid, true, `${block.join(' ')}: ${result.error}`);
+				assert.equal(strategy, expected, block.join(' '));
+			}
+		});
+
+		it('refuses a value of either attribute that does not convert, naming the attribute', async () => {
+			const strategy = await strategyOf(['  mock_outputs_merge_strategy_with_state = ["shallow"]']);
+			assert.match(strategy.result.error ?? '', /mock_outputs_merge_strategy_with_state must be a string/);
+			const deprecated = await strategyOf(['  mock_outputs_merge_with_state = "yes"']);
+			assert.match(deprecated.result.error ?? '', /mock_outputs_merge_with_state: a bool is required/);
+		});
+
+		it('takes the strategy of the included block a deep include merges into, and the unit\'s under a shallow one', async () => {
+			for (const [mergeStrategy, expected] of [['deep', 'shallow'], ['shallow', 'deep_map_only']]) {
+				await write('root.hcl', ['dependency "vpc" {', '  config_path = "../vpc"', '  mock_outputs_merge_strategy_with_state = "shallow"', '}']);
+				await write('app/terragrunt.hcl', [
+					'include "root" {', '  path           = "../root.hcl"', `  merge_strategy = "${mergeStrategy}"`, '}', '',
+					'dependency "vpc" {', '  config_path = "../vpc"', '  mock_outputs_merge_strategy_with_state = "deep_map_only"', '}', '',
+					'inputs = { id = dependency.vpc.outputs.id }'
+				]);
+				const { evaluator, requests } = recording({ vpc: { id: 'vpc-123' } });
+				await evaluate(evaluator);
+				assert.equal(requests[0]?.mockOutputsMergeStrategy, expected, mergeStrategy);
+			}
+		});
 	});
 
 	it('takes nothing from an include with no_merge', async () => {
