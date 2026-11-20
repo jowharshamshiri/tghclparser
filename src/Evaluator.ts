@@ -49,7 +49,7 @@ import {
 	runtimeToJavaScript,
 	unwrapSensitive
 } from './functions/utils';
-import { decodeConfigFile, mergeDeep, mergeShallow, terragruntConfigAsCty, UNRESOLVED } from './terragrunt-config';
+import { decodeConfigFile, mergeDeep, mergeShallow, samePlain, terragruntConfigValue, throughJson, UNRESOLVED } from './terragrunt-config';
 import type { ConfigBlock, ConfigBody, Plain, TerragruntConfig } from './terragrunt-config';
 import { isDefect } from './unresolved';
 import { isWrittenOut } from './writtenOut';
@@ -1445,7 +1445,9 @@ export class ConfigEvaluator {
 					this.newUnitContext(target),
 					() => this.evaluateFile(target, fileContent, scope.workspaceRoot)
 				);
-				return convertToRuntimeValue(terragruntConfigAsCty(await this.readTerragruntConfig(result, true)));
+				const written = new Map<string, RuntimeValue<ValueType>[]>();
+				const config = await this.readTerragruntConfig(result, true, written);
+				return terragruntConfigValue(config, (field, plain) => written.get(field)?.find(value => samePlain(runtimeValueToPlain(value), plain)));
 			},
 			readTFVarsFile: async (relativePath: string) => {
 				this.assertTrusted('read_tfvars_file');
@@ -1524,14 +1526,16 @@ export class ConfigEvaluator {
 	 * unresolved and read as unset. What is written to a file, a `generate` block's or the backend's, may not hold a
 	 * value sops left encrypted.
 	 */
-	private configBody(result: FileResult, scope: Scope): ConfigBody {
+	private configBody(result: FileResult, scope: Scope, values?: Map<string, RuntimeValue<ValueType>[]>): ConfigBody {
 		const file = result.filePath;
 		const attribute = (field: string, node: TNode, written: boolean) => async (): Promise<Plain | typeof UNRESOLVED> => {
 			const value = await this.renderField(file, field, async () => {
 				const evaluated = await this.evalNode(node, scope);
 				return written ? computable(evaluated) : evaluated;
 			});
-			return value === undefined ? UNRESOLVED : runtimeValueToPlain(value);
+			if (value === undefined) return UNRESOLVED;
+			values?.set(field, [...(values.get(field) ?? []), value]);
+			return runtimeValueToPlain(value);
 		};
 		const block = (node: TNode, prefix: string, written: boolean): ConfigBlock => {
 			const type = String(node.value);
@@ -1563,18 +1567,18 @@ export class ConfigEvaluator {
 	 * inputs are those the evaluation merged. With `withOutputs`, each enabled dependency that does not skip its
 	 * outputs carries them.
 	 */
-	private async readTerragruntConfig(result: FileResult, withOutputs: boolean): Promise<TerragruntConfig> {
+	private async readTerragruntConfig(result: FileResult, withOutputs: boolean, values?: Map<string, RuntimeValue<ValueType>[]>): Promise<TerragruntConfig> {
 		for (const [name, issue] of result.unresolvedInputs) {
 			this.renderUnresolved.push({file: issue.file, field: `inputs.${name}`, reason: issue.reason});
 		}
-		const own = await decodeConfigFile(this.configBody(result, result.scope));
+		const own = await decodeConfigFile(this.configBody(result, result.scope, values));
 		const autoinclude = result.scope.autoinclude;
-		if (autoinclude) mergeShallow(own, await decodeConfigFile(this.configBody(autoinclude, this.mergedScope(autoinclude, result))));
+		if (autoinclude) mergeShallow(own, await decodeConfigFile(this.configBody(autoinclude, this.mergedScope(autoinclude, result), values)));
 		let config = own;
 		for (const name of [...result.scope.includes.keys()].reverse()) {
 			const include = result.scope.includes.get(name)!;
 			if (include.mergeStrategy === 'no_merge') continue;
-			const included = await decodeConfigFile(this.configBody(include.result, this.mergedScope(include.result, result)));
+			const included = await decodeConfigFile(this.configBody(include.result, this.mergedScope(include.result, result), values));
 			if (include.mergeStrategy === 'deep') mergeDeep(included, config);
 			else mergeShallow(included, config);
 			config = included;
@@ -1595,6 +1599,8 @@ export class ConfigEvaluator {
 			if (value === undefined) continue;
 			const outputs = (runtimeValueToPlain(value) as Record<string, Plain>).outputs;
 			dependency.outputs = outputs === undefined ? null : outputs;
+			const typed = (unwrapSensitive(value).value as Map<string, RuntimeValue<ValueType>>).get('outputs');
+			if (typed) values?.set(`dependency.${dependency.name}.outputs`, [typed]);
 		}
 		return config;
 	}
@@ -1850,6 +1856,7 @@ export class ConfigEvaluator {
 		if (parts.length === 0) throw new Error('include reference requires a path');
 		const head = parts[0];
 		const result = include.result;
+		// Terragrunt carries an included file's locals and inputs through JSON, so they hold objects and tuples.
 		if (head === 'locals') {
 			// `include.<name>.locals` with no trailing name is the whole map.
 			if (parts.length < 2) {
@@ -1857,14 +1864,14 @@ export class ConfigEvaluator {
 				for (const name of result.scope.locals.keys()) {
 					all.set(name, await this.resolveLocal(result.scope, name));
 				}
-				return makeObjectValue(all);
+				return throughJsonValue(makeObjectValue(all));
 			}
 			const value = await this.resolveLocal(result.scope, parts[1]);
-			return this.traverse(value, parts.slice(2));
+			return this.traverse(throughJsonValue(value), parts.slice(2));
 		}
 		if (head === 'inputs') {
 			if (!result.inputs) throw new Error(`include "${parts[1]}" has no inputs`);
-			return this.traverse(makeObjectValue(result.inputs), parts.slice(1));
+			return this.traverse(throughJsonValue(makeObjectValue(result.inputs)), parts.slice(1));
 		}
 		if (head === 'terraform') {
 			const value = await this.terraformObject(result.scope);
@@ -3080,6 +3087,15 @@ function functionArguments(name: string, args: RuntimeValue<ValueType>[]): Runti
 		return args;
 	}
 	return args.map(computable);
+}
+
+/**
+ * A value as Terragrunt carries it through JSON, as it does an included file's locals and inputs: its lists, sets and
+ * maps become tuples and objects, and its sensitivity is dropped. A value sops left encrypted stays as it was read.
+ */
+function throughJsonValue(value: RuntimeValue<ValueType>): RuntimeValue<ValueType> {
+	if (holdsEncrypted(value)) return value;
+	return convertToRuntimeValue(throughJson(runtimeValueToPlain(value)));
 }
 
 /** What stands in for a value sops stored encrypted wherever a plain form of it is shown. */

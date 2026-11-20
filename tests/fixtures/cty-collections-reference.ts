@@ -206,3 +206,100 @@ export const faults: Array<[string, string]> = [
 	['[for v in tolist([1]) : v if tolist([true])]', 'The \'if\' clause value is invalid: bool required, but have list of bool.'],
 	['[for v in "abc" : v]', 'A value of type string cannot be used as the collection in a \'for\' expression.'],
 ];
+
+/** A configuration `read_terragrunt_config()` reads in the cases below; its dependencies `dep` and `dep2` are units. */
+export const readConfig = `locals {
+  l = tolist(["a"])
+  m = tomap({ a = 1 })
+}
+dependencies {
+  paths = ["dep2"]
+}
+dependency "d" {
+  config_path = "dep"
+  mock_outputs = { o = tolist(["a"]) }
+  mock_outputs_allowed_terraform_commands = ["render"]
+}
+terraform {
+  source = "."
+  extra_arguments "e" {
+    commands  = ["plan"]
+    arguments = ["-x"]
+    env_vars  = { A = "b" }
+  }
+  before_hook "h" {
+    commands = ["plan"]
+    execute  = ["echo"]
+  }
+  include_in_copy = ["a"]
+}
+generate "g" {
+  path      = "g.tf"
+  if_exists = "overwrite"
+  contents  = "x"
+}
+feature "f" {
+  default = tolist([1])
+}
+exclude {
+  if      = false
+  actions = ["plan"]
+}
+errors {
+  retry "r" {
+    retryable_errors   = ["x"]
+    max_attempts       = 2
+    sleep_interval_sec = 1
+  }
+}
+remote_state {
+  backend = "local"
+  config  = { path = "x", l = tolist(["a"]) }
+}
+inputs = {
+  i = tolist(["a"])
+}
+`;
+
+/** The type v1.2.2 names for `read_terragrunt_config("other.hcl").<field>`, run as `terragrunt render`. */
+export const readConfigTypes: Array<[string, string]> = [
+	['locals.l', 'tuple'],
+	['locals.m', 'object'],
+	['dependencies.paths', 'list of string'],
+	['dependencies', 'object'],
+	['terraform.extra_arguments', 'map of object'],
+	['terraform.extra_arguments.e.arguments', 'list of string'],
+	['terraform.extra_arguments.e.env_vars', 'map of string'],
+	['terraform.before_hook', 'map of object'],
+	['terraform.before_hook.h.execute', 'list of string'],
+	['terraform.include_in_copy', 'list of string'],
+	['generate', 'map of object'],
+	['generate.g', 'object'],
+	['feature', 'object'],
+	['feature.f', 'object'],
+	['feature.f.default', 'list of number'],
+	['exclude.actions', 'list of string'],
+	['exclude', 'object'],
+	['errors.retry', 'list of object'],
+	['errors', 'object'],
+	['remote_state.config', 'object'],
+	['remote_state.config.l', 'tuple'],
+	['remote_state', 'object'],
+	['inputs', 'object'],
+	['inputs.i', 'tuple'],
+	['dependency', 'object'],
+	['dependency.d', 'object'],
+	['dependency.d.mock_outputs', 'object'],
+	['dependency.d.mock_outputs.o', 'list of string'],
+	['dependency.d.outputs', 'object'],
+	['dependency.d.mock_outputs_allowed_terraform_commands', 'list of string'],
+	['terraform', 'object'],
+];
+
+/** The type v1.2.2 names for `include.root.<field>` of an exposed include of a file with `locals { l = tolist(["a"]) }`, `inputs = { i = tomap({ a = 1 }) }`. */
+export const includeTypes: Array<[string, string]> = [
+	['locals.l', 'tuple'],
+	['inputs.i', 'object'],
+	['inputs', 'object'],
+	['locals', 'object']
+];

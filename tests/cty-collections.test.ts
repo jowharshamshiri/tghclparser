@@ -6,9 +6,9 @@ import path from 'node:path';
 import { ctyDynamic, ctyNumber, ctyString, friendlyName, listOf, mapOf, objectOf, setOf, tupleOf } from '../src/cty-types';
 import { unmarshalType, unmarshalValue } from '../src/cty-json';
 import { ConfigEvaluator } from '../src/Evaluator';
-import { makeNumberValue, makeSetValue, valueType } from '../src/functions/utils';
+import { makeNumberValue, makeObjectValue, makeSetValue, valueType } from '../src/functions/utils';
 import { CtyNumber } from '../src/cty-number';
-import { faults, typeNames, values } from './fixtures/cty-collections-reference';
+import { faults, includeTypes, readConfig, readConfigTypes, typeNames, values } from './fixtures/cty-collections-reference';
 import { plainValue } from './plain-values';
 
 // Values keep go-cty's types as Terragrunt v1.2.2 gives them: a list, set or map apart from a tuple or object, each
@@ -50,6 +50,55 @@ describe('go-cty collection types as Terragrunt v1.2.2 gives them', () => {
 			const result = await evaluate(expression);
 			assert.equal(result.valid, false, expression);
 			assert.equal(result.error, message, expression);
+		}
+	});
+});
+
+// read_terragrunt_config() and an exposed include give a configuration as Terragrunt's TerragruntConfigAsCty does: the
+// fields it holds in Go structs typed as gocty implies, lists and maps; locals, inputs and the backend's settings
+// carried through JSON, so objects and tuples; mock outputs and a feature's default as written.
+describe('configurations read as Terragrunt v1.2.2 gives them', () => {
+	let root: string;
+
+	before(async () => {
+		root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-cty-config-')));
+		for (const unit of ['dep', 'dep2']) {
+			await fs.mkdir(path.join(root, unit));
+			await fs.writeFile(path.join(root, unit, 'terragrunt.hcl'), 'terraform {}\n');
+		}
+		await fs.writeFile(path.join(root, 'other.hcl'), readConfig);
+		await fs.writeFile(path.join(root, 'parent.hcl'), 'locals {\n  l = tolist(["a"])\n}\ninputs = {\n  i = tomap({ a = 1 })\n}\n');
+	});
+
+	after(async () => {
+		await fs.rm(root, { recursive: true, force: true });
+	});
+
+	const typeError = (name: string) => `Cannot include the given value in a string template: string required, but have ${name}.`;
+
+	it('types each field of a configuration read_terragrunt_config() reads as Terragrunt does', async () => {
+		// The dependency has never been applied, so its outputs are its mocks, which render may see.
+		const evaluator = new ConfigEvaluator({
+			environmentVariables: {},
+			terraformCommand: 'render',
+			terraformCliArgs: [],
+			workspaceTrusted: true,
+			resolveDependency: async request => makeObjectValue(new Map([['outputs', request.mockOutputs!]]))
+		});
+		for (const [field, name] of readConfigTypes) {
+			const content = `locals {\n  c = read_terragrunt_config("other.hcl")\n}\ninputs = {\n  a = "a\${local.c.${field}}"\n}\n`;
+			const result = await evaluator.evaluateUnit(path.join(root, 'terragrunt.hcl'), content, root);
+			assert.equal(result.error, typeError(name), field);
+		}
+	});
+
+	it('carries an exposed include\'s locals and inputs through JSON, as Terragrunt does', async () => {
+		const evaluator = new ConfigEvaluator({ environmentVariables: {}, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true });
+		await fs.mkdir(path.join(root, 'child'), { recursive: true });
+		for (const [field, name] of includeTypes) {
+			const content = `include "root" {\n  path   = "../parent.hcl"\n  expose = true\n}\ninputs = {\n  a = "a\${include.root.${field}}"\n}\n`;
+			const result = await evaluator.evaluateUnit(path.join(root, 'child', 'terragrunt.hcl'), content, root);
+			assert.equal(result.error, typeError(name), field);
 		}
 	});
 });

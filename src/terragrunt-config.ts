@@ -12,6 +12,19 @@
  */
 
 import { CtyNumber } from './cty-number';
+import { type CtyType, ctyBool, ctyDynamic, ctyNumber, ctyString, listOf, mapOf, objectOf } from './cty-types';
+import {
+	convertToRuntimeValue,
+	makeArrayValue,
+	makeBooleanValue,
+	makeListValue,
+	makeMapValue,
+	makeNullValue,
+	makeNumberValue,
+	makeObjectValue,
+	makeStringValue
+} from './functions/utils';
+import type { RuntimeValue, ValueType } from './model';
 
 /** A value as runtimeValueToPlain gives it. */
 export type Plain = unknown;
@@ -1268,4 +1281,157 @@ export function terragruntConfigAsCty(config: TerragruntConfig): Record<string, 
 	if (config.remoteState) out.remote_state = remoteStateAsCty(config.remoteState);
 	if (config.preventDestroy !== undefined) out.prevent_destroy = config.preventDestroy;
 	return out;
+}
+
+/*
+ * The go-cty types of what TerragruntConfigAsCty gives, which `read_terragrunt_config()` returns: a field Terragrunt
+ * holds in a Go struct has the type gocty implies for it, a slice a list and a map a map, and a nil one a null of that
+ * type; a field it carries through JSON (locals, inputs, the backend's settings) holds objects and tuples; and a field
+ * it holds as a cty.Value (a dependency's mock outputs and outputs, a feature's default, the engine's meta) has the
+ * type of the value written or read.
+ */
+
+const stringList = listOf(ctyString);
+const typedObject = (attributes: Record<string, CtyType>): CtyType => objectOf(new Map(Object.entries(attributes)));
+
+const hookType = typedObject({ if: ctyBool, run_on_error: ctyBool, suppress_stdout: ctyBool, working_dir: ctyString, name: ctyString, commands: stringList, execute: stringList });
+const errorHookType = typedObject({ suppress_stdout: ctyBool, working_dir: ctyString, name: ctyString, commands: stringList, execute: stringList, on_errors: stringList });
+const extraArgumentsType = typedObject({ arguments: stringList, required_var_files: stringList, optional_var_files: stringList, env_vars: mapOf(ctyString), name: ctyString, commands: stringList });
+const generateType = typedObject({ hcl_fmt: ctyBool, mutable: ctyBool, path: ctyString, if_exists: ctyString, if_disabled: ctyString, comment_prefix: ctyString, contents: ctyString, disable_signature: ctyBool, disable: ctyBool });
+
+/** Each attribute's type; the dynamic pseudo-type for a field whose type is that of its value, which {@link FieldValue} gives. */
+const configType = typedObject({
+	terraform_binary: ctyString,
+	terraform_version_constraint: ctyString,
+	terragrunt_version_constraint: ctyString,
+	download_dir: ctyString,
+	iam_role: ctyString,
+	iam_assume_role_session_name: ctyString,
+	iam_web_identity_token: ctyString,
+	dependencies: typedObject({ paths: stringList }),
+	dependency: ctyDynamic,
+	generate: mapOf(generateType),
+	iam_assume_role_duration: ctyNumber,
+	inputs: ctyDynamic,
+	locals: ctyDynamic,
+	feature: ctyDynamic,
+	engine: typedObject({ meta: ctyDynamic, source: ctyString, version: ctyString, type: ctyString }),
+	exclude: typedObject({ actions: stringList, if: ctyBool, no_run: ctyBool, exclude_dependencies: ctyBool }),
+	errors: typedObject({
+		retry: listOf(typedObject({ name: ctyString, retryable_errors: stringList, max_attempts: ctyNumber, sleep_interval_sec: ctyNumber })),
+		ignore: ctyDynamic
+	}),
+	terraform: typedObject({
+		extra_arguments: mapOf(extraArgumentsType),
+		source: ctyString,
+		include_in_copy: stringList,
+		exclude_from_copy: stringList,
+		copy_terraform_lock_file: ctyBool,
+		before_hook: mapOf(hookType),
+		after_hook: mapOf(hookType),
+		error_hook: mapOf(errorHookType),
+		update_source_with_cas: ctyBool,
+		mutable: ctyBool,
+		version: ctyString,
+		no_dot_terragrunt_cache: ctyBool
+	}),
+	remote_state: typedObject({
+		backend: ctyString,
+		disable_init: ctyBool,
+		disable_dependency_optimization: ctyBool,
+		generate: typedObject({ path: ctyString, if_exists: ctyString }),
+		config: ctyDynamic,
+		encryption: ctyDynamic
+	}),
+	prevent_destroy: ctyBool
+});
+
+const dependencyType = typedObject({
+	config_path: ctyDynamic,
+	enabled: ctyBool,
+	skip: ctyBool,
+	mock_outputs: ctyDynamic,
+	mock_outputs_allowed_terraform_commands: stringList,
+	mock_outputs_merge_with_state: ctyBool,
+	mock_outputs_merge_strategy_with_state: ctyString,
+	outputs: ctyDynamic,
+	inputs: ctyDynamic,
+	name: ctyString
+});
+const featureType = typedObject({ default: ctyDynamic, name: ctyString });
+const ignoreType = typedObject({ name: ctyString, ignorable_errors: stringList, message: ctyString, signals: ctyDynamic });
+
+/**
+ * The value of a field held as a cty.Value: the one an evaluation gave for it, by its path such as
+ * `dependency.vpc.mock_outputs`, when what the configuration holds is that value; a value merged from several, which
+ * Terragrunt merges through JSON, holds objects and tuples.
+ */
+export type FieldValue = (field: string, plain: Plain) => RuntimeValue<ValueType> | undefined;
+
+/**
+ * The configuration as `read_terragrunt_config()` returns it: what {@link terragruntConfigAsCty} gives, with the go-cty
+ * type Terragrunt gives each field.
+ *
+ * @param config the configuration.
+ * @param written the values the evaluation gave for the fields Terragrunt holds as cty.Values.
+ */
+export function terragruntConfigValue(config: TerragruntConfig, written: FieldValue): RuntimeValue<ValueType> {
+	return typedField(terragruntConfigAsCty(config), configType, '', written);
+}
+
+function typedField(plain: Plain, type: CtyType, field: string, written: FieldValue): RuntimeValue<ValueType> {
+	if (type.kind === 'dynamic') return dynamicField(plain, field, written);
+	if (plain === null) return makeNullValue(type);
+	switch (type.kind) {
+		case 'string':
+			return makeStringValue(plain as string);
+		case 'number':
+			return makeNumberValue(plain instanceof CtyNumber ? plain : CtyNumber.fromInt64(plain as number));
+		case 'bool':
+			return makeBooleanValue(plain as boolean);
+		case 'list':
+			return makeListValue(type.element, (plain as Plain[]).map((item, index) => typedField(item, type.element, `${field}.${index}`, written)));
+		case 'map':
+			return makeMapValue(type.element, new Map(Object.entries(plain as Record<string, Plain>).map(([key, item]) => [key, typedField(item, type.element, `${field}.${key}`, written)])));
+		case 'object': {
+			const attributes = new Map<string, RuntimeValue<ValueType>>();
+			for (const [name, item] of Object.entries(plain as Record<string, Plain>)) {
+				const attribute = type.attributes.get(name);
+				if (attribute === undefined) throw new TypeError(`TerragruntConfigAsCty has no attribute ${field ? `${field}.` : ''}${name}`);
+				attributes.set(name, typedField(item, attribute, field ? `${field}.${name}` : name, written));
+			}
+			return makeObjectValue(attributes);
+		}
+		default:
+			throw new TypeError(`TerragruntConfigAsCty holds no field of type ${type.kind}`);
+	}
+}
+
+/** Whether two plain values are the same value, whatever the order of their keys. */
+export function samePlain(left: Plain, right: Plain): boolean {
+	const canonical = (value: Plain): unknown => {
+		if (Array.isArray(value)) return value.map(canonical);
+		if (isRecord(value)) return Object.fromEntries(Object.keys(value).sort(compareBytes).map(key => [key, canonical(value[key])]));
+		return value instanceof CtyNumber ? `n:${value.toString()}` : value;
+	};
+	return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
+}
+
+/** A field whose type is that of the value it holds. */
+function dynamicField(plain: Plain, field: string, written: FieldValue): RuntimeValue<ValueType> {
+	const byName = (type: CtyType): RuntimeValue<ValueType> => makeObjectValue(new Map(Object.entries(plain as Record<string, Plain>)
+		.map(([name, item]) => [name, typedField(item, type, `${field}.${name}`, written)])));
+	switch (field) {
+		case 'dependency':
+			return byName(dependencyType);
+		case 'feature':
+			return byName(featureType);
+		case 'errors.ignore':
+			return makeArrayValue((plain as Plain[]).map((item, index) => typedField(item, ignoreType, `${field}.${index}`, written)));
+		default:
+			break;
+	}
+	if (/^errors\.ignore\.\d+\.signals$/u.test(field) && isRecord(plain) && Object.keys(plain).length === 0) return makeMapValue(ctyDynamic, new Map());
+	const asWritten = /^(dependency\.[^.]+\.(config_path|mock_outputs|outputs)|feature\.[^.]+\.default|engine\.meta)$/u.test(field);
+	return (asWritten ? written(field, plain) : undefined) ?? convertToRuntimeValue(plain);
 }
