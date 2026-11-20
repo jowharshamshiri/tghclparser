@@ -5,6 +5,7 @@ import { awsFunctionGroup } from './functions/aws_functions';
 import { builtinFunctionGroup } from './functions/builtin_functions';
 import { coreFunctionGroup } from './functions/core_functions';
 import { fileFunctionGroup } from './functions/file_functions';
+import { readSignature } from './function-signature';
 import { FunctionRegistry } from './FunctionsRegistry';
 import type { AttributeDefinition, BlockDefinition, BuiltinFunctionDefinition, FunctionDefinition, TerragruntFileKind, ValueType } from './model';
 
@@ -16,16 +17,8 @@ const currentFunctionDefinitions: BuiltinFunctionDefinition[] = functionDefiniti
 
 /** A definition of functions.json, which must state its function's go-cty parameters. */
 function builtinFunctionDefinition(definition: FunctionDefinition): BuiltinFunctionDefinition {
-	const { arity } = definition as Partial<BuiltinFunctionDefinition>;
-	if (
-		!arity
-		|| !Array.isArray(arity.params)
-		|| arity.params.some(param => typeof param !== 'string')
-		|| typeof arity.variadic !== 'boolean'
-	) {
-		throw new Error(`functions.json: function "${definition.name}" must have an arity of go-cty parameter names and whether it is variadic`);
-	}
-	return definition as BuiltinFunctionDefinition;
+	const { signature } = definition as { signature?: unknown };
+	return { ...definition, signature: readSignature(definition.name, signature) };
 }
 
 export class Schema {

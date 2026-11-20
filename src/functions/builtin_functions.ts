@@ -7,6 +7,9 @@ import { CtyNumber, parseGoInteger } from '../cty-number';
 import { goQuoted } from '../go-quote';
 import { graphemeClusters, graphemeCount } from '../grapheme-clusters';
 import type { FunctionContext, RuntimeValue, ValueType } from '../model';
+import { convertToNumber } from '../cty-operations';
+import { ctyDynamic } from '../cty-types';
+import { argumentError } from '../function-signature';
 import { assumeFunctions, markedLike } from './assume_functions';
 import { addressRange, contains, type IP, type IPNet, parseCIDR, parseIP, to4 } from './ipaddr';
 import { renderTemplate } from './template';
@@ -15,7 +18,6 @@ import { expandTerragruntGlob } from './terragrunt_glob';
 import { formatFunction, formatListFunction } from './format';
 import {
 	compareStrings,
-	convertToNumber,
 	convertToRuntimeValue,
 	ctyEquals,
 	expectParams,
@@ -26,7 +28,8 @@ import {
 	makeStringValue,
 	markEncrypted,
 	parseJsonDocument,
-	unwrapSensitive
+	unwrapSensitive,
+	valueType
 } from './utils';
 
 function requireArgument(args: RuntimeValue<ValueType>[], index: number, name: string): RuntimeValue<ValueType> {
@@ -1059,10 +1062,12 @@ export const builtinFunctionGroup = {
 		min: async (args: RuntimeValue<ValueType>[]) => markedLike(numberValue(extreme(args, -1)), args),
 		nonsensitive: async (args: RuntimeValue<ValueType>[]) => unwrapSensitive(requireArgument(args, 0, 'nonsensitive')),
 		one: async (args: RuntimeValue<ValueType>[]) => {
-			const items = arrayArgument(args, 0, 'one');
-			if (items.length === 0) return makeNullValue();
-			if (items.length > 1) throw new Error('one requires a list with exactly zero or one element');
-			return items[0];
+			const type = valueType(args[0]);
+			const refused = argumentError({ name: 'list' }, 'must be a list, set, or tuple value with either zero or one elements');
+			if (type.kind !== 'list' && type.kind !== 'set' && type.kind !== 'tuple') throw refused;
+			const items = args[0].value as RuntimeValue<ValueType>[];
+			if (items.length > 1) throw refused;
+			return items[0] ?? makeNullValue(type.kind === 'tuple' ? ctyDynamic : type.element);
 		},
 		parseint: async (args: RuntimeValue<ValueType>[]) => {
 			const text = unwrapSensitive(requireArgument(args, 0, 'number'));

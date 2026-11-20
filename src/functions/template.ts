@@ -1,9 +1,10 @@
 import type { FunctionContext, RuntimeValue, ValueType } from '../model';
 import { CtyNumber } from '../cty-number';
-import { arithmetic, comparison, negation, sequencePosition } from '../cty-operations';
+import { arithmetic, attributeValue, comparison, type ConditionalBranch, conditionalResult, conditionValue, forElements, indexValue, negation, operandBool, templatePart } from '../cty-operations';
+import { ctyDynamic } from '../cty-types';
 import { isDefect } from '../unresolved';
 import type { LogicalOperand } from './utils';
-import { coerceToString, conditionValue, logicalOperation, makeBooleanValue, makeNullValue, makeNumberValue, makeStringValue, NULL_OPERAND, operandBool } from './utils';
+import { logicalOperation, makeBooleanValue, makeNullValue, makeNumberValue, makeStringValue, NULL_OPERAND, unwrapSensitive } from './utils';
 
 /** An HCL identifier, as the scanner reads one: the names a template's variables may have. */
 const templateVariableName = /^[\p{ID_Start}_][\p{ID_Continue}-]*$/u;
@@ -212,7 +213,7 @@ async function renderTemplateNodes(
 			}
 			case 'interp': {
 				const value = await evaluateTemplateExpression(node.expr, scope, context);
-				output += coerceToString(value);
+				output += templatePart(value).text;
 				break;
 			}
 			case 'if': {
@@ -223,9 +224,9 @@ async function renderTemplateNodes(
 			}
 			case 'for': {
 				const collection = await evaluateTemplateExpression(node.coll, scope, context);
-				for (const [key, item] of templateIterate(collection)) {
+				for (const [key, item] of forElements(unwrapSensitive(collection))) {
 					const childScope = new Map(scope);
-					if (node.key !== null) childScope.set(node.key, makeStringValue(key));
+					if (node.key !== null) childScope.set(node.key, key);
 					childScope.set(node.val, item);
 					output += await renderTemplateNodes(node.body, childScope, context);
 				}
@@ -234,18 +235,6 @@ async function renderTemplateNodes(
 		}
 	}
 	return output;
-}
-
-function templateIterate(value: RuntimeValue<ValueType>): Array<[string, RuntimeValue<ValueType>]> {
-	const items: Array<[string, RuntimeValue<ValueType>]> = [];
-	if (value.type === 'array') {
-		(value.value as RuntimeValue<ValueType>[]).forEach((item, index) => items.push([String(index), item]));
-	} else if (value.type === 'object' || value.type === 'block') {
-		for (const [key, item] of (value.value as Map<string, RuntimeValue<ValueType>>).entries()) items.push([key, item]);
-	} else {
-		throw new Error(`Template "for" collection must be a list or object, got ${value.type}`);
-	}
-	return items;
 }
 
 // --- Template expression evaluator -----------------------------------------
@@ -530,7 +519,7 @@ async function evaluateTemplateAst(
 		case 'bool':
 			return makeBooleanValue(node.value as boolean);
 		case 'null':
-			return makeNullValue();
+			return makeNullValue(ctyDynamic);
 		case 'ident': {
 			const value = scope.get(node.name!);
 			if (value) return value;
@@ -538,16 +527,12 @@ async function evaluateTemplateAst(
 		}
 		case 'member': {
 			const base = await evaluateTemplateAst(node.left!, scope, context);
-			const name = node.value as string;
-			if (base.type !== 'object' && base.type !== 'block') throw new Error(`Template member access on ${base.type}`);
-			const member = (base.value as Map<string, RuntimeValue<ValueType>>).get(name);
-			if (member === undefined) throw new Error(`Template member access for missing key ${name}`);
-			return member;
+			return attributeValue(base, node.value as string);
 		}
 		case 'index': {
 			const base = await evaluateTemplateAst(node.left!, scope, context);
-			const indexValue = await evaluateTemplateAst(node.right!, scope, context);
-			return templateIndex(base, indexValue);
+			const key = await evaluateTemplateAst(node.right!, scope, context);
+			return indexValue(base, key);
 		}
 		case 'call': {
 			const args = await Promise.all((node.args ?? []).map(arg => evaluateTemplateAst(arg, scope, context)));
@@ -597,28 +582,26 @@ async function evaluateTemplateAst(
 			return evaluateTemplateAst(node.right!, scope, context);
 		}
 		case 'ternary': {
-			const condition = await evaluateTemplateAst(node.left!, scope, context);
-			return conditionValue(condition)
-				? evaluateTemplateAst(node.right!, scope, context)
-				: evaluateTemplateAst(node.args![0], scope, context);
+			// As HCL does: both branches first, their types unified, then the condition picks one.
+			const settle = async (expression: TExpr): Promise<ConditionalBranch> => {
+				try {
+					return { value: await evaluateTemplateAst(expression, scope, context) };
+				} catch (error) {
+					if (error instanceof Error && isDefect(error)) throw error;
+					return { error };
+				}
+			};
+			const whenTrue = await settle(node.right!);
+			const whenFalse = await settle(node.args![0]);
+			const condition = await settle(node.left!);
+			return conditionalResult(whenTrue, whenFalse, () => {
+				if ('error' in condition) throw condition.error;
+				return { truth: conditionValue(condition.value), value: condition.value };
+			});
 		}
 		default:
 			throw new Error(`Unknown template expression kind ${node.kind}`);
 	}
-}
-
-function templateIndex(base: RuntimeValue<ValueType>, index: RuntimeValue<ValueType>): RuntimeValue<ValueType> {
-	if (base.type === 'object' || base.type === 'block') {
-		if (index.type !== 'string') throw new Error('Template object index must be a string');
-		const member = (base.value as Map<string, RuntimeValue<ValueType>>).get(String(index.value));
-		if (member === undefined) throw new Error(`Template object index for missing key ${String(index.value)}`);
-		return member;
-	}
-	if (base.type === 'array') {
-		const items = base.value as RuntimeValue<ValueType>[];
-		return items[sequencePosition(items.length, index)];
-	}
-	throw new Error(`Template cannot index ${base.type}`);
 }
 
 function templateUnknownFunction(name: string): never {

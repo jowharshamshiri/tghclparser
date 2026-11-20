@@ -1,4 +1,8 @@
+import { crc32 } from 'node:zlib';
+
 import { CtyNumber } from '../cty-number';
+import { type CtyType, ctyBool, ctyDynamic, ctyNumber, ctyString, friendlyName, mapOf, listOf, objectOf, setOf, tupleOf, typeEquals } from '../cty-types';
+import { goQuoted } from '../go-quote';
 import type { RuntimeValue, ValueType } from '../model';
 
 // A string value is NFC-normalized as it is made, as go-cty normalizes every string on entry, so two spellings of
@@ -18,9 +22,11 @@ export const makeBooleanValue = (value: boolean): RuntimeValue<'boolean'> => ({
 	value
 });
 
-export const makeNullValue = (): RuntimeValue<'null'> => ({
+/** A null of a go-cty type: HCL's `null` keyword is a null of the dynamic pseudo-type. */
+export const makeNullValue = (type: CtyType): RuntimeValue<'null'> => ({
     type: 'null',
-    value: null
+    value: null,
+    ctyType: type
 });
 
 export const makeArrayValue = (value: RuntimeValue<ValueType>[]): RuntimeValue<'array'> => ({
@@ -36,30 +42,161 @@ export const makeObjectValue = (value: Map<string, RuntimeValue<ValueType>>): Ru
         : new Map([...value].map(([key, entry]) => [key.normalize('NFC'), entry]))
 });
 
+/** Refuses an element whose type is not the collection's element type: the evaluator built the collection wrongly. */
+function checkElements(kind: string, element: CtyType, values: Iterable<RuntimeValue<ValueType>>): void {
+    for (const value of values) {
+        const type = valueType(value);
+        if (!typeEquals(type, element)) {
+            throw new TypeError(`a ${kind} of ${friendlyName(element)} cannot hold a value of type ${friendlyName(type)}`);
+        }
+    }
+}
+
 /**
- * The name go-cty gives a value's type in a message, such as `bool` or `tuple`. A list or an object written in
- * configuration is a tuple or an object to go-cty, and those are the names given to every list and object here.
+ * A go-cty list: its elements in order, each of the element type.
  *
- * @param value the value, not sensitive.
+ * @param element the element type.
+ * @param values the elements.
+ * @throws TypeError when an element is of another type.
+ */
+export function makeListValue(element: CtyType, values: RuntimeValue<ValueType>[]): RuntimeValue<'array'> {
+    checkElements('list', element, values);
+    return { type: 'array', value: values, ctyType: listOf(element) };
+}
+
+/**
+ * A go-cty set: the distinct elements, each of the element type, in the order go-cty iterates a set.
+ *
+ * @param element the element type.
+ * @param values the elements, in any order and with any repeats.
+ * @throws TypeError when an element is of another type.
+ */
+export function makeSetValue(element: CtyType, values: RuntimeValue<ValueType>[]): RuntimeValue<'array'> {
+    checkElements('set', element, values);
+    const distinct: RuntimeValue<ValueType>[] = [];
+    for (const value of values) if (!distinct.some(existing => ctyEquals(existing, value))) distinct.push(value);
+    return { type: 'array', value: setOrder(distinct), ctyType: setOf(element) };
+}
+
+/**
+ * A go-cty map: its elements by key, each of the element type, kept in the order of their keys' bytes, as go-cty
+ * iterates a map.
+ *
+ * @param element the element type.
+ * @param entries the elements by key.
+ * @throws TypeError when an element is of another type.
+ */
+export function makeMapValue(element: CtyType, entries: Map<string, RuntimeValue<ValueType>>): RuntimeValue<'object'> {
+    checkElements('map', element, entries.values());
+    const normalized = [...entries].map(([key, entry]) => [key.normalize('NFC'), entry] as const);
+    normalized.sort(([left], [right]) => compareStrings(left, right));
+    return { type: 'object', value: new Map(normalized), ctyType: mapOf(element) };
+}
+
+/**
+ * A value's go-cty type. A mark such as sensitivity is not part of it.
+ *
+ * @param value the value.
+ * @returns its type.
+ * @throws TypeError for a null that carries no type, or a value that is not data.
+ */
+export function valueType(value: RuntimeValue<ValueType>): CtyType {
+    const plain = unwrapSensitive(value);
+    switch (plain.type) {
+        case 'string':
+            return ctyString;
+        case 'number':
+            return ctyNumber;
+        case 'boolean':
+            return ctyBool;
+        case 'null':
+            if (!plain.ctyType) throw new TypeError('a null value carries no type');
+            return plain.ctyType;
+        case 'array':
+            return plain.ctyType ?? tupleOf((plain.value as RuntimeValue<ValueType>[]).map(valueType));
+        case 'object':
+        case 'block': {
+            if (plain.ctyType) return plain.ctyType;
+            const attributes = new Map<string, CtyType>();
+            for (const [name, entry] of plain.value as Map<string, RuntimeValue<ValueType>>) attributes.set(name, valueType(entry));
+            return objectOf(attributes);
+        }
+        default:
+            throw new TypeError(`a value of kind ${String(plain.type)} has no type`);
+    }
+}
+
+/**
+ * The bytes go-cty hashes a value by to place it in a set, and orders a set of other than primitives by: a number
+ * as big.Float's String writes it, a string quoted as Go quotes it, and collections and structures by their elements.
+ */
+function setHashBytes(value: RuntimeValue<ValueType>): string {
+    const plain = unwrapSensitive(value);
+    switch (plain.type) {
+        case 'null':
+            return '~';
+        case 'number':
+            return (plain.value as CtyNumber).text('g', 10);
+        case 'boolean':
+            return plain.value ? 'T' : 'F';
+        case 'string':
+            return goQuoted(String(plain.value));
+        default:
+            break;
+    }
+    const type = valueType(plain);
+    switch (type.kind) {
+        case 'map':
+            return `{${[...(plain.value as Map<string, RuntimeValue<ValueType>>)].map(([key, entry]) => `${goQuoted(key)}:${setHashBytes(entry)};`).join('')}}`;
+        case 'list':
+        case 'set':
+            return `[${(plain.value as RuntimeValue<ValueType>[]).map(entry => `${setHashBytes(entry)};`).join('')}]`;
+        case 'tuple':
+            return `<${(plain.value as RuntimeValue<ValueType>[]).map(entry => `${setHashBytes(entry)};`).join('')}>`;
+        case 'object': {
+            const map = plain.value as Map<string, RuntimeValue<ValueType>>;
+            return `<${[...map.keys()].sort(compareStrings).map(name => `${setHashBytes(map.get(name)!)};`).join('')}>`;
+        }
+        default:
+            throw new TypeError(`a value of type ${friendlyName(type)} has no set hash`);
+    }
+}
+
+/**
+ * go-cty's setRules.Less: a null after every other value; strings by their bytes, numbers by value, false before
+ * true, and anything else by its set hash bytes.
+ */
+function setLess(left: RuntimeValue<ValueType>, right: RuntimeValue<ValueType>): boolean {
+    const a = unwrapSensitive(left);
+    const b = unwrapSensitive(right);
+    if (a.type === 'null' || b.type === 'null') return a.type !== 'null' && b.type === 'null';
+    if (a.type === 'string' && b.type === 'string') return compareStrings(String(a.value), String(b.value)) < 0;
+    if (a.type === 'number' && b.type === 'number') return (a.value as CtyNumber).compare(b.value as CtyNumber) < 0;
+    if (a.type === 'boolean' && b.type === 'boolean') return !a.value && Boolean(b.value);
+    return Buffer.compare(Buffer.from(setHashBytes(a)), Buffer.from(setHashBytes(b))) < 0;
+}
+
+/**
+ * A set's distinct elements in the order go-cty's Set.Values gives them: by the bucket each hashes to (the CRC-32 of
+ * its set hash bytes), then stably by {@link setLess}.
+ */
+function setOrder(values: RuntimeValue<ValueType>[]): RuntimeValue<ValueType>[] {
+    const buckets = values.map(value => ({ value, bucket: crc32(Buffer.from(setHashBytes(value))) }));
+    buckets.sort((left, right) => left.bucket - right.bucket);
+    const ordered = buckets.map(entry => entry.value);
+    // Array.prototype.sort is stable, as Go's sort.SliceStable is.
+    ordered.sort((left, right) => (setLess(left, right) ? -1 : setLess(right, left) ? 1 : 0));
+    return ordered;
+}
+
+/**
+ * The name go-cty gives a value's type in a message, its FriendlyName: such as `bool`, `tuple` or `list of string`.
+ *
+ * @param value the value; a mark such as sensitivity is not part of its type.
  * @returns the type's name.
  */
 export function friendlyTypeName(value: RuntimeValue<ValueType>): string {
-    switch (value.type) {
-        case 'string':
-        case 'number':
-            return value.type;
-        case 'boolean':
-            return 'bool';
-        case 'array':
-            return 'tuple';
-        case 'object':
-        case 'block':
-            return 'object';
-        case 'null':
-            return 'dynamic';
-        default:
-            throw new Error(`Value of type ${String(value.type)} has no type name`);
-    }
+    return friendlyName(valueType(value));
 }
 
 export const makeSensitiveValue =(value: RuntimeValue<ValueType>): RuntimeValue<ValueType> => ({
@@ -75,49 +212,47 @@ export const unwrapSensitive = (value: RuntimeValue<ValueType>): RuntimeValue<Va
 };
 
 /**
- * A value converted to a number as go-cty's convert does it: a number as it is, and a string read as go-cty's
- * ParseNumberVal reads it.
- *
- * @param value a value that is not null and not sensitive.
- * @returns the number.
- * @throws Error with go-cty's message when the value does not convert.
- */
-export function convertToNumber(value: RuntimeValue<ValueType>): CtyNumber {
-    if (value.type === 'number') return value.value as CtyNumber;
-    if (value.type === 'string') return CtyNumber.parse(String(value.value));
-    throw new Error(`number required, but have ${friendlyTypeName(value)}`);
-}
-
-/**
- * Whether two values are equal as go-cty's Equals decides it: values of different types never are, nulls always
- * are, numbers are compared as {@link CtyNumber.equals} compares them, and collections element by element.
+ * Whether two values are equal as go-cty's Equals decides it for known values: two nulls always are, a null and
+ * another value never are, values of different types never are, numbers are compared as {@link CtyNumber.equals}
+ * compares them, sets by their members, and the rest element by element. A mark such as sensitivity plays no part.
  */
 export function ctyEquals(left: RuntimeValue<ValueType>, right: RuntimeValue<ValueType>): boolean {
     const a = unwrapSensitive(left);
     const b = unwrapSensitive(right);
     if (a.type === 'null' || b.type === 'null') return a.type === b.type;
-    const objectLike = (value: RuntimeValue<ValueType>) => value.type === 'object' || value.type === 'block';
-    if (objectLike(a) && objectLike(b)) {
-        const ours = a.value as Map<string, RuntimeValue<ValueType>>;
-        const theirs = b.value as Map<string, RuntimeValue<ValueType>>;
-        if (ours.size !== theirs.size) return false;
-        for (const [key, value] of ours) {
-            const other = theirs.get(key);
-            if (other === undefined || !ctyEquals(value, other)) return false;
-        }
-        return true;
-    }
-    if (a.type !== b.type) return false;
-    switch (a.type) {
+    const type = valueType(a);
+    if (!typeEquals(type, valueType(b))) return false;
+    switch (type.kind) {
         case 'number':
             return (a.value as CtyNumber).equals(b.value as CtyNumber);
-        case 'array': {
+        case 'string':
+        case 'bool':
+            return a.value === b.value;
+        case 'list':
+        case 'tuple': {
             const ours = a.value as RuntimeValue<ValueType>[];
             const theirs = b.value as RuntimeValue<ValueType>[];
             return ours.length === theirs.length && ours.every((value, index) => ctyEquals(value, theirs[index]));
         }
+        case 'set': {
+            const ours = a.value as RuntimeValue<ValueType>[];
+            const theirs = b.value as RuntimeValue<ValueType>[];
+            return ours.every(value => theirs.some(other => ctyEquals(value, other)))
+                && theirs.every(value => ours.some(other => ctyEquals(value, other)));
+        }
+        case 'map':
+        case 'object': {
+            const ours = a.value as Map<string, RuntimeValue<ValueType>>;
+            const theirs = b.value as Map<string, RuntimeValue<ValueType>>;
+            if (ours.size !== theirs.size) return false;
+            for (const [key, value] of ours) {
+                const other = theirs.get(key);
+                if (other === undefined || !ctyEquals(value, other)) return false;
+            }
+            return true;
+        }
         default:
-            return a.value === b.value;
+            throw new TypeError(`values of type ${friendlyName(type)} cannot be compared`);
     }
 }
 
@@ -223,7 +358,7 @@ function convertValue(
         return makeNumberValue(CtyNumber.fromFloat64(value));
     }
     if (typeof value === 'boolean') return makeBooleanValue(value);
-    if (value === null) return makeNullValue();
+    if (value === null) return makeNullValue(ctyDynamic);
 
     if (typeof value === 'object') {
         if (seen.has(value)) {
@@ -249,7 +384,7 @@ function convertValue(
         const kind = value === undefined ? 'undefined' : typeof value;
         throw new Error(`${path} is ${kind}, which has no HCL representation`);
     }
-    return makeNullValue();
+    return makeNullValue(ctyDynamic);
 }
 
 // Converts a RuntimeValue tree into plain JS (objects become plain records
@@ -316,109 +451,6 @@ export function coerceToString(value: RuntimeValue<ValueType>): string {
         }
         default:
             return '';
-    }
-}
-
-/**
- * An interpolation's value as a string template includes it, as HCL's TemplateExpr converts one (cty's conversion to
- * a string): a string as it is, a number or a bool written out. A sensitive value is included as the value it
- * protects, and makes the rendered string sensitive.
- *
- * A template that is one interpolation and nothing else is not converted: HCL gives it the interpolation's value as
- * it is.
- *
- * @returns the text the value renders as, and whether it was sensitive.
- * @throws Error saying why the value cannot be included, in HCL's words: null and collections do not convert. HCL
- *   names a collection by its cty type; values have one kind of collection each, so a list or a set is named a tuple
- *   and a map an object.
- */
-export function templatePart(value: RuntimeValue<ValueType>): { text: string; sensitive: boolean } {
-    const protectedValue = unwrapSensitive(value);
-    const sensitive = protectedValue !== value;
-    switch (protectedValue.type) {
-        case 'string':
-        case 'number':
-        case 'boolean':
-            return { text: String(protectedValue.value), sensitive };
-        case 'null':
-            throw new Error('The expression result is null. Cannot include a null value in a string template.');
-        case 'array':
-            return failTemplatePart('tuple');
-        case 'object':
-        case 'block':
-            return failTemplatePart('object');
-        default:
-            return failTemplatePart(protectedValue.type);
-    }
-}
-
-function failTemplatePart(type: string): never {
-    throw new Error(`Cannot include the given value in a string template: string required, but have ${type}.`);
-}
-
-/**
- * A value converted to a bool as HCL converts one (cty's conversion): a bool as it is, null as null, and the strings
- * "true" and "1", "false" and "0". Nothing else converts: no other string, number or collection.
- *
- * @returns the bool, or null for null.
- * @throws Error saying why the value is not a bool, in cty's words.
- */
-export function convertToBool(value: RuntimeValue<ValueType>): boolean | null {
-    switch (value.type) {
-        case 'boolean':
-            return Boolean(value.value);
-        case 'null':
-            return null;
-        case 'string': {
-            const text = String(value.value);
-            if (text === 'true' || text === '1') return true;
-            if (text === 'false' || text === '0') return false;
-            const lower = text.toLowerCase();
-            if (lower === 'true' || lower === 'false') {
-                throw new Error(`a bool is required; to convert from string, use lowercase "${lower}"`);
-            }
-            throw new Error('a bool is required');
-        }
-        case 'array':
-            return failBool('tuple');
-        case 'object':
-        case 'block':
-            return failBool('object');
-        default:
-            return failBool(value.type);
-    }
-}
-
-function failBool(type: string): never {
-    throw new Error(`bool required, but have ${type}`);
-}
-
-/**
- * A condition, of `?:` or of a template's `if`, as HCL takes it.
- *
- * @throws Error when the condition is null or does not convert to a bool, in HCL's words.
- */
-export function conditionValue(value: RuntimeValue<ValueType>): boolean {
-    if (value.type === 'null') throw new Error('The condition value is null. Conditions must either be true or false.');
-    try {
-        return convertToBool(value) as boolean;
-    } catch {
-        throw new Error('The condition expression must be of type bool.');
-    }
-}
-
-/**
- * An operand of `&&`, `||` or `!` converted to a bool as HCL converts it.
- *
- * @param side which operand it is, as HCL names it.
- * @returns the bool, or null for null.
- * @throws Error naming the operand when it does not convert, in HCL's words.
- */
-export function operandBool(value: RuntimeValue<ValueType>, side: 'left' | 'right' | 'unary'): boolean | null {
-    try {
-        return convertToBool(value);
-    } catch (error) {
-        throw new Error(`Unsuitable value for ${side} operand: ${(error as Error).message}.`);
     }
 }
 

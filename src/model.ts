@@ -1,6 +1,8 @@
 import type { Location, Position } from 'vscode-languageserver';
 
 import type { CtyNumber } from './cty-number';
+import type { CtyType } from './cty-types';
+import type { FunctionSignature } from './function-signature';
 import type { LocationRange } from './parser';
 
 export class AnError extends Error {
@@ -359,19 +361,9 @@ export interface FunctionDefinition {
 	deprecationMessage?: string;
 }
 
-/**
- * The parameters go-cty declares for a function, which are all HCL reads to count a call's arguments: their names, in
- * order, and whether a variadic parameter takes any after them. A function may refuse a count these allow, as range
- * does, in its own words; {@link FunctionDefinition.parameters} describes the calls it accepts.
- */
-export interface FunctionArity {
-	params: string[];
-	variadic: boolean;
-}
-
-/** A function Terragrunt itself defines. */
+/** A function Terragrunt itself defines, with the go-cty parameters HCL counts and converts its arguments by. */
 export interface BuiltinFunctionDefinition extends FunctionDefinition {
-	arity: FunctionArity;
+	signature: FunctionSignature;
 }
 
 
@@ -384,6 +376,11 @@ export interface ResolvedReference {
 export interface RuntimeValue<T extends ValueType> {
 	type: T;
 	value: RuntimeValueType<T>;
+	/**
+	 * The value's go-cty type where its shape does not give it: a null's, and a list's, set's or map's, which an
+	 * `array` or `object` holds. A tuple's and an object's type is that of what they hold, so they carry none.
+	 */
+	ctyType?: CtyType;
 	/** Set on a value sops stored encrypted, read from a file that could not be decrypted: there, but not to be shown. */
 	encrypted?: true;
 }

@@ -1,7 +1,8 @@
 import type { CtyNumber, FormatSpec } from '../cty-number';
 import { graphemeClusters } from '../grapheme-clusters';
 import type { RuntimeValue, ValueType } from '../model';
-import { convertToNumber, friendlyTypeName, unwrapSensitive } from './utils';
+import { convertToNumber } from '../cty-operations';
+import { friendlyTypeName, unwrapSensitive } from './utils';
 
 /**
  * The format and formatlist functions as go-cty's stdlib defines them: its formatFSM reads the format string, and

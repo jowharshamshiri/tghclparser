@@ -10,7 +10,7 @@ import { readInlineFunction, synthesizeDefinition, tokenToNode } from './inline-
 import type { FunctionContext, FunctionDefinition, ResolvedReference, RuntimeValue, TerragruntConfig, TokenType, ValueType } from './model';
 import { Token } from './model';
 import type { ModuleFileError, ModuleType, ModuleVariable } from './module-variables';
-import { conditionValue } from './functions/utils';
+import { conditionValue } from './cty-operations';
 import { TextChange } from './text-change';
 import { mergeObjectTypes, ValueTypeReader } from './value-types';
 import type { EvaluatedSpan } from './Evaluator';

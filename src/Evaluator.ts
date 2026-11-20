@@ -4,24 +4,40 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { CtyNumber, NUMBER_OUT_OF_RANGE } from './cty-number';
-import { arithmetic, comparison, negation, sequencePosition } from './cty-operations';
+import {
+	arithmetic,
+	attributeType,
+	attributeValue,
+	comparison,
+	type ConditionalBranch,
+	conditionalResult,
+	conditionValue,
+	convertToBool,
+	forCondition,
+	forElements,
+	forKey,
+	indexValue,
+	negation,
+	objectKey,
+	operandBool,
+	splatResult,
+	templatePart
+} from './cty-operations';
+import { ctyDynamic } from './cty-types';
 import { FunctionOperation, invokeFunctionOperation, readArgs, FUNCTION_CONTEXT_KEY } from './function-ops';
+import { type FunctionSignature, markResult, prepareArguments } from './function-signature';
 import type { InlineFunctionDefinition } from './inline-functions';
 import { checkTypeConstraint, readInlineFunction, readTypeConstraint, synthesizeDefinition } from './inline-functions';
 import { parseHclSyntax } from './syntax';
 import { Schema } from './Schema';
 import { encryptedSopsDocument } from './sops';
 import { goRepoRoot, RepoRootError } from './functions/git_repo_root';
-import type { FunctionArity, FunctionContext, FunctionDefinition, RuntimeValue, ValueType } from './model';
+import type { BuiltinFunctionDefinition, FunctionContext, FunctionDefinition, RuntimeValue, ValueType } from './model';
 import {
-	coerceToString,
 	compareStrings,
-	conditionValue,
-	convertToBool,
 	type LogicalOperand,
 	logicalOperation,
 	NULL_OPERAND,
-	operandBool,
 	convertToRuntimeValue,
 	makeArrayValue,
 	makeBooleanValue,
@@ -31,7 +47,6 @@ import {
 	makeSensitiveValue,
 	makeStringValue,
 	runtimeToJavaScript,
-	templatePart,
 	unwrapSensitive
 } from './functions/utils';
 import { decodeConfigFile, mergeDeep, mergeShallow, terragruntConfigAsCty, UNRESOLVED } from './terragrunt-config';
@@ -1003,11 +1018,10 @@ export class ConfigEvaluator {
 			const [collection, ...body] = children.slice(variables.length);
 			if (!collection) return;
 			await visit(collection);
-			let items: Array<[string, RuntimeValue<ValueType>]> = [];
-			let collectionValue: RuntimeValue<ValueType> | undefined;
+			let items: Array<[RuntimeValue<ValueType>, RuntimeValue<ValueType>]> = [];
 			try {
-				collectionValue = await this.evalNode(collection, scope);
-				if (!collectionValue.encrypted) items = iterateValue(collectionValue);
+				const collectionValue = await this.evalNode(collection, scope);
+				if (!collectionValue.encrypted) items = forElements(unwrapSensitive(collectionValue));
 			} catch {
 				items = [];
 			}
@@ -1017,9 +1031,7 @@ export class ConfigEvaluator {
 			// A body is visited once for each element, so a for expression inside it sees that element.
 			for (const [key, item] of items) {
 				const frame = new Map<string, RuntimeValue<ValueType>>();
-				if (variables.length === 2) {
-					frame.set(String(variables[0].value ?? ''), collectionValue?.type === 'array' ? makeNumberValue(CtyNumber.fromInt64(Number(key))) : makeStringValue(key));
-				}
+				if (variables.length === 2) frame.set(String(variables[0].value ?? ''), key);
 				frame.set(String(variables.at(-1)?.value ?? ''), item);
 				scope.comprehension.push(frame);
 				try {
@@ -1295,8 +1307,9 @@ export class ConfigEvaluator {
 				let unresolved: UnresolvedRenderValueError | undefined;
 				for (const child of inputNode.children ?? []) {
 					const keyNode = child.children?.find(part => part.type === 'object_key');
-					const key = keyNode
-						? coerceToString(await this.evalNode(keyNode.children?.[0], scope))
+					const keyValue = keyNode ? computable(await this.evalNode(keyNode.children?.[0], scope)) : undefined;
+					const key = keyValue
+						? this.atNode(keyNode?.children?.[0], scope, () => objectKey(keyValue))
 						: String(child.value);
 					const valueNode = child.children?.find(part => part.type !== 'attribute_identifier' && part.type !== 'object_key');
 					try {
@@ -1476,13 +1489,10 @@ export class ConfigEvaluator {
 				}
 			},
 			evaluateFunction: async (name: string, args: RuntimeValue<ValueType>[]) => {
-					const definition = this.schema.getFunctionDefinition(name);
-					if (!definition) throw new Error(`Unknown function ${name}`);
-					checkArgumentCount(name, definition.arity, args.length);
-					if (!this.schema.getFunctionRegistry().hasFunction(name)) {
-					throw new Error(`Function ${name} has no evaluator`);
-				}
-					return this.schema.getFunctionRegistry().evaluateFunction(name, args, await this.makeContext(scope));
+				const definition = this.schema.getFunctionDefinition(name);
+				if (!definition) throw new Error(`Unknown function ${name}`);
+				checkArgumentCount(name, definition.signature, args.length);
+				return this.callBuiltin(name, definition, args, scope);
 			}
 		};
 	}
@@ -1649,13 +1659,13 @@ export class ConfigEvaluator {
 			const frame = scope.comprehension[index];
 			if (!frame.has(namespace)) continue;
 			const value = frame.get(namespace)!;
-			return parts.length === 1 ? value : this.traverse(value, parts.slice(1), namespace);
+			return parts.length === 1 ? value : this.traverse(value, parts.slice(1));
 		}
 
 		if (namespace === 'local') {
 			if (parts.length < 2) throw new Error('local reference requires a name');
 			const value = await this.resolveLocal(scope, parts[1]);
-			return this.traverse(value, parts.slice(2), parts[1]);
+			return this.traverse(value, parts.slice(2));
 		}
 
 		if (namespace === 'include') {
@@ -1669,7 +1679,7 @@ export class ConfigEvaluator {
 		if (namespace === 'dependency') {
 			if (parts.length < 2) throw new Error('dependency reference requires a name');
 			const dependency = await this.dependencyValue(parts[1], scope);
-			return this.traverse(dependency, parts.slice(2), parts[1]);
+			return this.traverse(dependency, parts.slice(2));
 		}
 
 		throw new Error(`Undefined reference "${parts.join('.')}"`);
@@ -1850,15 +1860,15 @@ export class ConfigEvaluator {
 				return makeObjectValue(all);
 			}
 			const value = await this.resolveLocal(result.scope, parts[1]);
-			return this.traverse(value, parts.slice(2), parts[1]);
+			return this.traverse(value, parts.slice(2));
 		}
 		if (head === 'inputs') {
 			if (!result.inputs) throw new Error(`include "${parts[1]}" has no inputs`);
-			return this.traverse(makeObjectValue(result.inputs), parts.slice(1), 'inputs');
+			return this.traverse(makeObjectValue(result.inputs), parts.slice(1));
 		}
 		if (head === 'terraform') {
 			const value = await this.terraformObject(result.scope);
-			return this.traverse(value, parts.slice(1), 'terraform');
+			return this.traverse(value, parts.slice(1));
 		}
 		const attrNode = result.scope.rootAttrs.get(head);
 		if (attrNode) return this.evalNode(attrNode, result.scope);
@@ -1873,53 +1883,22 @@ export class ConfigEvaluator {
 		return makeObjectValue(map);
 	}
 
-	private traverse(value: RuntimeValue<ValueType>, parts: string[], base: string): RuntimeValue<ValueType> {
-		let current = unwrapSensitive(value);
+	/**
+	 * Follows a reference's steps after its root, as HCL traverses one: a step written as a whole number, such as the
+	 * `0` of `local.zones.0`, indexes the value, and any other step takes its attribute.
+	 *
+	 * @param value the value the reference's root names.
+	 * @param parts the steps after the root.
+	 * @returns the value the steps reach, carrying the sensitivity of every value along the way.
+	 */
+	private traverse(value: RuntimeValue<ValueType>, parts: string[]): RuntimeValue<ValueType> {
+		let current = value;
 		for (const part of parts) {
-			if (current.type === 'object' || current.type === 'block') {
-				const map = current.value as Map<string, RuntimeValue<ValueType>>;
-				const next = map.get(part);
-				if (next === undefined) throw new Error(`Missing attribute "${part}" on "${base}"`);
-				current = unwrapSensitive(next);
-			} else if (current.type === 'array') {
-				const items = current.value as RuntimeValue<ValueType>[];
-				const index = Number(part);
-				if (!Number.isInteger(index) || index < 0 || index >= items.length) {
-					throw new Error(`List index ${part} out of range on "${base}"`);
-				}
-				current = unwrapSensitive(items[index]);
-			} else {
-				throw new Error(`Cannot access "${part}" on value of type ${current.type}`);
-			}
+			current = /^\d+$/u.test(part)
+				? indexValue(current, makeNumberValue(CtyNumber.parse(part)))
+				: attributeValue(current, part);
 		}
 		return current;
-	}
-
-	private getAttribute(value: RuntimeValue<ValueType>, name: string): RuntimeValue<ValueType> {
-		const current = unwrapSensitive(value);
-		if (current.type !== 'object' && current.type !== 'block') {
-			throw new Error(`Cannot access attribute "${name}" on value of type ${current.type}`);
-		}
-		const map = current.value as Map<string, RuntimeValue<ValueType>>;
-		const next = map.get(name);
-		if (next === undefined) throw new Error(`Missing attribute "${name}"`);
-		return unwrapSensitive(next);
-	}
-
-	private indexValue(base: RuntimeValue<ValueType>, index: RuntimeValue<ValueType>): RuntimeValue<ValueType> {
-		const current = unwrapSensitive(base);
-		if (current.type === 'array') {
-			const items = current.value as RuntimeValue<ValueType>[];
-			return unwrapSensitive(items[sequencePosition(items.length, index)]);
-		}
-		if (current.type === 'object' || current.type === 'block') {
-			const key = index.type === 'string' ? String(index.value) : coerceToString(index);
-			const map = current.value as Map<string, RuntimeValue<ValueType>>;
-			const next = map.get(key);
-			if (next === undefined) throw new Error(`Missing key "${key}"`);
-			return unwrapSensitive(next);
-		}
-		throw new Error(`Cannot index value of type ${current.type}`);
 	}
 
 	/**
@@ -2065,7 +2044,7 @@ export class ConfigEvaluator {
 			case 'boolean_lit':
 				return makeBooleanValue(Boolean(node.value));
 			case 'null_lit':
-				return makeNullValue();
+				return makeNullValue(ctyDynamic);
 			case 'array_lit':
 				return makeArrayValue(await this.evalOperands(node.children ?? [], scope, true));
 			case 'object':
@@ -2078,12 +2057,8 @@ export class ConfigEvaluator {
 				return this.evalTemplateIf(node, scope);
 			case 'for_directive':
 				return this.evalTemplateFor(node, scope);
-			case 'ternary_expression': {
-				const [condition, whenTrue, whenFalse] = node.children ?? [];
-				const value = computable(await this.evalNode(condition, scope));
-				const truth = this.atNode(condition, scope, () => conditionValue(value));
-				return truth ? this.evalNode(whenTrue, scope) : this.evalNode(whenFalse, scope);
-			}
+			case 'ternary_expression':
+				return this.evalConditional(node, scope);
 			case 'logical_expression':
 				return this.evalLogical(node, scope);
 			case 'comparison_expression':
@@ -2096,11 +2071,11 @@ export class ConfigEvaluator {
 			}
 			case 'member_access': {
 				const member = String(node.children?.[1]?.value ?? '');
-				return this.traverse(await this.evalNode(node.children?.[0], scope), member.split('.'), member);
+				return this.traverse(await this.evalNode(node.children?.[0], scope), member.split('.'));
 			}
 			case 'index_expression': {
 				const [collection, index] = await this.evalOperands([node.children?.[0], node.children?.[1]], scope);
-				return this.indexValue(collection, computable(index));
+				return indexValue(collection, computable(index));
 			}
 			case 'range_expression': {
 				const [start, end] = (await this.evalOperands([node.children?.[0], node.children?.[1]], scope)).map(computable);
@@ -2134,7 +2109,7 @@ export class ConfigEvaluator {
 				const [identifier, collection, body] = node.children ?? [];
 				const items = await this.evalNode(collection, scope);
 				const results: RuntimeValue<ValueType>[] = [];
-				for (const [, item] of iterateValue(items)) {
+				for (const [, item] of this.atNode(collection, scope, () => forElements(unwrapSensitive(items)))) {
 					const frame = new Map<string, RuntimeValue<ValueType>>();
 					frame.set(String(identifier?.value ?? ''), item);
 					scope.comprehension.push(frame);
@@ -2191,7 +2166,7 @@ export class ConfigEvaluator {
 					const valueNode = child.children?.find(c => c.type !== 'attribute_identifier' && c.type !== 'object_key');
 					if (!keyNode) return [{ key: String(child.value), value: await this.evalNode(valueNode, scope), inherited: false }];
 					const [key, value] = await this.evalOperands([keyNode.children?.[0], valueNode], scope);
-					return [{ key: coerceToString(computable(key)), value, inherited: false }];
+					return [{ key: this.atNode(keyNode.children?.[0], scope, () => objectKey(computable(key))), value, inherited: false }];
 				}];
 			}
 			if (child.type === 'inheritance') {
@@ -2284,14 +2259,12 @@ export class ConfigEvaluator {
 		const [collection, template] = children.slice(variables.length);
 		const marked = computable(await this.evalNode(collection, scope));
 		const collectionValue = unwrapSensitive(marked);
-		const items = this.atNode(collection, scope, () => iterateValue(collectionValue));
+		const items = this.atNode(collection, scope, () => forElements(collectionValue));
 		let rendered = '';
 		let sensitive = marked !== collectionValue;
 		for (const [key, item] of items) {
 			const frame = new Map<string, RuntimeValue<ValueType>>();
-			if (variables.length === 2) {
-				frame.set(String(variables[0].value ?? ''), collectionValue.type === 'array' ? makeNumberValue(CtyNumber.fromInt64(Number(key))) : makeStringValue(key));
-			}
+			if (variables.length === 2) frame.set(String(variables[0].value ?? ''), key);
 			frame.set(String(variables[variables.length - 1].value ?? ''), item);
 			scope.comprehension.push(frame);
 			try {
@@ -2304,6 +2277,33 @@ export class ConfigEvaluator {
 			}
 		}
 		return sensitive ? makeSensitiveValue(makeStringValue(rendered)) : makeStringValue(rendered);
+	}
+
+	/**
+	 * `condition ? whenTrue : whenFalse` as HCL evaluates it: both branches first, then the result's type from theirs,
+	 * then the condition, and the chosen branch converted to that type. A fault in the branch not chosen is dropped.
+	 *
+	 * @param node the ternary expression: its condition and two branches.
+	 * @param scope the scope of the file it is written in.
+	 * @returns the chosen branch's value.
+	 */
+	private async evalConditional(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
+		const [conditionNode, whenTrue, whenFalse] = node.children ?? [];
+		const settle = async (evaluate: () => Promise<RuntimeValue<ValueType>>): Promise<ConditionalBranch> => {
+			try {
+				return { value: await evaluate() };
+			} catch (error) {
+				if (error instanceof Error && isDefect(error)) throw error;
+				return { error };
+			}
+		};
+		const trueBranch = await settle(() => this.evalNode(whenTrue, scope));
+		const falseBranch = await settle(() => this.evalNode(whenFalse, scope));
+		const condition = await settle(async () => computable(await this.evalNode(conditionNode, scope)));
+		return conditionalResult(trueBranch, falseBranch, () => {
+			if ('error' in condition) throw condition.error;
+			return { truth: this.atNode(conditionNode, scope, () => conditionValue(condition.value)), value: condition.value };
+		});
 	}
 
 	private async evalComparison(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
@@ -2348,14 +2348,17 @@ export class ConfigEvaluator {
 		const map = new Map<string, RuntimeValue<ValueType>>();
 		const groups = new Map<string, RuntimeValue<ValueType>[]>();
 		await this.forEachComprehensionElement(node, 2, scope, async ([keyNode, valueNode]) => {
-			const key = comprehensionKey(computable(await this.evalNode(keyNode, scope)));
+			const keyValue = computable(await this.evalNode(keyNode, scope));
+			const key = this.atNode(keyNode, scope, () => forKey(keyValue));
 			const value = await this.evalNode(valueNode, scope);
 			if (grouping) {
 				const group = groups.get(key) ?? [];
 				group.push(value);
 				groups.set(key, group);
 			} else {
-				if (map.has(key)) throw new Error(`Duplicate key "${key}" in a for expression; use "..." to group values by key`);
+				if (map.has(key)) {
+					throw new Error(`Duplicate object key; Two different items produced the key "${key}" in this 'for' expression. If duplicates are expected, use the ellipsis (...) after the value expression to enable grouping by key.`);
+				}
 				map.set(key, value);
 			}
 		});
@@ -2386,18 +2389,16 @@ export class ConfigEvaluator {
 		const body = rest.slice(0, bodyLength);
 		const condition = rest[bodyLength];
 		const collectionValue = await this.evalNode(collection, scope);
-		for (const [key, item] of iterateValue(collectionValue)) {
+		for (const [key, item] of this.atNode(collection, scope, () => forElements(unwrapSensitive(collectionValue)))) {
 			const frame = new Map<string, RuntimeValue<ValueType>>();
-			if (variables.length === 2) {
-				frame.set(
-					String(variables[0].value ?? ''),
-					collectionValue.type === 'array' ? makeNumberValue(CtyNumber.fromInt64(Number(key))) : makeStringValue(key)
-				);
-			}
+			if (variables.length === 2) frame.set(String(variables[0].value ?? ''), key);
 			frame.set(String(variables[variables.length - 1].value ?? ''), item);
 			scope.comprehension.push(frame);
 			try {
-				if (condition && !comprehensionCondition(computable(await this.evalNode(condition, scope)))) continue;
+				if (condition) {
+					const conditionValue = computable(await this.evalNode(condition, scope));
+					if (!this.atNode(condition, scope, () => forCondition(conditionValue))) continue;
+				}
 				await each(body);
 			} finally {
 				scope.comprehension.pop();
@@ -2408,10 +2409,8 @@ export class ConfigEvaluator {
 	private async evalSplat(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
 		const base = await this.evalNode(node.children?.[0], scope);
 		const attribute = node.children?.[1] ? String(node.children[1].value ?? '') : null;
-		if (base.type !== 'array') throw new Error('Splat requires a list');
-		const items = base.value as RuntimeValue<ValueType>[];
-		if (attribute === null) return makeArrayValue(items);
-		return makeArrayValue(items.map(item => this.getAttribute(item, attribute)));
+		if (attribute === null) return splatResult(base, element => element, type => type);
+		return splatResult(base, element => attributeValue(element, attribute), type => attributeType(type, attribute));
 	}
 
 	private async evalFunctionCall(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
@@ -2431,7 +2430,7 @@ export class ConfigEvaluator {
 		const definition = this.schema.getFunctionDefinition(name);
 		if (!definition) throw new Error(`Unknown function "${name}"`);
 		const args = await this.callArguments(node, scope);
-		checkArgumentCount(name, definition.arity, args.length);
+		checkArgumentCount(name, definition.signature, args.length);
 
 		if (name === 'can') {
 			try {
@@ -2460,13 +2459,26 @@ export class ConfigEvaluator {
 		if (name === 'deep_merge' && !this.options.experiments?.includes('deep-merge')) {
 			throw new Error('deep_merge requires the deep-merge experiment to be enabled');
 		}
+		return this.callBuiltin(name, definition, functionArguments(name, await this.evalCallArguments(args, scope)), scope);
+	}
+
+	/**
+	 * Calls a function Terragrunt defines, its arguments counted already: each converted to its parameter's type, a
+	 * null or sensitive argument handled as go-cty handles one for that parameter, as HCL and go-cty call a function.
+	 *
+	 * @param name the function.
+	 * @param definition its definition, with its go-cty parameters.
+	 * @param args its evaluated arguments.
+	 * @param scope the scope of the file the call is written in.
+	 * @returns the function's result, sensitive when an argument it does not take marked was.
+	 */
+	private async callBuiltin(name: string, definition: BuiltinFunctionDefinition, args: RuntimeValue<ValueType>[], scope: Scope): Promise<RuntimeValue<ValueType>> {
 		if (!this.schema.getFunctionRegistry().hasFunction(name)) {
 			throw new Error(`Function "${name}" has no evaluator`);
 		}
-
-		const evaluatedArgs = functionArguments(name, await this.evalCallArguments(args, scope));
+		const prepared = prepareArguments(definition.signature, args);
 		const context = await this.makeContext(scope);
-		return this.schema.getFunctionRegistry().evaluateFunction(name, evaluatedArgs, context);
+		return markResult(await this.schema.getFunctionRegistry().evaluateFunction(name, prepared.args, context), prepared.marked);
 	}
 
 	/**
@@ -2809,54 +2821,6 @@ function makeRootScope(filePath: string, content: string, workspaceRoot = path.d
 }
 
 /**
- * The elements of a for expression's collection, in the order HCL visits them: a list by index, an object by key in
- * the order of their bytes, as `keys` and `values` give them.
- *
- * @throws Error when the collection is null or is not a collection, in HCL's words.
- */
-function iterateValue(value: RuntimeValue<ValueType>): Array<[string, RuntimeValue<ValueType>]> {
-	const items: Array<[string, RuntimeValue<ValueType>]> = [];
-	if (value.type === 'array') {
-		(value.value as RuntimeValue<ValueType>[]).forEach((item, index) => items.push([String(index), item]));
-	} else if (value.type === 'object' || value.type === 'block') {
-		const map = value.value as Map<string, RuntimeValue<ValueType>>;
-		for (const key of [...map.keys()].sort(compareStrings)) items.push([key, map.get(key)!]);
-	} else if (value.type === 'null') {
-		throw new Error('A null value cannot be used as the collection in a \'for\' expression.');
-	} else {
-		const type = value.type === 'boolean' ? 'bool' : value.type;
-		throw new Error(`A value of type ${type} cannot be used as the collection in a 'for' expression.`);
-	}
-	return items;
-}
-
-/**
- * Whether a for expression keeps an element, from its `if` clause: a bool, or a string HCL converts to one.
- *
- * @throws Error when the clause is null or does not convert to a bool, as HCL refuses it.
- */
-function comprehensionCondition(value: RuntimeValue<ValueType>): boolean {
-	if (value.type === 'null') throw new Error('The "if" clause of a for expression must not be null');
-	try {
-		return convertToBool(value) as boolean;
-	} catch {
-		const shown = value.type === 'string' ? ` ${JSON.stringify(value.value)}` : '';
-		throw new Error(`The "if" clause of a for expression must be a bool, got ${value.type}${shown}`);
-	}
-}
-
-/**
- * The key a map for expression produces for an element: a string, or a number or bool HCL converts to one.
- *
- * @throws Error when the key is null or a collection, as HCL refuses it.
- */
-function comprehensionKey(value: RuntimeValue<ValueType>): string {
-	if (value.type === 'string' || value.type === 'number' || value.type === 'boolean') return coerceToString(value);
-	if (value.type === 'null') throw new Error('The key of a for expression must not be null');
-	throw new Error(`The key of a for expression must be a string, got ${value.type}`);
-}
-
-/**
  * The value of a number literal, read from its text as HCL reads it with go-cty's ParseNumberVal.
  *
  * @throws Error in HCL's words when the text is not a number go-cty can read, and in Terragrunt's when its magnitude is
@@ -3089,19 +3053,20 @@ type CallArgument = { expression: TNode } | { value: RuntimeValue<ValueType> };
  * Refuses a call whose argument count go-cty's parameters do not allow, as HCL does before it evaluates any argument.
  *
  * @param name the function.
- * @param arity its go-cty parameters.
+ * @param signature its go-cty parameters.
  * @param count the call's arguments, an expanded final argument counted as its elements.
  * @throws when there are fewer arguments than parameters, or more and no variadic parameter takes them.
  */
-function checkArgumentCount(name: string, arity: FunctionArity, count: number): void {
-	if (count < arity.params.length) {
+function checkArgumentCount(name: string, signature: FunctionSignature, count: number): void {
+	const { params, varParam } = signature;
+	if (count < params.length) {
 		throw new Error(
-			`Not enough function arguments; Function "${name}" expects${arity.variadic ? ' at least' : ''} ${arity.params.length} argument(s). `
-			+ `Missing value for "${arity.params[count]}".`
+			`Not enough function arguments; Function "${name}" expects${varParam ? ' at least' : ''} ${params.length} argument(s). `
+			+ `Missing value for "${params[count].name}".`
 		);
 	}
-	if (!arity.variadic && count > arity.params.length) {
-		throw new Error(`Too many function arguments; Function "${name}" expects only ${arity.params.length} argument(s).`);
+	if (!varParam && count > params.length) {
+		throw new Error(`Too many function arguments; Function "${name}" expects only ${params.length} argument(s).`);
 	}
 }
 
