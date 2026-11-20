@@ -303,3 +303,11 @@ export const includeTypes: Array<[string, string]> = [
 	['inputs', 'object'],
 	['locals', 'object']
 ];
+
+/** What v1.2.2 rendered for `include.root.<expression>` of the same exposed include: equal to a literal, not to a list or map. */
+export const includeValues: Array<[string, boolean]> = [
+	['locals.l == tolist(["a"])', false],
+	['locals.l == ["a"]', true],
+	['inputs.i == tomap({ a = 1 })', false],
+	['inputs.i == { a = 1 }', true]
+];

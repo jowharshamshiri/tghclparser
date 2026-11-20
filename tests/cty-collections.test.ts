@@ -8,7 +8,7 @@ import { unmarshalType, unmarshalValue } from '../src/cty-json';
 import { ConfigEvaluator } from '../src/Evaluator';
 import { makeNumberValue, makeObjectValue, makeSetValue, valueType } from '../src/functions/utils';
 import { CtyNumber } from '../src/cty-number';
-import { faults, includeTypes, readConfig, readConfigTypes, typeNames, values } from './fixtures/cty-collections-reference';
+import { faults, includeTypes, includeValues, readConfig, readConfigTypes, typeNames, values } from './fixtures/cty-collections-reference';
 import { plainValue } from './plain-values';
 
 // Values keep go-cty's types as Terragrunt v1.2.2 gives them: a list, set or map apart from a tuple or object, each
@@ -99,6 +99,12 @@ describe('configurations read as Terragrunt v1.2.2 gives them', () => {
 			const content = `include "root" {\n  path   = "../parent.hcl"\n  expose = true\n}\ninputs = {\n  a = "a\${include.root.${field}}"\n}\n`;
 			const result = await evaluator.evaluateUnit(path.join(root, 'child', 'terragrunt.hcl'), content, root);
 			assert.equal(result.error, typeError(name), field);
+		}
+		for (const [expression, expected] of includeValues) {
+			const content = `include "root" {\n  path   = "../parent.hcl"\n  expose = true\n}\ninputs = {\n  a = include.root.${expression}\n}\n`;
+			const result = await evaluator.evaluateUnit(path.join(root, 'child', 'terragrunt.hcl'), content, root);
+			assert.equal(result.error, undefined, expression);
+			assert.equal((plainValue(result.inputs!) as { a: unknown }).a, expected, expression);
 		}
 	});
 });
