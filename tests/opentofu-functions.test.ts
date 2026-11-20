@@ -59,7 +59,7 @@ describe('OpenTofu functions of Terragrunt v1.2.2', () => {
 		for (const call of ['assumestringprefix("xbc", "ab")', 'assumestringprefix("ab", "a/")', 'assumestringprefix("zzz", "é/")']) {
 			expect(await failureOf(call), call).to.include('Invalid value for "value" parameter: assumption was not upheld.');
 		}
-		expect(await failureOf('assumestringprefix(["a"], "a")')).to.include('Invalid value for "value" parameter: string required.');
+		expect(await failureOf('assumestringprefix(["a"], "a")')).to.include('Invalid value for "value" parameter: string required, but have tuple.');
 	});
 
 	it('keeps a delimiter at the end of a prefix and drops any other last character, as go-cty does', () => {
@@ -104,9 +104,9 @@ describe('OpenTofu functions of Terragrunt v1.2.2', () => {
 		expect(await failureOf('assumelistlength(["a"], 0.5, 3)')).to.include('Invalid value for "min_length" parameter: must be a whole number between 0 and 9223372036854775807.');
 		expect(await failureOf('assumelistlengthmin(["a"], 0.5)')).to.include('Invalid value for "value" parameter: must be a whole number between 0 and 9223372036854775807.');
 		expect(await failureOf('assumelistlength({ a = 1 }, 0, 3)')).to.include('Invalid value for "value" parameter: list of any single type required.');
-		expect(await failureOf('assumelistlength(["a", {}], 0, 3)')).to.include('list of any single type required');
-		expect(await failureOf('assumemaplength(["a"], 0, 3)')).to.include('map of any single type required');
-		expect(await failureOf('assumemaplength({ a = "x", b = ["y"] }, 0, 3)')).to.include('map of any single type required');
+		expect(await failureOf('assumelistlength(["a", {}], 0, 3)')).to.include('Invalid value for "value" parameter: all list elements must have the same type.');
+		expect(await failureOf('assumemaplength(["a"], 0, 3)')).to.include('Invalid value for "value" parameter: map of any single type required.');
+		expect(await failureOf('assumemaplength({ a = "x", b = ["y"] }, 0, 3)')).to.include('Invalid value for "value" parameter: all map elements must have the same type.');
 	});
 
 	it('reports only a value\'s own sensitivity, and passes values through ephemeralasnull', async () => {

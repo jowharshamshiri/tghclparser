@@ -194,7 +194,7 @@ export const collectionFunctions = {
 		if (types.every(type => type.kind === 'list')) {
 			const unified = unify(types, true)?.type;
 			if (unified) {
-				const elements = args.flatMap((argument, index) => {
+				const elements = args.flatMap(argument => {
 					try {
 						return elementsOf(convert(unwrapSensitive(argument), unified));
 					} catch (error) {
@@ -342,8 +342,14 @@ export const collectionFunctions = {
 		const attributes = new Map<string, CtyType>();
 		let first: CtyType | undefined;
 		let matching = true;
+		let dynamic = false;
 		for (const argument of args) {
 			let type = valueType(argument);
+			// A dynamic argument, such as the null keyword, leaves the result's type to be found as it is built.
+			if (type.kind === 'dynamic') {
+				dynamic = true;
+				continue;
+			}
 			if (type.kind !== 'map' && type.kind !== 'object') throw new Error(`arguments must be maps or objects, got "${friendlyName(type)}"`);
 			const plain = unwrapSensitive(argument);
 			if (type.kind === 'object') {
@@ -361,7 +367,7 @@ export const collectionFunctions = {
 			if (plain.type === 'null') continue;
 			for (const [key, value] of plain.value as Map<string, Value>) merged.set(key, value);
 		}
-		const result = matching && first!.kind === 'map' ? makeMapValue(first!.element, merged) : makeObjectValue(merged);
+		const result = !dynamic && matching && first!.kind === 'map' ? makeMapValue(first!.element, merged) : makeObjectValue(merged);
 		return marked(result, sensitive);
 	},
 
@@ -442,7 +448,7 @@ export const collectionFunctions = {
 	sort: async (args: Value[]) => {
 		const elements = elementsOf(args[0]);
 		const nullIndex = elements.findIndex(element => element.type === 'null');
-		if (nullIndex !== -1) throw new Error(`given list element ${nullIndex} is null; a null string cannot be sorted`);
+		if (nullIndex !== -1) throw new Error(`given list element ${nullIndex} is null; a null string cannot be sorted.`);
 		return makeListValue(ctyString, elements.map(element => String(element.value)).sort(compareStrings).map(makeStringValue));
 	},
 
@@ -482,9 +488,9 @@ export const collectionFunctions = {
 		const entries = entriesOf(args[0]);
 		for (const key of [...entries.keys()].sort(compareStrings)) {
 			const list = entries.get(key)!;
-			if (list.type === 'null') throw argumentError({ name: 'values' }, `cannot use null list for ${goQuoted(key).replace(/^/, '[').replace(/$/, ']')}`);
-			for (const element of list.value as Value[]) {
-				if (element.type === 'null') throw argumentError({ name: 'values' }, `cannot use null string for ${goQuoted(key).replace(/^/, '[').replace(/$/, ']')}`);
+			if (list.type === 'null') throw argumentError({ name: 'values' }, `cannot use null list for [${goQuoted(key)}]`);
+			for (const [index, element] of (list.value as Value[]).entries()) {
+				if (element.type === 'null') throw argumentError({ name: 'values' }, `cannot use null string for [${goQuoted(key)}][${index}]`);
 				const swapped = String(element.value);
 				result.set(swapped, [...(result.get(swapped) ?? []), makeStringValue(key)]);
 			}

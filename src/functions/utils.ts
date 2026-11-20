@@ -73,8 +73,12 @@ export function makeListValue(element: CtyType, values: RuntimeValue<ValueType>[
  */
 export function makeSetValue(element: CtyType, values: RuntimeValue<ValueType>[]): RuntimeValue<'array'> {
     checkElements('set', element, values);
+    // go-cty looks for an equal element only among those of the same hash, so 0 and -0, which hash apart, are both kept.
     const distinct: RuntimeValue<ValueType>[] = [];
-    for (const value of values) if (!distinct.some(existing => ctyEquals(existing, value))) distinct.push(value);
+    for (const value of values) {
+        const bucket = setBucket(value);
+        if (!distinct.some(existing => setBucket(existing) === bucket && ctyEquals(existing, value))) distinct.push(value);
+    }
     return { type: 'array', value: setOrder(distinct), ctyType: setOf(element) };
 }
 
@@ -180,8 +184,13 @@ function setLess(left: RuntimeValue<ValueType>, right: RuntimeValue<ValueType>):
  * A set's distinct elements in the order go-cty's Set.Values gives them: by the bucket each hashes to (the CRC-32 of
  * its set hash bytes), then stably by {@link setLess}.
  */
+/** The bucket go-cty's set puts a value in: the CRC-32 of its set hash bytes. */
+function setBucket(value: RuntimeValue<ValueType>): number {
+    return crc32(Buffer.from(setHashBytes(value)));
+}
+
 function setOrder(values: RuntimeValue<ValueType>[]): RuntimeValue<ValueType>[] {
-    const buckets = values.map(value => ({ value, bucket: crc32(Buffer.from(setHashBytes(value))) }));
+    const buckets = values.map(value => ({ value, bucket: setBucket(value) }));
     buckets.sort((left, right) => left.bucket - right.bucket);
     const ordered = buckets.map(entry => entry.value);
     // Array.prototype.sort is stable, as Go's sort.SliceStable is.

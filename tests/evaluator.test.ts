@@ -106,7 +106,7 @@ describe('semantic configuration evaluation', () => {
 				process.cwd()
 			);
 			assert.equal(result.valid, false);
-			assert.match(result.error ?? '', /Duplicate key "a"/);
+			assert.equal(result.error, 'Two different items produced the key "a" in this \'for\' expression. If duplicates are expected, use the ellipsis (...) after the value expression to enable grouping by key.');
 		});
 
 		it('reports a missing attribute of the variable', async () => {
@@ -116,7 +116,7 @@ describe('semantic configuration evaluation', () => {
 				process.cwd()
 			);
 			assert.equal(result.valid, false);
-			assert.match(result.error ?? '', /Missing attribute "b" on "c"/);
+			assert.equal(result.error, 'This object does not have an attribute named "b".');
 		});
 
 		it('visits the keys of an object in lexical order, as HCL does', async () => {
@@ -135,15 +135,15 @@ describe('semantic configuration evaluation', () => {
 		};
 
 		it('rejects a condition that is not a bool', async () => {
-			assert.match(await forError('[for v in [1, 2] : v if v]'), /"if" clause of a for expression must be a bool, got number/);
-			assert.match(await forError('[for v in [1, 2] : v if "yes"]'), /"if" clause of a for expression must be a bool, got string "yes"/);
-			assert.match(await forError('[for v in [1, 2] : v if null]'), /"if" clause of a for expression must not be null/);
+			assert.equal(await forError('[for v in [1, 2] : v if v]'), 'The \'if\' clause value is invalid: bool required, but have number.');
+			assert.equal(await forError('[for v in [1, 2] : v if "yes"]'), 'The \'if\' clause value is invalid: a bool is required.');
+			assert.equal(await forError('[for v in [1, 2] : v if null]'), 'The value of the \'if\' clause must not be null.');
 		});
 
 		it('takes a key that converts to a string, and rejects any other', async () => {
 			assert.deepEqual(await forInputs('{for v in [true, 2] : v => v}'), { true: true, '2': 2 });
-			assert.match(await forError('{for v in [{ n = "x" }] : v => v}'), /key of a for expression must be a string, got object/);
-			assert.match(await forError('{for v in [null] : v => 1}'), /key of a for expression must not be null/);
+			assert.equal(await forError('{for v in [{ n = "x" }] : v => v}'), 'The key expression produced an invalid result: string required, but have object.');
+			assert.equal(await forError('{for v in [null] : v => 1}'), 'Key expression in \'for\' expression must not produce a null value.');
 		});
 
 		it('lets a variable shadow a namespace of the same name', async () => {
@@ -402,10 +402,9 @@ describe('semantic configuration evaluation', () => {
 		it('refuses a collection in a longer template, where its expression is written', async () => {
 			assert.deepEqual(await fault('"a${["b"]}"'), [tuple, 10, 15]);
 			assert.deepEqual(await fault('"a${ { b = 1 } }"'), [object, 11, 20]);
-			// v1.2.2 says "list of string" and "map of string": values keep no list or map type of their own until the
-			// card "values keep cty's collection types" (PVTI_lAHOAHykxc4BqpFPzhKISso) gives them one.
-			assert.deepEqual(await fault('"a${tolist(["b"])}"'), [tuple, 10, 23]);
-			assert.deepEqual(await fault('"a${tomap({ b = "c" })}"'), [object, 10, 28]);
+			assert.deepEqual(await fault('"a${tolist(["b"])}"'), ['Cannot include the given value in a string template: string required, but have list of string.', 10, 23]);
+			assert.deepEqual(await fault('"a${toset(["b"])}"'), ['Cannot include the given value in a string template: string required, but have set of string.', 10, 22]);
+			assert.deepEqual(await fault('"a${tomap({ b = "c" })}"'), ['Cannot include the given value in a string template: string required, but have map of string.', 10, 28]);
 		});
 
 		it('takes a literal a strip marker empties for a part, so the template is no longer one interpolation', async () => {
@@ -618,8 +617,8 @@ describe('semantic configuration evaluation', () => {
 
 		it('refuses an index or a size that is not a whole number', async () => {
 			const whole = 'value must be a whole number, between -9223372036854775808 and 9223372036854775807';
-			assert.equal(await failure('slice(["a", "b", "c"], 0.5, 2)'), `invalid start index: ${whole}`);
-			assert.equal(await failure('slice(["a", "b", "c"], 0, 1.5)'), `invalid end index: ${whole}`);
+			assert.equal(await failure('slice(["a", "b", "c"], 0.5, 2)'), `Invalid function argument; Invalid value for "start_index" parameter: invalid start index: ${whole}.`);
+			assert.equal(await failure('slice(["a", "b", "c"], 0, 1.5)'), `Invalid function argument; Invalid value for "end_index" parameter: invalid end index: ${whole}.`);
 			assert.equal(await failure('chunklist(["a", "b"], 1.5)'), `invalid size: ${whole}`);
 			assert.equal(await failure('element(["a", "b"], 1.5)'), `invalid index: ${whole}`);
 			assert.deepEqual(await render('slice(["a", "b", "c"], 1, 3)'), ['b', 'c']);
@@ -651,7 +650,7 @@ describe('semantic configuration evaluation', () => {
 				range: { start: { line: 4, character: 6 }, end: { line: 4, character: 19 } }
 			},
 			{
-				message: 'Missing attribute "z" on "a"',
+				message: 'This object does not have an attribute named "z".',
 				filePath: configPath,
 				range: { start: { line: 5, character: 6 }, end: { line: 5, character: 15 } }
 			}
@@ -673,7 +672,7 @@ describe('semantic configuration evaluation', () => {
 		const result = await evaluator.evaluateUnit(configPath, content, process.cwd());
 		assert.deepEqual(result.problems, [
 			{
-				message: 'Missing attribute "z" on "a"',
+				message: 'This object does not have an attribute named "z".',
 				filePath: configPath,
 				range: { start: { line: 2, character: 6 }, end: { line: 2, character: 15 } }
 			}

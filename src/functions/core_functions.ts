@@ -6,7 +6,8 @@ import { URI } from 'vscode-uri';
 import { base64GzipCompat } from '../gzip-compat';
 import type { FunctionContext, RuntimeValue, ValueType } from '../model';
 import { goRepoRoot } from './git_repo_root';
-import { expectParams, makeArrayValue, makeBooleanValue, makeObjectValue, makeSensitiveValue, makeStringValue, unwrapSensitive } from './utils';
+import { ctyString, friendlyName } from '../cty-types';
+import { convertToRuntimeValue, expectParams, makeArrayValue, makeBooleanValue, makeListValue, makeObjectValue, makeSensitiveValue, makeStringValue, runtimeToPlain, unwrapSensitive, valueType } from './utils';
 
 const defaultRetryableErrors = [
 	'(?s).*Failed to load state.*tcp.*timeout.*',
@@ -216,28 +217,28 @@ export const coreFunctionGroup = {
             _args: RuntimeValue<ValueType>[],
             _context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
-            return makeArrayValue(TerraformCommandsNeedVars.map(cmd => makeStringValue(cmd)));
+            return makeListValue(ctyString, TerraformCommandsNeedVars.map(cmd => makeStringValue(cmd)));
         },
 
         get_terraform_commands_that_need_locking: async (
             _args: RuntimeValue<ValueType>[],
             _context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
-            return makeArrayValue(TerraformCommandsNeedLocking.map(cmd => makeStringValue(cmd)));
+            return makeListValue(ctyString, TerraformCommandsNeedLocking.map(cmd => makeStringValue(cmd)));
         },
 
         get_terraform_commands_that_need_input: async (
             _args: RuntimeValue<ValueType>[],
             _context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
-            return makeArrayValue(TerraformCommandsNeedInput.map(cmd => makeStringValue(cmd)));
+            return makeListValue(ctyString, TerraformCommandsNeedInput.map(cmd => makeStringValue(cmd)));
         },
 
         get_terraform_commands_that_need_parallelism: async (
             _args: RuntimeValue<ValueType>[],
             _context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
-            return makeArrayValue(TerraformCommandsNeedParallelism.map(cmd => makeStringValue(cmd)));
+            return makeListValue(ctyString, TerraformCommandsNeedParallelism.map(cmd => makeStringValue(cmd)));
         },
 
         get_terraform_command: async (
@@ -254,7 +255,7 @@ export const coreFunctionGroup = {
         ): Promise<RuntimeValue<ValueType>> => {
 			if (context.terraformCliArgs === undefined) throw new Error('Terraform CLI argument context is unavailable');
 			const cliArgs = context.terraformCliArgs;
-            return makeArrayValue(cliArgs.map(arg => makeStringValue(arg)));
+            return makeListValue(ctyString, cliArgs.map(arg => makeStringValue(arg)));
         },
 
         get_platform: async (
@@ -309,7 +310,7 @@ export const coreFunctionGroup = {
 			if (defaultValue !== undefined) return makeStringValue(defaultValue);
             throw new Error(`Required environment variable ${envName} is not set`);
         },
-        get_default_retryable_errors: async () => makeArrayValue(defaultRetryableErrors.map(makeStringValue)),
+        get_default_retryable_errors: async () => makeListValue(ctyString, defaultRetryableErrors.map(makeStringValue)),
         constraint_check: async (args: RuntimeValue<ValueType>[]) => {
             expectParams(args, [2], 'constraint_check');
             const version = String(args[0]?.value ?? '');
@@ -353,12 +354,14 @@ export const coreFunctionGroup = {
             const merged = new Map<string, RuntimeValue<ValueType>>();
             for (const argument of args) {
                 if (argument.type === 'null') continue;
-                if (argument.type !== 'object' && argument.type !== 'block') {
-                    throw new Error(`deep_merge expects map or object arguments, got ${argument.type}`);
+                const type = valueType(argument);
+                if (type.kind !== 'object' && type.kind !== 'map') {
+                    throw new Error(`Expected param of type map or object but got ${friendlyName(type)}.`);
                 }
                 mergeRuntimeMaps(merged, argument.value as Map<string, RuntimeValue<ValueType>>);
             }
-            return makeObjectValue(merged);
+            // Terragrunt merges through JSON, so what it gives back holds objects and tuples, never maps, lists or sets.
+            return convertToRuntimeValue(runtimeToPlain(makeObjectValue(merged)));
         },
         base64gzip_compat: async (
             args: RuntimeValue<ValueType>[],

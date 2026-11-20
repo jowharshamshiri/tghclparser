@@ -96,7 +96,7 @@ generate "provider" {
 		it('requires at least two sets for setproduct', async () => {
 			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', 'inputs = { x = setproduct(["a"]) }'))
 				.to.deep.equal(['Function "setproduct" requires at least 2 arguments']);
-			expect((await evaluate('inputs = { x = setproduct(["a"]) }')).error).to.match(/setproduct requires at least two arguments/);
+			expect((await evaluate('inputs = { x = setproduct(["a"]) }')).error).to.equal('at least two arguments are required');
 			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', 'inputs = { x = setproduct(["a"], [1]) }')).to.deep.equal([]);
 		});
 	});

@@ -508,6 +508,8 @@ PrimaryExpression =
   Number /
   Boolean /
   Null /
+  ListComprehension /
+  MapComprehension /
   Array /
   Object /
   FunctionCall /
@@ -825,14 +827,11 @@ SimpleExpression = "${" expr:(!("}") .)* "}" {
 }
 
 Expression = 
-  ComprehensionExpression /
   TernaryExpression /
   PipeExpression
 
-ComprehensionExpression = 
-  head:(ListComprehension / MapComprehension) tail:PostfixTail* {
-    return tail.reduce((expr, access) => access(expr), head);
-  }
+// A root value that opens with a for expression, which is an expression like any other from there on.
+ComprehensionExpression = &(("[" / "{") _ "for" ![a-zA-Z0-9_\-\u0080-\uFFFF]) expr:Expression { return expr; }
 
 PipeableExpression = 
   ConditionalExpression /

@@ -14,7 +14,7 @@ import { CtyNumber } from './cty-number';
 import { unmarshalType, unmarshalValue } from './cty-json';
 import { ConfigEvaluator, UnresolvedDependencyOutputError, runtimeValueToPlain } from './Evaluator';
 import type { DependencyRequest } from './Evaluator';
-import { compareStrings, convertToRuntimeValue, makeObjectValue, parseJsonDocument } from './functions/utils';
+import { compareStrings, makeObjectValue, parseJsonDocument } from './functions/utils';
 import type { RuntimeValue, ValueType } from './model';
 import type { FunctionDefinition } from './model';
 import { ambientCredentials } from './credentials';

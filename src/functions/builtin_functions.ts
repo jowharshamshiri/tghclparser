@@ -5,12 +5,13 @@ import bcrypt from 'bcryptjs';
 
 import { CtyNumber, parseGoInteger } from '../cty-number';
 import { goQuoted } from '../go-quote';
-import { graphemeClusters, graphemeCount } from '../grapheme-clusters';
+import { graphemeClusters } from '../grapheme-clusters';
 import type { FunctionContext, RuntimeValue, ValueType } from '../model';
 import { convertToNumber } from '../cty-operations';
-import { ctyDynamic } from '../cty-types';
+import { type CtyType, ctyNumber, ctyString, objectOf, tupleOf } from '../cty-types';
 import { argumentError } from '../function-signature';
 import { assumeFunctions, markedLike } from './assume_functions';
+import { collectionFunctions } from './collection_functions';
 import { addressRange, contains, type IP, type IPNet, parseCIDR, parseIP, to4 } from './ipaddr';
 import { renderTemplate } from './template';
 import { fileset } from './fileset';
@@ -19,17 +20,17 @@ import { formatFunction, formatListFunction } from './format';
 import {
 	compareStrings,
 	convertToRuntimeValue,
-	ctyEquals,
 	expectParams,
-	friendlyTypeName,
+	makeArrayValue,
+	makeListValue,
 	makeNullValue,
 	makeObjectValue,
+	makeSetValue,
 	makeSensitiveValue,
 	makeStringValue,
 	markEncrypted,
 	parseJsonDocument,
 	unwrapSensitive,
-	valueType
 } from './utils';
 
 function requireArgument(args: RuntimeValue<ValueType>[], index: number, name: string): RuntimeValue<ValueType> {
@@ -206,100 +207,24 @@ function goPow(x: number, y: number): number {
 	return ldexp(a1, ae);
 }
 
-/**
- * go-cty declares setunion and setintersection with a `first_set` parameter before their variadic sets, so HCL
- * refuses a call with no argument before the function runs, with its own message.
- */
-function requireFirstSet(args: RuntimeValue<ValueType>[], name: string): void {
-	if (args.length === 0) {
-		throw new Error(`Not enough function arguments; Function "${name}" expects at least 1 argument(s). Missing value for "first_set".`);
-	}
-}
-
 function arrayArgument(args: RuntimeValue<ValueType>[], index: number, name: string): RuntimeValue<ValueType>[] {
 	const argument = requireArgument(args, index, name);
 	if (argument.type !== 'array' || !Array.isArray(argument.value)) throw new Error(`${name} argument ${index + 1} must be a list`);
 	return argument.value;
 }
 
-function objectArgument(args: RuntimeValue<ValueType>[], index: number, name: string): Map<string, RuntimeValue<ValueType>> {
-	const argument = requireArgument(args, index, name);
-	if (argument.type !== 'object' || !(argument.value instanceof Map)) throw new Error(`${name} argument ${index + 1} must be an object`);
-	return argument.value;
-}
 
 const stringValue = makeStringValue;
 const numberValue = (value: CtyNumber): RuntimeValue<'number'> => ({ type: 'number', value });
 /** A count or position a function gives as go-cty's NumberIntVal holds it. */
 const integerValue = (value: number): RuntimeValue<'number'> => numberValue(CtyNumber.fromInt64(value));
 const booleanValue = (value: boolean): RuntimeValue<'boolean'> => ({ type: 'boolean', value });
-const arrayValue = (value: RuntimeValue<ValueType>[]): RuntimeValue<'array'> => ({ type: 'array', value });
 const objectValue = makeObjectValue;
 
 function hash(name: 'md5' | 'sha1' | 'sha256' | 'sha512', value: string): RuntimeValue<'string'> {
 	return stringValue(createHash(name).update(value, 'utf8').digest('hex'));
 }
 
-const valueEquals = ctyEquals;
-
-/** A set's elements in go-cty's order: numbers by value, strings by their bytes. */
-function sortRuntimeList(items: RuntimeValue<ValueType>[]): RuntimeValue<ValueType>[] {
-	const allNumbers = items.every(item => item.type === 'number');
-	const sorted = [...items];
-	if (allNumbers) {
-		sorted.sort((left, right) => (left.value as CtyNumber).compare(right.value as CtyNumber));
-	} else {
-		sorted.sort((left, right) => compareStrings(String(left.value), String(right.value)));
-	}
-	return sorted;
-}
-
-/**
- * go-cty's sort, whose parameter is a list of strings: each element is converted to a string, a number written in
- * full and a bool as true or false, and the strings are ordered by their bytes. A value that does not convert is
- * refused as go-cty refuses it, before a null element is.
- */
-function sortStrings(argument: RuntimeValue<ValueType>): RuntimeValue<'array'> {
-	const invalid = (detail: string) => new Error(`Invalid function argument; Invalid value for "list" parameter: ${detail}`);
-	switch (argument.type) {
-		case 'array':
-			break;
-		case 'null':
-			throw invalid('argument must not be null.');
-		case 'object':
-		case 'block':
-			throw invalid('list of string required.');
-		case 'string':
-		case 'number':
-			throw invalid(`list of string required, but have ${argument.type}.`);
-		case 'boolean':
-			throw invalid('list of string required, but have bool.');
-		default:
-			throw new Error(`sort cannot convert ${argument.type} to a list of strings`);
-	}
-	const strings = (argument.value as RuntimeValue<ValueType>[]).map((item, index) => {
-		switch (item.type) {
-			case 'string':
-				return String(item.value);
-			case 'number':
-				return (item.value as CtyNumber).toString();
-			case 'boolean':
-				return item.value ? 'true' : 'false';
-			case 'null':
-				return null;
-			case 'array':
-				throw invalid(`element ${index}: string required, but have tuple.`);
-			case 'object':
-			case 'block':
-				throw invalid(`element ${index}: string required, but have object.`);
-			default:
-				throw new Error(`sort cannot convert element ${index} of type ${item.type} to a string`);
-		}
-	});
-	const nullIndex = strings.indexOf(null);
-	if (nullIndex !== -1) throw new Error(`given list element ${nullIndex} is null; a null string cannot be sorted.`);
-	return arrayValue((strings as string[]).sort(compareStrings).map(stringValue));
-}
 
 function escapeRegExp(text: string): string {
 	return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -359,43 +284,52 @@ function groupNames(pattern: string): string[] {
 	return names;
 }
 
-function regexMatch(pattern: string, value: string): RuntimeValue<ValueType> {
-	const converted = convertPatternGroups(pattern);
-	const expression = new RegExp(converted);
-	const match = expression.exec(value);
-	if (!match) throw new Error(`Regex ${pattern} did not match ${JSON.stringify(value)}`);
-	const names = groupNames(converted);
-	if (names.length > 0) {
-		const map = new Map<string, RuntimeValue<ValueType>>();
-		for (const name of names) map.set(name, stringValue(match.groups?.[name] ?? ''));
-		return objectValue(map);
+/**
+ * The type go-cty's regex gives a match of a pattern, from its capture groups: the matched string when it has none, a
+ * tuple of strings for unnamed groups and an object of strings for named ones.
+ *
+ * @throws Error in go-cty's words when the pattern mixes named and unnamed groups.
+ */
+function regexResultType(expression: RegExp): CtyType {
+	const groups = (new RegExp(`${expression.source}|`).exec('')?.length ?? 1) - 1;
+	const names = groupNames(expression.source);
+	if (groups === 0) return ctyString;
+	if (names.length > 0 && names.length < groups) {
+		throw argumentError({ name: 'pattern' }, 'invalid regexp pattern: cannot mix both named and unnamed capture groups');
 	}
-	const groupCount = expression.source.includes('(') ? match.length - 1 : 0;
-	if (groupCount > 0) return arrayValue([...match.slice(1)].map(g => stringValue(g ?? '')));
-	return stringValue(match[0]);
+	if (names.length === 0) return tupleOf(Array.from({ length: groups }, () => ctyString));
+	return objectOf(new Map(names.map(name => [name, ctyString])));
+}
+
+/** A match as go-cty's regex gives it, as of its type: a group that took no part in the match is a null string. */
+function regexResult(match: RegExpExecArray, type: CtyType): RuntimeValue<ValueType> {
+	const group = (text: string | undefined) => (text === undefined ? makeNullValue(ctyString) : stringValue(text));
+	if (type.kind === 'string') return stringValue(match[0]);
+	if (type.kind === 'tuple') return makeArrayValue(match.slice(1).map(group));
+	return objectValue(new Map([...(type as Extract<CtyType, { kind: 'object' }>).attributes.keys()].map(name => [name, group(match.groups?.[name])])));
+}
+
+function regexMatch(pattern: string, value: string): RuntimeValue<ValueType> {
+	const expression = new RegExp(convertPatternGroups(pattern));
+	const type = regexResultType(expression);
+	const match = expression.exec(value);
+	if (!match) throw new Error('pattern did not match any part of the given string');
+	return regexResult(match, type);
 }
 
 function regexAll(pattern: string, value: string): RuntimeValue<'array'> {
-	const converted = convertPatternGroups(pattern);
-	const expression = new RegExp(converted, 'g');
-	const names = groupNames(converted);
+	const expression = new RegExp(convertPatternGroups(pattern), 'g');
+	const type = regexResultType(expression);
 	const results: RuntimeValue<ValueType>[] = [];
 	let match: RegExpExecArray | null;
 	while ((match = expression.exec(value)) !== null) {
 		if (match[0] === '') expression.lastIndex++;
-		if (names.length > 0) {
-			const map = new Map<string, RuntimeValue<ValueType>>();
-			for (const name of names) map.set(name, stringValue(match.groups?.[name] ?? ''));
-			results.push(objectValue(map));
-		} else if (match.length > 1) {
-			results.push(arrayValue([...match.slice(1)].map(g => stringValue(g ?? ''))));
-		} else {
-			results.push(stringValue(match[0]));
-		}
+		results.push(regexResult(match, type));
 	}
-	return arrayValue(results);
+	return makeListValue(type, results);
 }
 
+/** go-cty's csvdecode: a list of objects, one per row after the header, each with a string attribute per column. */
 function csvDecode(content: string): RuntimeValue<'array'> {
 	const rows = content.replace(/\r\n/g, '\n').split('\n');
 	const header: string[] = [];
@@ -411,7 +345,9 @@ function csvDecode(content: string): RuntimeValue<'array'> {
 		}
 		body.push(rawRow);
 	}
-	if (header.length === 0) return arrayValue([]);
+	if (header.length === 0) throw new Error('missing header line');
+	const duplicate = header.find((name, index) => header.indexOf(name) !== index);
+	if (duplicate !== undefined) throw new Error(`duplicate column name ${goQuoted(duplicate)}`);
 	const records: RuntimeValue<ValueType>[] = [];
 	for (const rawRow of body) {
 		if (rawRow.trim() === '') continue;
@@ -422,7 +358,7 @@ function csvDecode(content: string): RuntimeValue<'array'> {
 		});
 		records.push(objectValue(map));
 	}
-	return arrayValue(records);
+	return makeListValue(objectOf(new Map(header.map(name => [name, ctyString]))), records);
 }
 
 /** A string as Go's encoding/json writes it for go-cty: as JSON does, and with <, >, &, U+2028 and U+2029 escaped. */
@@ -787,6 +723,7 @@ export const builtinFunctionGroup = {
 	namespace: 'opentofu',
 	functions: {
 		...assumeFunctions,
+		...collectionFunctions,
 		base64gunzip: async (args: RuntimeValue<ValueType>[]) => {
 			const text = convertedString(args[0], 'str');
 			const sensitive = (args[0].type as string) === 'sensitive';
@@ -833,16 +770,6 @@ export const builtinFunctionGroup = {
 		urldecode: async (args: RuntimeValue<ValueType>[]) => markedLike(stringValue(queryUnescape(convertedString(args[0], 'str'))), args),
 		abspath: async (args: RuntimeValue<ValueType>[], context: FunctionContext) => stringValue(path.resolve(context.workingDirectory, stringArgument(args, 0, 'abspath'))),
 		abs: async (args: RuntimeValue<ValueType>[]) => markedLike(numberValue(numberArgument(args, 0, 'num').absolute()), args),
-		alltrue: async (args: RuntimeValue<ValueType>[]) => booleanValue(arrayArgument(args, 0, 'alltrue').every(item => {
-			if (item.type === 'boolean') return Boolean(item.value);
-			if (item.type === 'string' && (item.value === 'true' || item.value === 'false')) return item.value === 'true';
-			throw new Error('alltrue list elements must be booleans');
-		})),
-		anytrue: async (args: RuntimeValue<ValueType>[]) => booleanValue(arrayArgument(args, 0, 'anytrue').some(item => {
-			if (item.type === 'boolean') return Boolean(item.value);
-			if (item.type === 'string' && (item.value === 'true' || item.value === 'false')) return item.value === 'true';
-			throw new Error('anytrue list elements must be booleans');
-		})),
 		basename: async (args: RuntimeValue<ValueType>[]) => stringValue(path.basename(stringArgument(args, 0, 'basename'))),
 		base64decode: async (args: RuntimeValue<ValueType>[]) => stringValue(Buffer.from(stringArgument(args, 0, 'base64decode'), 'base64').toString('utf8')),
 		base64encode: async (args: RuntimeValue<ValueType>[]) => stringValue(Buffer.from(stringArgument(args, 0, 'base64encode'), 'utf8').toString('base64')),
@@ -854,14 +781,6 @@ export const builtinFunctionGroup = {
 		chomp: async (args: RuntimeValue<ValueType>[]) => {
 			const value = stringArgument(args, 0, 'chomp');
 			return stringValue(value.replace(/(?:\r?\n)+$/u, ''));
-		},
-		chunklist: async (args: RuntimeValue<ValueType>[]) => {
-			const items = arrayArgument(args, 0, 'chunklist');
-			const size = integerArgument(args, 1, 'size', 'invalid size');
-			if (size <= 0) throw new Error('chunklist size must be positive');
-			const chunks: RuntimeValue<ValueType>[] = [];
-			for (let index = 0; index < items.length; index += size) chunks.push(arrayValue(items.slice(index, index + size)));
-			return arrayValue(chunks);
 		},
 		cidrhost: async (args: RuntimeValue<ValueType>[]) => {
 			const { network, prefix } = parseCidr(stringArgument(args, 0, 'cidrhost'));
@@ -900,38 +819,15 @@ export const builtinFunctionGroup = {
 				results.push(stringValue(`${ipFromInteger(current >>> 0)}/${resultPrefix}`));
 				current = (current + (1 << (32 - resultPrefix))) >>> 0;
 			}
-			return arrayValue(results);
+			return makeListValue(ctyString, results);
 		},
-		coalesce: async (args: RuntimeValue<ValueType>[]) => {
-			for (const argument of args) {
-				const value = unwrapSensitive(argument);
-				if (value.type !== 'null' && !(value.type === 'string' && String(value.value) === '')) return value;
-			}
-			throw new Error('coalesce requires at least one non-null, non-empty argument');
-		},
-		coalescelist: async (args: RuntimeValue<ValueType>[]) => {
-			for (let index = 0; index < args.length; index++) {
-				const value = arrayArgument(args, index, 'coalescelist');
-				if (value.length > 0) return arrayValue(value);
-			}
-			throw new Error('coalescelist requires at least one non-empty list');
-		},
-		compact: async (args: RuntimeValue<ValueType>[]) => arrayValue(arrayArgument(args, 0, 'compact').filter(item => {
-			const value = unwrapSensitive(item);
-			return value.type !== 'null' && !(value.type === 'string' && String(value.value) === '');
-		})),
-		concat: async (args: RuntimeValue<ValueType>[]) => {
-			if (args.length === 0) throw new Error('at least one argument is required');
-			return arrayValue(args.flatMap((_, index) => arrayArgument(args, index, 'concat')));
-		},
-		contains: async (args: RuntimeValue<ValueType>[]) => booleanValue(arrayArgument(args, 0, 'contains').some(item => valueEquals(item, requireArgument(args, 1, 'contains')))),
 		csvdecode: async (args: RuntimeValue<ValueType>[]) => csvDecode(stringArgument(args, 0, 'csvdecode')),
 		dirname: async (args: RuntimeValue<ValueType>[]) => stringValue(path.dirname(stringArgument(args, 0, 'dirname'))),
 		fileset: async (args: RuntimeValue<ValueType>[], context: FunctionContext) => {
 			// Terragrunt takes a sensitive directory or pattern, and marks the files it answers sensitive.
 			const sensitive = args.some(argument => (argument.type as string) === 'sensitive');
 			const plain = args.map(unwrapSensitive);
-			const files = arrayValue((await fileset(
+			const files = makeSetValue(ctyString, (await fileset(
 				stringArgument(plain, 0, 'fileset'),
 				stringArgument(plain, 1, 'fileset'),
 				context.workingDirectory,
@@ -939,43 +835,10 @@ export const builtinFunctionGroup = {
 			)).map(stringValue));
 			return sensitive ? makeSensitiveValue(files) : files;
 		},
-		distinct: async (args: RuntimeValue<ValueType>[]) => {
-			const items = arrayArgument(args, 0, 'distinct');
-			const distinct: RuntimeValue<ValueType>[] = [];
-			for (const item of items) {
-				if (!distinct.some(existing => valueEquals(existing, item))) distinct.push(item);
-			}
-			return arrayValue(distinct);
-		},
-		element: async (args: RuntimeValue<ValueType>[]) => {
-			const items = arrayArgument(args, 0, 'element');
-			const index = integerArgument(args, 1, 'index', 'invalid index');
-			if (items.length === 0) throw new Error('element cannot be used on an empty list');
-			const wrapped = ((index % items.length) + items.length) % items.length;
-			return items[wrapped];
-		},
 		endswith: async (args: RuntimeValue<ValueType>[]) => booleanValue(stringArgument(args, 0, 'endswith').endsWith(stringArgument(args, 1, 'endswith'))),
-		flatten: async (args: RuntimeValue<ValueType>[]) => {
-			const flattenItems = (items: RuntimeValue<ValueType>[], output: RuntimeValue<ValueType>[]): void => {
-				for (const item of items) {
-					if (item.type === 'array') flattenItems(item.value as RuntimeValue<ValueType>[], output);
-					else output.push(item);
-				}
-			};
-			const output: RuntimeValue<ValueType>[] = [];
-			flattenItems(arrayArgument(args, 0, 'flatten'), output);
-			return arrayValue(output);
-		},
 		floor: async (args: RuntimeValue<ValueType>[]) => markedLike(numberValue(numberArgument(args, 0, 'num').floor()), args),
 		format: async (args: RuntimeValue<ValueType>[]) => stringValue(formatFunction(stringArgument(args, 0, 'format'), args.slice(1))),
-		formatlist: async (args: RuntimeValue<ValueType>[]) => arrayValue(formatListFunction(stringArgument(args, 0, 'formatlist'), args.slice(1)).map(stringValue)),
-		index: async (args: RuntimeValue<ValueType>[]) => {
-			const items = arrayArgument(args, 0, 'index');
-			const target = requireArgument(args, 1, 'index');
-			const position = items.findIndex(item => valueEquals(item, target));
-			if (position === -1) throw new Error('index target not found in list');
-			return integerValue(position);
-		},
+		formatlist: async (args: RuntimeValue<ValueType>[]) => makeListValue(ctyString, formatListFunction(stringArgument(args, 0, 'formatlist'), args.slice(1)).map(stringValue)),
 		indent: async (args: RuntimeValue<ValueType>[]) => {
 			const spaces = ' '.repeat(integerArgument(args, 0, 'spaces'));
 			const lines = stringArgument(args, 1, 'indent').split('\n');
@@ -1000,27 +863,10 @@ export const builtinFunctionGroup = {
 			return args[0].encrypted ? markEncrypted(decoded) : decoded;
 		},
 		jsonencode: async (args: RuntimeValue<ValueType>[]) => stringValue(jsonEncode(requireArgument(args, 0, 'jsonencode'))),
-		keys: async (args: RuntimeValue<ValueType>[]) => arrayValue([...objectArgument(args, 0, 'keys').keys()].sort(compareStrings).map(stringValue)),
-		length: async (args: RuntimeValue<ValueType>[]) => {
-			const value = requireArgument(args, 0, 'length');
-			if (value.type === 'string') return integerValue(graphemeCount(String(value.value)));
-			if (value.type === 'array' && Array.isArray(value.value)) return integerValue(value.value.length);
-			if (value.type === 'object' && value.value instanceof Map) return integerValue(value.value.size);
-			throw new Error('length requires a string, list, or object');
-		},
 		log: async (args: RuntimeValue<ValueType>[]) => {
 			const number = numberArgument(args, 0, 'num').toGoFloat64();
 			const base = numberArgument(args, 1, 'base').toGoFloat64();
 			return markedLike(float64Value(Math.log(number) / Math.log(base)), args);
-		},
-		lookup: async (args: RuntimeValue<ValueType>[]) => {
-			if (args.length > 3) throw new Error(`lookup() takes two or three arguments, got ${args.length}`);
-			const map = objectArgument(args, 0, 'lookup');
-			const key = stringArgument(args, 1, 'lookup');
-			const value = map.get(key);
-			if (value !== undefined) return value;
-			if (args.length >= 3) return requireArgument(args, 2, 'lookup');
-			throw new Error(`lookup key ${JSON.stringify(key)} not found in object`);
 		},
 		lower: async (args: RuntimeValue<ValueType>[]) => stringValue(stringArgument(args, 0, 'lower').toLocaleLowerCase()),
 		mark_as_read: async (args: RuntimeValue<ValueType>[]) => {
@@ -1028,47 +874,16 @@ export const builtinFunctionGroup = {
 			const value = stringArgument(args, 0, 'mark_as_read');
 			return stringValue(value);
 		},
-		mark_glob_as_read: async (args: RuntimeValue<ValueType>[], context: FunctionContext) => arrayValue((await expandTerragruntGlob(
+		mark_glob_as_read: async (args: RuntimeValue<ValueType>[], context: FunctionContext) => makeListValue(ctyString, (await expandTerragruntGlob(
 			args.map((_, index) => stringArgument(args, index, 'mark_glob_as_read')),
 			context.workingDirectory,
 			context.environmentVariables,
 			context.repoRoots
 		)).map(stringValue)),
-		matchkeys: async (args: RuntimeValue<ValueType>[]) => {
-			const values = arrayArgument(args, 0, 'matchkeys');
-			const keys = arrayArgument(args, 1, 'matchkeys');
-			const search = arrayArgument(args, 2, 'matchkeys');
-			if (values.length !== keys.length) throw new Error('matchkeys values and keys must be the same length');
-			const results: RuntimeValue<ValueType>[] = [];
-			for (let index = 0; index < keys.length; index++) {
-				if (search.some(candidate => valueEquals(candidate, keys[index]))) results.push(values[index]);
-			}
-			return arrayValue(results);
-		},
 		max: async (args: RuntimeValue<ValueType>[]) => markedLike(numberValue(extreme(args, 1)), args),
 		md5: async (args: RuntimeValue<ValueType>[]) => hash('md5', stringArgument(args, 0, 'md5')),
-		// As go-cty's MergeFunc: a null argument adds nothing.
-		merge: async (args: RuntimeValue<ValueType>[]) => {
-			const merged = new Map<string, RuntimeValue<ValueType>>();
-			for (const argument of args.map(unwrapSensitive)) {
-				if (argument.type === 'null') continue;
-				if (argument.type !== 'object' || !(argument.value instanceof Map)) {
-					throw new Error(`arguments must be maps or objects, got "${friendlyTypeName(argument)}"`);
-				}
-				for (const [key, value] of argument.value) merged.set(key, value);
-			}
-			return objectValue(merged);
-		},
 		min: async (args: RuntimeValue<ValueType>[]) => markedLike(numberValue(extreme(args, -1)), args),
 		nonsensitive: async (args: RuntimeValue<ValueType>[]) => unwrapSensitive(requireArgument(args, 0, 'nonsensitive')),
-		one: async (args: RuntimeValue<ValueType>[]) => {
-			const type = valueType(args[0]);
-			const refused = argumentError({ name: 'list' }, 'must be a list, set, or tuple value with either zero or one elements');
-			if (type.kind !== 'list' && type.kind !== 'set' && type.kind !== 'tuple') throw refused;
-			const items = args[0].value as RuntimeValue<ValueType>[];
-			if (items.length > 1) throw refused;
-			return items[0] ?? makeNullValue(type.kind === 'tuple' ? ctyDynamic : type.element);
-		},
 		parseint: async (args: RuntimeValue<ValueType>[]) => {
 			const text = unwrapSensitive(requireArgument(args, 0, 'number'));
 			if (text.type === 'null') throw new Error('Invalid value for "number" parameter: argument must not be null.');
@@ -1131,12 +946,11 @@ export const builtinFunctionGroup = {
 				}
 				values.push(numberValue(value));
 			}
-			return markedLike(arrayValue(values), args);
+			return markedLike(makeListValue(ctyNumber, values), args);
 		},
 		regex: async (args: RuntimeValue<ValueType>[]) => regexMatch(stringArgument(args, 0, 'regex'), stringArgument(args, 1, 'regex')),
 		regexall: async (args: RuntimeValue<ValueType>[]) => regexAll(stringArgument(args, 0, 'regexall'), stringArgument(args, 1, 'regexall')),
 		replace: async (args: RuntimeValue<ValueType>[]) => stringValue(stringArgument(args, 0, 'replace').split(stringArgument(args, 1, 'replace')).join(stringArgument(args, 2, 'replace'))),
-		reverse: async (args: RuntimeValue<ValueType>[]) => arrayValue([...arrayArgument(args, 0, 'reverse')].reverse()),
 		sensitive: async (args: RuntimeValue<ValueType>[]) => makeSensitiveValue(requireArgument(args, 0, 'sensitive')),
 		bcrypt: async (args: RuntimeValue<ValueType>[]) => {
 			if (args.length > 2) throw new Error('bcrypt() takes no more than two arguments');
@@ -1160,53 +974,12 @@ export const builtinFunctionGroup = {
 			}
 		},
 		timestamp: async () => stringValue(new Date().toISOString().replace(/\.\d{3}Z$/u, 'Z')),
-		setintersection: async (args: RuntimeValue<ValueType>[]) => {
-			requireFirstSet(args, 'setintersection');
-			const sets = args.map((_, index) => arrayArgument(args, index, 'setintersection'));
-			const intersection = sets[0].filter(item => sets.slice(1).every(set => set.some(candidate => valueEquals(candidate, item))));
-			return arrayValue(sortRuntimeList(intersection));
-		},
-		setproduct: async (args: RuntimeValue<ValueType>[]) => {
-			const sets = args.map((_, index) => arrayArgument(args, index, 'setproduct'));
-			if (sets.length < 2) throw new Error('setproduct requires at least two arguments');
-			const combinations: RuntimeValue<ValueType>[][] = [[]];
-			for (const set of sets) {
-				const next: RuntimeValue<ValueType>[][] = [];
-				for (const combination of combinations) {
-					for (const item of set) next.push([...combination, item]);
-				}
-				combinations.splice(0, combinations.length, ...next);
-			}
-			return arrayValue(combinations.map(arrayValue));
-		},
-		setsubtract: async (args: RuntimeValue<ValueType>[]) => {
-			const left = arrayArgument(args, 0, 'setsubtract');
-			const right = arrayArgument(args, 1, 'setsubtract');
-			return arrayValue(sortRuntimeList(left.filter(item => !right.some(candidate => valueEquals(candidate, item)))));
-		},
-		setunion: async (args: RuntimeValue<ValueType>[]) => {
-			requireFirstSet(args, 'setunion');
-			const union: RuntimeValue<ValueType>[] = [];
-			for (let index = 0; index < args.length; index++) {
-				for (const item of arrayArgument(args, index, 'setunion')) {
-					if (!union.some(existing => valueEquals(existing, item))) union.push(item);
-				}
-			}
-			return arrayValue(sortRuntimeList(union));
-		},
 		sha1: async (args: RuntimeValue<ValueType>[]) => hash('sha1', stringArgument(args, 0, 'sha1')),
 		sha256: async (args: RuntimeValue<ValueType>[]) => hash('sha256', stringArgument(args, 0, 'sha256')),
 		sha512: async (args: RuntimeValue<ValueType>[]) => hash('sha512', stringArgument(args, 0, 'sha512')),
 		// go-cty's signum reads its number into a Go int, so it refuses a fraction.
 		signum: async (args: RuntimeValue<ValueType>[]) => markedLike(integerValue(Math.sign(Number(numberArgument(args, 0, 'num').toGoInt64()))), args),
-		slice: async (args: RuntimeValue<ValueType>[]) => {
-			const items = arrayArgument(args, 0, 'slice');
-			const start = integerArgument(args, 1, 'start_index', 'invalid start index');
-			const end = integerArgument(args, 2, 'end_index', 'invalid end index');
-			return arrayValue(items.slice(start, end));
-		},
-		sort: async (args: RuntimeValue<ValueType>[]) => sortStrings(requireArgument(args, 0, 'sort')),
-		split: async (args: RuntimeValue<ValueType>[]) => arrayValue(stringArgument(args, 1, 'split').split(stringArgument(args, 0, 'split')).map(stringValue)),
+		split: async (args: RuntimeValue<ValueType>[]) => makeListValue(ctyString, stringArgument(args, 1, 'split').split(stringArgument(args, 0, 'split')).map(stringValue)),
 		startswith: async (args: RuntimeValue<ValueType>[]) => booleanValue(stringArgument(args, 0, 'startswith').startsWith(stringArgument(args, 1, 'startswith'))),
 		strcontains: async (args: RuntimeValue<ValueType>[]) => booleanValue(stringArgument(args, 0, 'strcontains').includes(stringArgument(args, 1, 'strcontains'))),
 		strrev: async (args: RuntimeValue<ValueType>[]) => stringValue([...stringArgument(args, 0, 'strrev')].reverse().join('')),
@@ -1217,31 +990,6 @@ export const builtinFunctionGroup = {
 			if (offset >= 0 && length === 0) return stringValue('');
 			const rest = clusters.slice(Math.max(offset < 0 ? offset + clusters.length : offset, 0));
 			return stringValue((length > 0 ? rest.slice(0, length) : rest).join(''));
-		},
-		// OpenTofu's sum: the elements, each converted to a number, added in order to the first.
-		sum: async (args: RuntimeValue<ValueType>[]) => {
-			const collection = unwrapSensitive(requireArgument(args, 0, 'list'));
-			if (collection.type !== 'array' && collection.type !== 'object' && collection.type !== 'block') {
-				throw new Error('Invalid value for "list" parameter: cannot sum noniterable.');
-			}
-			const size = collection.type === 'array'
-				? (collection.value as RuntimeValue<ValueType>[]).length
-				: (collection.value as Map<string, RuntimeValue<ValueType>>).size;
-			if (size === 0) throw new Error('Invalid value for "list" parameter: cannot sum an empty list.');
-			if (collection.type !== 'array') throw new Error('Invalid value for "list" parameter: argument must be list, set, or tuple. Received object.');
-			const notNumbers = 'Invalid value for "list" parameter: argument must be list, set, or tuple of number values.';
-			const element = (value: RuntimeValue<ValueType>): CtyNumber => {
-				const item = unwrapSensitive(value);
-				const number = item.type === 'number'
-					? item.value as CtyNumber
-					: item.type === 'string' ? CtyNumber.tryParse(String(item.value)) : undefined;
-				if (number === undefined) throw new Error(notNumbers);
-				return number;
-			};
-			const [first, ...rest] = collection.value as RuntimeValue<ValueType>[];
-			let total = element(first);
-			for (const value of rest) total = total.add(element(value));
-			return markedLike(numberValue(total), args);
 		},
 		textdecodebase64: async (args: RuntimeValue<ValueType>[]) => {
 			const content = stringArgument(args, 0, 'textdecodebase64');
@@ -1269,65 +1017,6 @@ export const builtinFunctionGroup = {
 			}
 		},
 		title: async (args: RuntimeValue<ValueType>[]) => stringValue(stringArgument(args, 0, 'title').replace(/\p{L}[\p{L}\p{N}]*/gu, word => word[0].toLocaleUpperCase() + word.slice(1))),
-		tobool: async (args: RuntimeValue<ValueType>[]) => {
-			const argument = requireArgument(args, 0, 'tobool');
-			if (argument.type === 'boolean') return argument;
-			if (argument.type !== 'string') throw new Error('tobool requires a string or boolean');
-			const value = String(argument.value);
-			if (value === 'true') return booleanValue(true);
-			if (value === 'false') return booleanValue(false);
-			throw new Error(`cannot convert ${JSON.stringify(value)} to bool`);
-		},
-		tolist: async (args: RuntimeValue<ValueType>[]) => {
-			const argument = requireArgument(args, 0, 'tolist');
-			if (argument.type === 'array') return argument;
-			if (argument.type === 'object') throw new Error('cannot convert an object to a list');
-			throw new Error('tolist requires a list');
-		},
-		tomap: async (args: RuntimeValue<ValueType>[]) => {
-			const argument = requireArgument(args, 0, 'tomap');
-			if (argument.type === 'object') return argument;
-			if (argument.type === 'array') throw new Error('cannot convert a list to an object');
-			throw new Error('tomap requires an object');
-		},
-		// OpenTofu's tonumber: a number or null as it is, and a string read as go-cty reads a number.
-		tonumber: async (args: RuntimeValue<ValueType>[]) => {
-			const argument = requireArgument(args, 0, 'v');
-			const value = unwrapSensitive(argument);
-			if (value.type === 'number' || value.type === 'null') return argument;
-			if (value.type !== 'string') {
-				const typeName = value.type === 'boolean' ? 'bool' : value.type === 'array' ? 'tuple' : 'object';
-				throw new Error(`Invalid value for "v" parameter: cannot convert ${typeName} to number.`);
-			}
-			const number = CtyNumber.tryParse(String(value.value));
-			if (number === undefined) {
-				if ((argument.type as string) === 'sensitive') throw new Error('Invalid value for "v" parameter: cannot convert this sensitive string to number.');
-				throw new Error(`Invalid value for "v" parameter: cannot convert ${goQuoted(String(value.value))} to number; given string must be a decimal representation of a number.`);
-			}
-			return markedLike(numberValue(number), args);
-		},
-		tostring: async (args: RuntimeValue<ValueType>[]) => {
-			const argument = requireArgument(args, 0, 'tostring');
-			if (argument.type === 'string') return argument;
-			if (argument.type === 'number' || argument.type === 'boolean') return stringValue(String(argument.value));
-			if (argument.type === 'null') return stringValue('');
-			throw new Error('tostring requires a string, number, boolean, or null');
-		},
-		transpose: async (args: RuntimeValue<ValueType>[]) => {
-			const source = objectArgument(args, 0, 'transpose');
-			const result = new Map<string, RuntimeValue<ValueType>>();
-			for (const [key, value] of source) {
-				if (value.type !== 'array') throw new Error('transpose object values must be lists');
-				for (const item of value.value as RuntimeValue<ValueType>[]) {
-					if (item.type !== 'string') throw new Error('transpose list elements must be strings');
-					const keyValue = String(item.value);
-					const existing = result.get(keyValue);
-					if (existing?.type === 'array') (existing.value as RuntimeValue<ValueType>[]).push(stringValue(key));
-					else result.set(keyValue, arrayValue([stringValue(key)]));
-				}
-			}
-			return objectValue(result);
-		},
 		trim: async (args: RuntimeValue<ValueType>[]) => {
 			const value = stringArgument(args, 0, 'trim');
 			const cutset = stringArgument(args, 1, 'trim');
@@ -1354,16 +1043,6 @@ export const builtinFunctionGroup = {
 		urlencode: async (args: RuntimeValue<ValueType>[]) => stringValue(encodeURIComponent(stringArgument(args, 0, 'urlencode')).replace(/%20/g, '+')),
 		uuid: async () => stringValue(cryptoRandomUuid()),
 		uuidv5: async (args: RuntimeValue<ValueType>[]) => stringValue(uuidv5(stringArgument(args, 0, 'uuidv5'), stringArgument(args, 1, 'uuidv5'))),
-		values: async (args: RuntimeValue<ValueType>[]) => {
-			const map = objectArgument(args, 0, 'values');
-			return arrayValue([...map.keys()].sort(compareStrings).map(key => map.get(key)!));
-		},
-		toset: async (args: RuntimeValue<ValueType>[]) => {
-			const items = arrayArgument(args, 0, 'toset');
-			const distinct: RuntimeValue<ValueType>[] = [];
-			for (const item of items) if (!distinct.some(existing => valueEquals(existing, item))) distinct.push(item);
-			return arrayValue(sortRuntimeList(distinct));
-		},
 		yamlencode: async (args: RuntimeValue<ValueType>[]) => stringValue(YamlEmitter.encode(requireArgument(args, 0, 'yamlencode'))),
 		formatdate: async (args: RuntimeValue<ValueType>[]) => stringValue(formatDate(stringArgument(args, 0, 'formatdate'), stringArgument(args, 1, 'formatdate'))),
 		timeadd: async (args: RuntimeValue<ValueType>[]) => {
@@ -1378,17 +1057,6 @@ export const builtinFunctionGroup = {
 			const second = Date.parse(stringArgument(args, 1, 'timecmp'));
 			if (Number.isNaN(first) || Number.isNaN(second)) throw new Error('timecmp requires RFC3339 timestamps');
 			return integerValue(first < second ? -1 : first > second ? 1 : 0);
-		},
-		zipmap: async (args: RuntimeValue<ValueType>[]) => {
-			const keys = arrayArgument(args, 0, 'zipmap');
-			const values = arrayArgument(args, 1, 'zipmap');
-			if (keys.length !== values.length) throw new Error('zipmap keys and values must be the same length');
-			const map = new Map<string, RuntimeValue<ValueType>>();
-			keys.forEach((key, index) => {
-				if (key.type !== 'string') throw new Error('zipmap keys must be strings');
-				map.set(String(key.value), values[index]);
-			});
-			return objectValue(map);
 		}
 	}
 };

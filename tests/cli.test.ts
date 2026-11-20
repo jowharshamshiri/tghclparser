@@ -1523,7 +1523,7 @@ describe('CLI configuration discovery', function () {
 		const result = spawnSync(process.execPath, [cli, 'hcl', 'validate', '--working-dir', made.consumer],
 			{cwd: made.consumer, encoding: 'utf8', env});
 		expect(result.status).to.equal(1, result.stderr);
-		expect(result.stderr).to.contain('Missing attribute "b"');
+		expect(result.stderr).to.contain('This object does not have an attribute named "b".');
 		await fs.rm(made.root, {recursive: true, force: true});
 	});
 
