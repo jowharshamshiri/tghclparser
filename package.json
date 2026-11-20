@@ -1,7 +1,7 @@
 {
 	"name": "tghclparser",
 	"type": "module",
-	"version": "1.311.1888",
+	"version": "1.312.1893",
 	"description": "A drop-in replacement for the terragrunt CLI, and the HCL parser and language server behind it. Runs OpenTofu/Terraform through Terragrunt configurations — includes, dependencies, generate blocks, stacks — and matches terragrunt's own behaviour, checked against it rather than against the documentation.",
 	"author": {
 		"name": "Bahram Shamshiri",
@@ -69,7 +69,7 @@
 		"build": "tsdown",
 		"lint": "eslint --fix",
 		"lint:ci": "eslint",
-		"parser": "peggy --cache --trace --format 'es' --dts --dependency \"{Schema}:./Schema.ts\" --dependency \"{scanJsBody}:./js-body.ts\" --output src/parser.js grammar.peggy",
+		"parser": "peggy --cache --trace --format 'es' --dts --dependency \"{Schema}:./Schema.ts\" --dependency \"{scanJsBody}:./js-body.ts\" --dependency \"{graphemeClusters}:./grapheme-clusters.ts\" --output src/parser.js grammar.peggy",
 		"prepare": "npm run build",
 		"prepublishOnly": "npm test && npm run lint",
 		"pretest": "npm run build",

@@ -439,6 +439,62 @@ describe('semantic configuration evaluation', () => {
 		});
 	});
 
+	// Each case is what Terragrunt v1.2.2 renders for the same source.
+	describe('<<- heredocs', () => {
+		/** The value of a `<<-EOT` heredoc of these lines, closed by a marker line indented by `markerIndent`. */
+		const flush = async (lines: string[], markerIndent = '  '): Promise<unknown> => {
+			const content = `inputs = {\n  x = <<-EOT\n${lines.join('\n')}\n${markerIndent}EOT\n}\n`;
+			const result = await evaluator.evaluateUnit(configPath, content, process.cwd());
+			assert.equal(result.error, undefined, content);
+			return (plainValue(result.inputs!) as Record<string, unknown>).x;
+		};
+
+		it('strips the smallest indent its lines share, keeping their relative indentation', async () => {
+			assert.equal(await flush(['      deeper', '    base', '        deepest']), '  deeper\nbase\n    deepest\n');
+			assert.equal(await flush(['a', '    b']), 'a\n    b\n');
+		});
+
+		it('takes no account of the closing marker\'s indent', async () => {
+			assert.equal(await flush(['  a', '    b'], '        '), 'a\n  b\n');
+			assert.equal(await flush(['      a', '      b'], ''), 'a\nb\n');
+		});
+
+		it('counts each space character as one, a tab and a no-break space as much as a space', async () => {
+			assert.equal(await flush(['\t\tx', '    y', '\t  z']), 'x\n  y\n z\n');
+			assert.equal(await flush(['\u00a0\u00a0x', '   y']), 'x\n y\n');
+		});
+
+		it('leaves blank lines out of the indent and as they are written', async () => {
+			assert.equal(await flush(['      a', '', '  ', '          ', '      b']), 'a\n\n  \n          \nb\n');
+		});
+
+		it('counts the indent before an interpolation, and none for one that starts its line', async () => {
+			assert.equal(await flush(['    a', '    ${"word"}', '    b']), 'a\nword\nb\n');
+			assert.equal(await flush(['    a', '${"word"}', '    b']), '    a\nword\n    b\n');
+			assert.equal(await flush(['    a', '%{ if true }yes%{ endif }', '    b']), '    a\nyes\n    b\n');
+		});
+
+		it('never counts the space an interpolation renders', async () => {
+			assert.equal(await flush(['    a', '    ${"      word"}']), 'a\n      word\n');
+		});
+
+		it('reads an escaped sequence at the start of a line as text', async () => {
+			assert.equal(await flush(['    a', '      $${b}']), 'a\n  ${b}\n');
+			assert.equal(await flush(['    a', '$${b}']), '    a\n${b}\n');
+		});
+
+		it('strips after the strip markers, so a line a marker joins to the one before keeps its indent', async () => {
+			assert.equal(await flush([
+				'    %{ for x in ["a", "b"] ~}',
+				'      - ${x}',
+				'    %{ endfor ~}',
+				'    done'
+			]), '      - a\n      - b\n    done\n');
+			assert.equal(await flush(['      a', '      ${~ "word"}', '    b']), '      a\nword\n    b\n');
+			assert.equal(await flush(['      a', '      ${"word" ~}', '    b']), 'a\nword    b\n');
+		});
+	});
+
 	describe('substr', () => {
 		const substr = async (args: string): Promise<unknown> => {
 			const result = await evaluator.evaluateUnit(configPath, `inputs = {\n  x = substr(${args})\n}\n`, process.cwd());

@@ -4,6 +4,7 @@
 
 import {Schema} from "./Schema.ts";
 import {scanJsBody} from "./js-body.ts";
+import {graphemeClusters} from "./grapheme-clusters.ts";
 
 
 function peg$subclass(child, parent) {
@@ -758,14 +759,11 @@ function peg$parse(input, options) {
   const values = pairs ? [pairs[0], ...pairs[1].map(pair => pair[3])] : [];
   return makeNode('object', null, location(), values);
 };
-  var peg$f52 = function(trim, marker, content) {
+  var peg$f52 = function(flush, marker, content) {
   popHeredocMarker();
-  const literals = consolidateLiteralParts(stripTemplate(content));
-  // `<<-` trims every line of the literal text.
-  const parts = trim === "-"
-    ? literals.map(part => part.literal !== undefined ? { ...part, literal: part.literal.split('\n').map(line => line.trim()).join('\n') } : part)
-    : literals;
-  return templateNode(parts, location());
+  const tokens = stripTemplate(content);
+  if (flush !== null) flushHeredoc(tokens);
+  return templateNode(consolidateLiteralParts(tokens), location());
 };
   var peg$f53 = function() { return { literal: text(), location: location(), lineEnd: true }; };
   var peg$f54 = function() { return { literal: text(), location: location() }; };
@@ -17766,6 +17764,40 @@ function peg$parse(input, options) {
       trimNext = token.stripAfter;
     });
     return tokens;
+  }
+
+  // Applies the rule of a `<<-` heredoc as HCL does, to the tokens stripTemplate has trimmed: the line that starts
+  // with the fewest space characters sets how many are removed from the start of every line. Only a literal token
+  // that starts a line counts its space; a line that starts with a sequence counts none, so nothing is removed, and a
+  // token a strip marker has joined to the line before starts no line. A blank line, one whose token is only space
+  // and its line break, is left out of the count and keeps its space. Space is what Go's unicode.IsSpace accepts,
+  // counted in grapheme clusters, so a tab or a no-break space counts as one, as a space does.
+  //
+  // tokens: the literal tokens and sequences stripTemplate returns, in order; a line's literal is cut in place.
+  function flushHeredoc(tokens) {
+    let indent = Infinity;
+    let lineStart = true;
+    const lines = [];
+    for (const token of tokens) {
+      if (lineStart) {
+        if (token.literal === undefined) {
+          indent = 0;
+        } else {
+          const text = trimStartSpace(token.literal);
+          if (text.length > 0 || !token.literal.endsWith('\n')) {
+            indent = Math.min(indent, graphemeClusters(token.literal.slice(0, token.literal.length - text.length)).length);
+            lines.push(token);
+          }
+        }
+      }
+      lineStart = token.literal !== undefined && token.literal.endsWith('\n');
+    }
+    for (const token of lines) {
+      const cut = graphemeClusters(token.literal).slice(0, indent).join('');
+      const { start } = token.location;
+      token.literal = token.literal.slice(cut.length);
+      token.location = { ...token.location, start: { ...start, offset: start.offset + cut.length, column: start.column + cut.length } };
+    }
   }
 
   // Builds a template's directives into what HCL lowers them to: an `if` into a conditional between the template of
