@@ -8,6 +8,7 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 import {discoverConfigs} from '../src/cli';
 import {parseArgs} from '../src/cli';
 import {stackGenerate} from '../src/cli';
+import {readRenderSettings} from '../src/cli';
 import {spawn, spawnSync} from 'node:child_process';
 import {createServer} from 'node:http';
 
@@ -186,6 +187,313 @@ describe('CLI configuration discovery', function () {
 			const result = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', root, ...args], {encoding: 'utf8'});
 			expect(result.status).to.equal(0, result.stderr);
 			expect(result.stdout).to.equal(expected);
+		}
+		// And as HCL, which is what render prints when no format is asked for.
+		const hcl = spawnSync(process.execPath, [cli, 'render', '--working-dir', root], {encoding: 'utf8'});
+		expect(hcl.status).to.equal(0, hcl.stderr);
+		expect(hcl.stdout).to.equal('terraform {\n  source = "./module"\n}\ninputs = {\n  region = "eu-west-1"\n}\n');
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
+	it('renders HCL when no format is asked for, written as Terragrunt v1.2.2 writes it', async function () {
+		// Six renders, each a process of its own.
+		this.timeout(30000);
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-render-hcl-')));
+		for (const dir of ['unit', 'a', 'b']) await fs.mkdir(path.join(root, dir));
+		await fs.writeFile(path.join(root, 'unit', 'terragrunt.hcl'), [
+			'locals {',
+			'  shape = { "two words" = 2, one = 1.5, list = [true, null, "x"] }',
+			'}',
+			'terraform {',
+			'  source = "./module"',
+			'  extra_arguments "vars" {',
+			'    commands  = ["plan"]',
+			'    arguments = ["-var", "a=b"]',
+			'  }',
+			'  before_hook "hello" {',
+			'    commands = ["plan"]',
+			'    execute  = ["echo", "hi"]',
+			'  }',
+			'}',
+			'remote_state {',
+			'  backend      = "local"',
+			'  disable_init = true',
+			'  config = {',
+			'    path  = "state/terraform.tfstate"',
+			'    count = 3',
+			'  }',
+			'}',
+			'dependencies {',
+			'  paths = ["../a", "../b"]',
+			'}',
+			'generate "provider" {',
+			'  path      = "provider.tf"',
+			'  if_exists = "overwrite"',
+			'  contents  = "provider \\"aws\\" {\\n  region = \\"$${var.region}\\"\\n}\\n"',
+			'}',
+			'feature "flag" {',
+			'  default = 42',
+			'}',
+			'exclude {',
+			'  if      = false',
+			'  actions = ["plan"]',
+			'}',
+			'errors {',
+			'  retry "transient" {',
+			'    retryable_errors   = [".*timeout.*"]',
+			'    max_attempts       = 3',
+			'    sleep_interval_sec = 5',
+			'  }',
+			'  ignore "known" {',
+			'    ignorable_errors = [".*warning.*"]',
+			'    message          = "ignored"',
+			'    signals = {',
+			'      safe = true',
+			'    }',
+			'  }',
+			'}',
+			'terraform_binary = "tofu"',
+			'prevent_destroy  = true',
+			'iam_assume_role_duration = 3600',
+			'inputs = {',
+			'  text      = "tab\\tquote\\" back\\\\ dollar $${x} percent %%{y} nul\\u0000 nbsp\\u00a0 e\\u00e9 astral \\U0001F600 zw\\u200b"',
+			'  third     = 1 / 3',
+			'  tenth     = 0.1',
+			'  big       = 123456789012345678901234567890',
+			'  tiny      = 1e-20',
+			'  negative  = -2.5',
+			'  empty     = ""',
+			'  emptylist = []',
+			'  emptymap  = {}',
+			'  "a-b"     = "dash"',
+			'  "1abc"    = "digit"',
+			'  nested    = { inner = { deeper = [1, { k = "v" }] } }',
+			'}',
+			''
+		].join('\n'));
+		// What Terragrunt v1.2.2 prints for the same unit: each block in a fixed order, values written as hclwrite
+		// writes constants (keys in byte order, quoted when not identifiers, numbers in full, strings escaped).
+		const expected = [
+			'locals {',
+			'  shape = {',
+			'    list        = [true, null, "x"]',
+			'    one         = 1.5',
+			'    "two words" = 2',
+			'  }',
+			'}',
+			'terraform {',
+			'  source = "./module"',
+			'  extra_arguments "vars" {',
+			'    commands  = ["plan"]',
+			'    arguments = ["-var", "a=b"]',
+			'  }',
+			'  before_hook "hello" {',
+			'    commands = ["plan"]',
+			'    execute  = ["echo", "hi"]',
+			'  }',
+			'}',
+			'remote_state {',
+			'  backend      = "local"',
+			'  disable_init = true',
+			'  config = {',
+			'    count = 3',
+			'    path  = "state/terraform.tfstate"',
+			'  }',
+			'}',
+			'dependencies {',
+			'  paths = ["../a", "../b"]',
+			'}',
+			'generate "provider" {',
+			'  path        = "provider.tf"',
+			'  if_exists   = "overwrite"',
+			'  if_disabled = "skip"',
+			'  contents    = "provider \\"aws\\" {\\n  region = \\"$${var.region}\\"\\n}\\n"',
+			'}',
+			'feature "flag" {',
+			'  default = 42',
+			'}',
+			'exclude {',
+			'  actions = ["plan"]',
+			'  if      = false',
+			'}',
+			'errors {',
+			'  retry "transient" {',
+			'    max_attempts       = 3',
+			'    sleep_interval_sec = 5',
+			'    retryable_errors   = [".*timeout.*"]',
+			'  }',
+			'  ignore "known" {',
+			'    ignorable_errors = [".*warning.*"]',
+			'    message          = "ignored"',
+			'    signals = {',
+			'      safe = true',
+			'    }',
+			'  }',
+			'}',
+			'terraform_binary         = "tofu"',
+			'prevent_destroy          = true',
+			'iam_assume_role_duration = 3600',
+			'inputs = {',
+			'  "1abc"    = "digit"',
+			'  a-b       = "dash"',
+			'  big       = 123456789012345678901234567890',
+			'  empty     = ""',
+			'  emptylist = []',
+			'  emptymap  = {}',
+			'  negative  = -2.5',
+			'  nested = {',
+			'    inner = {',
+			'      deeper = [1, {',
+			'        k = "v"',
+			'      }]',
+			'    }',
+			'  }',
+			'  tenth = 0.1',
+			'  text  = "tab\\tquote\\" back\\\\ dollar $${x} percent %%{y} nul\\u0000 nbsp\\u00a0 eé astral 😀 zw\\u200b"',
+			`  third = 0.${'3'.repeat(154)}5`,
+			'  tiny  = 0.00000000000000000001',
+			'}',
+			''
+		].join('\n');
+		const cli = path.resolve('dist/cli.cjs');
+		const unit = path.join(root, 'unit');
+		for (const args of [[], ['--format', 'hcl'], ['--format=hcl']]) {
+			const result = spawnSync(process.execPath, [cli, 'render', '--working-dir', unit, ...args], {encoding: 'utf8'});
+			expect(result.status, result.stderr).to.equal(0);
+			expect(result.stdout, args.join(' ')).to.equal(expected);
+		}
+		// --json wins over --format hcl, given before it or after it.
+		for (const args of [['--json', '--format=hcl'], ['--format=hcl', '--json']]) {
+			const result = spawnSync(process.execPath, [cli, 'render', '--working-dir', unit, ...args], {encoding: 'utf8'});
+			expect(result.status, result.stderr).to.equal(0);
+			expect(JSON.parse(result.stdout).terraform_binary, args.join(' ')).to.equal('tofu');
+		}
+		const yaml = spawnSync(process.execPath, [cli, 'render', '--working-dir', unit, '--format', 'yaml'], {encoding: 'utf8'});
+		expect(yaml.status).to.equal(1);
+		expect(yaml.stderr).to.equal('invalid format: yaml\n');
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
+	it('takes the global flags after render, and hands get_terraform_cli_args() what Terragrunt v1.2.2 does', async function () {
+		// Five renders, each a process of its own.
+		this.timeout(30000);
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-render-flags-'));
+		await fs.writeFile(path.join(root, 'terragrunt.hcl'), 'inputs = {\n  a = get_terraform_cli_args()\n}\n');
+		const cli = path.resolve('dist/cli.cjs');
+		const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(TG|TERRAGRUNT)_/.test(name)));
+		const render = (args: string[], extra: Record<string, string> = {}) =>
+			spawnSync(process.execPath, [cli, 'render', '--working-dir', root, ...args], {encoding: 'utf8', env: {...env, ...extra}});
+		// What Terragrunt v1.2.2 prints for each: -no-color reaches OpenTofu's arguments from the flag or TG_NO_COLOR.
+		const plain = 'inputs = {\n  a = ["render"]\n}\n';
+		const noColor = 'inputs = {\n  a = ["render", "-no-color"]\n}\n';
+		const cases: [string[], Record<string, string>, string][] = [
+			[[], {}, plain],
+			[['--no-color', '--non-interactive', '--no-tips'], {}, noColor],
+			[['--no-color', '--no-color'], {}, noColor],
+			[[], {TG_NO_COLOR: 'true'}, noColor],
+			[['--no-color=false'], {TG_NO_COLOR: 'true'}, plain]
+		];
+		for (const [args, extra, expected] of cases) {
+			const result = render(args, extra);
+			expect(result.status, `${args.join(' ')} ${JSON.stringify(extra)}: ${result.stderr}`).to.equal(0);
+			expect(result.stdout, `${args.join(' ')} ${JSON.stringify(extra)}`).to.equal(expected);
+		}
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
+	it('reads render\'s flags and the global ones, and their environment variables, as Terragrunt v1.2.2 does', () => {
+		const clean = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(TG|TERRAGRUNT|TF)_/.test(name)));
+		const read = (argv: string[], env: Record<string, string> = {}) => readRenderSettings(argv, {...clean, ...env});
+		// Called directly: this is argument parsing, and a process per case would take seconds for nothing.
+		for (const argv of [
+			['--no-color', '--non-interactive', '--no-tips'], ['-no-color'], ['--no-color', '--no-color=false'],
+			['--log-level', 'debug'], ['--log-level', 'DEBUG'], ['--log-format', 'key-value'], ['--log-custom-format', '%msg'],
+			['--log-disable'], ['--log-show-abs-paths'], ['--experiment', 'symlinks'], ['--experiment', 'symlinks', '--experiment', 'symlinks'],
+			['--experiment-mode'], ['--strict-mode'], ['--strict-control', 'deprecated-env-vars'], ['--no-tip', 'debugging-docs'],
+			['--profile-dir', 'prof'], ['--working-dir', '.'], ['--json', '--format=hcl'], ['--help'], ['-h'], ['-v']
+		]) {
+			expect(() => read(argv), argv.join(' ')).to.not.throw();
+		}
+		// Each refused with what Terragrunt v1.2.2 says.
+		for (const [argv, message] of [
+			[['--log-level', 'nope'], 'invalid value "nope" for flag -log-level: invalid level "nope", supported levels: stderr, stdout, error, warn, info, debug, trace'],
+			[['--log-level', 'info', '--log-level', 'nope'], 'invalid value "nope" for flag -log-level: invalid level "nope"'],
+			[['--log-level', 'info', '--log-level', 'info'], 'invalid value "info" for flag -log-level: setting the flag multiple times'],
+			[['--log-format', 'nope'], 'invalid value "nope" for flag -log-format: available values: '],
+			[['--experiment', 'nope'], 'invalid value "nope" for flag -experiment: allowed experiment(s): base64gzip-compat, browse-tui, deep-merge,'],
+			[['--strict-control', 'nope'], 'invalid value "nope" for flag -strict-control: allowed control(s): bare-include, cas-source-inside-stack,'],
+			[['--no-tip', 'foo'], 'invalid value "foo" for flag -no-tip: invalid tip suppression requested for `--no-tip`: \'foo\'; valid tip(s) for suppression: debugging-docs,'],
+			[['--non-interactive', '--non-interactive'], 'invalid boolean flag non-interactive: setting the flag multiple times'],
+			[['--no-tips', '--no-tips=false'], 'invalid boolean value "false" for -no-tips: setting the flag multiple times'],
+			[['--help', '-h'], 'invalid boolean flag h: setting the flag multiple times'],
+			[['--json', '--json'], 'invalid boolean flag json: setting the flag multiple times'],
+			[['--no-color=maybe'], 'invalid boolean value "maybe" for -no-color: must be one of: "0", "1", "f", "t", "false", "true"'],
+			[['--profile-cpu'], 'flag needs an argument: -profile-cpu'],
+			[['--bogus'], 'flag provided but not defined: -bogus'],
+			[['--terragrunt-no-color'], 'flag provided but not defined: -terragrunt-no-color'],
+			[['---no-color'], 'bad flag syntax: ---no-color']
+		] as [string[], string][]) {
+			expect(() => read(argv), argv.join(' ')).to.throw(message);
+		}
+
+		// The environment sets a flag the command line does not, and its value is checked even when the command line
+		// sets the flag.
+		expect(read([], {TG_NO_COLOR: 'true'}).switchOf('no-color')).to.equal(true);
+		expect(read(['--no-color=false'], {TG_NO_COLOR: 'true'}).switchOf('no-color')).to.equal(false);
+		expect(read([], {TG_NO_COLOR: ''}).switchOf('no-color')).to.equal(false);
+		expect(() => read(['--log-level', 'info'], {TG_LOG_LEVEL: 'nope'})).to.throw('invalid value "nope" for env var TG_LOG_LEVEL: invalid level "nope"');
+		expect(() => read([], {TG_NO_COLOR: 'maybe'})).to.throw('invalid value "maybe" for env var TG_NO_COLOR: must be one of:');
+		expect(() => read([], {TG_EXPERIMENT: 'symlinks,nope'})).to.throw('invalid value "nope" for env var TG_EXPERIMENT: allowed experiment(s):');
+		expect(() => read([], {TF_INPUT: 'maybe'})).to.throw('invalid value "maybe" for env var TF_INPUT');
+		expect(read([], {TF_INPUT: 'false'}).switchOf('non-interactive')).to.equal(true);
+		// An experiment is enabled by the environment and the command line both.
+		expect(read(['--experiment', 'symlinks'], {TG_EXPERIMENT: 'deep-merge'}).valuesOf('experiment')).to.deep.equal(['deep-merge', 'symlinks']);
+		// TG_JSON asks for JSON whatever its value, as --json does.
+		expect(read([], {TG_JSON: 'false'}).given('json')).to.equal(true);
+		expect(read([], {TG_FORMAT: 'json'}).valuesOf('format')).to.deep.equal(['json']);
+		expect(read(['--format', 'hcl'], {TG_FORMAT: 'json'}).valuesOf('format')).to.deep.equal(['hcl']);
+
+		// A deprecated name is read with a warning, and refused under strict mode or a strict control against it.
+		const warnings: string[] = [];
+		const error = console.error;
+		console.error = (message: string) => { warnings.push(message); };
+		try {
+			expect(read([], {TERRAGRUNT_NO_COLOR: 'true'}).switchOf('no-color')).to.equal(true);
+			expect(read([], {TG_RENDER_FORMAT: 'json'}).valuesOf('format')).to.deep.equal(['json']);
+			// Neither when the current name or the command line sets the flag.
+			read([], {TERRAGRUNT_NO_COLOR: 'true', TG_NO_COLOR: 'false'});
+			read(['--no-color'], {TERRAGRUNT_NO_COLOR: 'true'});
+			read(['--experiment', 'block-iteration']);
+		} finally {
+			console.error = error;
+		}
+		expect(warnings).to.deep.equal([
+			'The `TERRAGRUNT_NO_COLOR` environment variable is deprecated and will be removed in a future version of Terragrunt. Use `TG_NO_COLOR=true` instead.',
+			'The `TG_RENDER_FORMAT` environment variable is deprecated and will be removed in a future version of Terragrunt. Use `TG_FORMAT=json` instead.',
+			'The following experiment(s) are already completed: block-iteration. Please remove any completed experiments, as setting them no longer does anything. For a list of all ongoing experiments, and the outcomes of previous experiments, see https://docs.terragrunt.com/reference/experiments'
+		]);
+		const refused = 'The `TERRAGRUNT_NO_COLOR` environment variable is no longer supported. Use `TG_NO_COLOR=true` instead.';
+		expect(() => read(['--strict-mode'], {TERRAGRUNT_NO_COLOR: 'true'})).to.throw(refused);
+		expect(() => read(['--strict-control', 'terragrunt-prefix-env-vars'], {TERRAGRUNT_NO_COLOR: 'true'})).to.throw(refused);
+		expect(() => read([], {TG_STRICT_CONTROL: 'deprecated-env-vars', TERRAGRUNT_NO_COLOR: 'true'})).to.throw(refused);
+		expect(() => read(['--strict-control', 'legacy-logs'], {TERRAGRUNT_JSON_LOG: 'json'})).to.throw('The `TERRAGRUNT_JSON_LOG` environment variable is no longer supported. Use `TG_LOG_FORMAT=json` instead.');
+	});
+
+	it('refuses what render does not carry out rather than ignoring it', async function () {
+		// Four renders, each a process of its own.
+		this.timeout(30000);
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-render-refused-'));
+		await fs.writeFile(path.join(root, 'terragrunt.hcl'), 'inputs = {}\n');
+		const cli = path.resolve('dist/cli.cjs');
+		for (const [args, message] of [
+			[['--write'], 'tghclp render does not support --write'],
+			[['--json-out', 'out.json'], 'tghclp render does not support --out'],
+			[['--all'], 'tghclp render does not support --all'],
+			[['plan', '-no-color'], 'tghclp render does not pass arguments on to OpenTofu: plan']
+		] as [string[], string][]) {
+			const result = spawnSync(process.execPath, [cli, 'render', '--working-dir', root, ...args], {encoding: 'utf8'});
+			expect(result.status, args.join(' ')).to.equal(1);
+			expect(result.stderr, args.join(' ')).to.equal(`${message}\n`);
 		}
 		await fs.rm(root, {recursive: true, force: true});
 	});

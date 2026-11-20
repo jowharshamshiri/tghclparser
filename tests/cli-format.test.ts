@@ -165,4 +165,20 @@ describe('CLI hcl format', function () {
 		expect(both.status).to.not.equal(0);
 		expect(both.stderr).to.contain('both stdin and path flags are specified');
 	});
+
+	it('checks the global flags and their variables as Terragrunt does for every command', () => {
+		const formatWith = (args: string[], env: Record<string, string>) =>
+			spawnSync(process.execPath, [cli, 'hcl', 'format', '--stdin', ...args], { encoding: 'utf8', input: 'a   = 1\n', env: { ...process.env, ...env } });
+		expect(formatWith(['--no-color', '--no-color'], {}).stdout).to.equal('a = 1\n');
+		for (const [args, env, message] of [
+			[['--log-level', 'nope'], {}, 'invalid value "nope" for flag -log-level: invalid level "nope", supported levels: stderr, stdout, error, warn, info, debug, trace'],
+			[['--experiment', 'nope'], {}, 'invalid value "nope" for flag -experiment: allowed experiment(s): '],
+			[['--non-interactive', '--non-interactive'], {}, 'invalid boolean flag non-interactive: setting the flag multiple times'],
+			[['--strict-control', 'terragrunt-prefix-env-vars'], { TG_HCLFMT_CHECK: 'true' }, 'The `TG_HCLFMT_CHECK` environment variable is no longer supported. Use `TG_CHECK=true` instead.']
+		] as [string[], Record<string, string>, string][]) {
+			const result = formatWith(args, env);
+			expect(result.status, args.join(' ')).to.equal(1);
+			expect(result.stderr, args.join(' ')).to.contain(message);
+		}
+	});
 });

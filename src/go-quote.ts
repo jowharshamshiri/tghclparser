@@ -1,4 +1,13 @@
 /**
+ * Whether Go's unicode.IsPrint holds for a character: a letter, mark, number, punctuation or symbol, or the ASCII space.
+ *
+ * @param character one code point.
+ */
+export function isGoPrint(character: string): boolean {
+	return /^[\p{L}\p{M}\p{N}\p{P}\p{S} ]$/u.test(character);
+}
+
+/**
  * Quotes text the way Go's `%q` does, which is how Terragrunt and the HCL parser show a value in a message: printable
  * characters as they are, and the rest as escapes.
  *
@@ -11,7 +20,7 @@ export function goQuoted(text: string): string {
 	for (const character of text) {
 		const code = character.codePointAt(0)!;
 		if (named[character] !== undefined) out += named[character];
-		else if (/[\p{L}\p{M}\p{N}\p{P}\p{S} ]/u.test(character)) out += character;
+		else if (isGoPrint(character)) out += character;
 		else if (code < 0x80) out += `\\x${code.toString(16).padStart(2, '0')}`;
 		else if (code < 0x10000) out += `\\u${code.toString(16).padStart(4, '0')}`;
 		else out += `\\U${code.toString(16).padStart(8, '0')}`;

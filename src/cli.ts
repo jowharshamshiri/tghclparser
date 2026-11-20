@@ -28,6 +28,7 @@ import { unifiedDiff } from './unified-diff';
 import { createRegistryResolver } from './registry';
 import { decodeJsonConfig, terragruntConfigAsCty } from './terragrunt-config';
 import type { ErrorHook, Hook, TerragruntConfig } from './terragrunt-config';
+import { terragruntConfigAsHcl } from './terragrunt-config-hcl';
 import { RemoteModuleStore } from './remote-modules';
 import { parseHclSyntax } from './syntax';
 import { LocatedWorkspaceError, Workspace } from './Workspace';
@@ -167,7 +168,7 @@ function rootUsage(): string {
 		'',
 		'Configuration commands:',
 		'  hcl validate     Validate Terragrunt HCL files',
-		'  render           Print an evaluated configuration as JSON',
+		'  render           Print an evaluated configuration as HCL or JSON',
 		'  inspect          Print what the language service holds for a configuration as JSON',
 		'  info print       Print evaluation context',
 		'  cache clear      Delete the fetched remote modules from the per-user cache',
@@ -201,13 +202,18 @@ function executionUsage(): string {
 
 function renderUsage(): string {
 	return [
-		'Usage: tghclp render (--json | --format=json) [options]',
+		'Usage: tghclp render [options]',
+		'',
+		'Prints a unit\'s configuration with its includes, locals and functions resolved, as HCL unless JSON is asked',
+		'for. The global options are taken after the command too.',
 		'',
 		'Options:',
-		'  --json                Print the rendered configuration as JSON',
-		'  --format=json        Equivalent to --json (also accepts --format json)',
+		'  --format <hcl|json>   The output format (default: hcl)',
+		'  --json                Print the configuration as JSON; equivalent to --format=json, and wins over',
+		'                        --format=hcl',
 		'  --working-dir <path>  Directory containing the configuration (default: current directory)',
-		'  --config <file>       Configuration filename (default: terragrunt.hcl)',
+		'  --config <file>       Configuration filename (default: terragrunt.hcl.json when present, else',
+		'                        terragrunt.hcl)',
 		'  --help                Show this help'
 	].join('\n');
 }
@@ -874,37 +880,315 @@ function valuedExecutionFlag(argument: string): 'working-dir' | 'tf-path' | unde
 /** Names `terragrunt hcl format` never walks into: its cache, scaffolding templates and generated stacks. */
 const FORMAT_EXCLUDED_NAMES = ['.terragrunt-cache', '.boilerplate', '.terragrunt-stack'];
 
-/** The flags of `terragrunt hcl format` that take a value, and whether each may be given more than once. */
-const FORMAT_VALUE_FLAGS: Record<string, 'once' | 'many'> = {
-	'working-dir': 'once', 'file': 'once', 'exclude-dir': 'many', 'filter': 'many', 'filters-file': 'once',
-	'discovery-boundary': 'once', 'parallelism': 'once', 'experiment': 'many', 'log-custom-format': 'once',
-	'log-format': 'once', 'log-level': 'once', 'no-tip': 'many', 'profile-cpu': 'once', 'profile-dir': 'once',
-	'profile-goroutine': 'once', 'profile-mem': 'once', 'strict-control': 'many'
+/**
+ * The global flags of Terragrunt v1.2.2 that take a value, which every command takes after its name, and whether each
+ * may be given more than once.
+ */
+const GLOBAL_VALUE_FLAGS: Record<string, 'once' | 'many'> = {
+	'working-dir': 'once', 'experiment': 'many', 'log-custom-format': 'once', 'log-format': 'once', 'log-level': 'once',
+	'no-tip': 'many', 'profile-cpu': 'once', 'profile-dir': 'once', 'profile-goroutine': 'once', 'profile-mem': 'once',
+	'strict-control': 'many'
 };
 
-/** Its flags that are switches. */
-const FORMAT_SWITCHES = [
-	'check', 'diff', 'stdin', 'filter-affected', 'filter-allow-destroy', 'no-filters-file', 'queue-ignore-dag-order',
-	'queue-ignore-errors', 'experiment-mode', 'log-disable', 'log-show-abs-paths', 'no-color', 'no-tips',
-	'non-interactive', 'strict-mode', 'help', 'h', 'version', 'v'
+/** Its global flags that are switches. */
+const GLOBAL_SWITCHES = [
+	'experiment-mode', 'log-disable', 'log-show-abs-paths', 'no-color', 'no-tips', 'non-interactive', 'strict-mode',
+	'help', 'version'
 ];
 
+/** The short names of global flags, each read as the flag it stands for. */
+const GLOBAL_ALIASES: Record<string, string> = { h: 'help', v: 'version' };
+
+/** Terragrunt v1.2.2's experiments, and whether each is completed, which setting still accepts with a warning. */
+const EXPERIMENTS: Record<string, 'ongoing' | 'completed'> = {
+	'symlinks': 'ongoing', 'cli-redesign': 'completed', 'stacks': 'completed', 'cas': 'completed', 'report': 'completed',
+	'runner-pool': 'completed', 'auto-provider-cache-dir': 'completed', 'filter-flag': 'completed', 'iac-engine': 'ongoing',
+	'dependency-fetch-output-from-state': 'completed', 'slow-task-reporting': 'ongoing', 'dag-queue-display': 'completed',
+	'stack-dependencies': 'completed', 'catalog-redesign': 'completed', 'mark-many-as-read': 'completed',
+	'azure-backend': 'completed', 'deep-merge': 'ongoing', 'opt-out-auth': 'completed', 'hook-context-env': 'ongoing',
+	'optional-hooks': 'completed', 'profiling': 'completed', 'oci': 'completed', 'version-attribute': 'completed',
+	'otel-logs': 'ongoing', 'catalog-format': 'completed', 'bounded-discovery': 'completed', 'block-iteration': 'completed',
+	'browse-tui': 'ongoing', 'mutable-generate': 'completed', 'optional-dependency-outputs': 'completed', 'tg-login': 'ongoing',
+	'base64gzip-compat': 'ongoing', 'offline-cas': 'ongoing', 'mcp-command': 'ongoing', 'no-dot-terragrunt-cache': 'ongoing',
+	'variables-block': 'ongoing'
+};
+
+/** Terragrunt v1.2.2's strict controls, and whether each is completed, which setting still accepts with a warning. */
+const STRICT_CONTROLS: Record<string, 'active' | 'completed'> = {
+	'deprecated-commands': 'active', 'deprecated-flags': 'active', 'deprecated-env-vars': 'active',
+	'deprecated-configs': 'active', 'skip-dependencies-inputs': 'completed', 'require-explicit-bootstrap': 'completed',
+	'skip-accesslogging-bucket-acl': 'active', 'skip-bucket-root-access': 'active', 'dependency-config-path-file': 'active',
+	'cas-source-inside-stack': 'active', 'cli-redesign': 'active', 'legacy-all': 'completed', 'spin-up': 'completed',
+	'tear-down': 'completed', 'plan-all': 'completed', 'apply-all': 'completed', 'destroy-all': 'completed',
+	'output-all': 'completed', 'validate-all': 'completed', 'terragrunt-prefix-flags': 'completed',
+	'terragrunt-prefix-env-vars': 'active', 'default-commands': 'active', 'legacy-logs': 'active',
+	'root-terragrunt-hcl': 'active', 'bare-include': 'active', 'duplicate-dependency-labels': 'active',
+	'double-star': 'completed', 'dependency-fetch-output-from-state': 'active', 'queue-exclude-external': 'active',
+	'queue-strict-include': 'active', 'units-that-include': 'active', 'disable-command-validation': 'active',
+	'no-destroy-dependencies-check': 'active', 'legacy-internal-tflint': 'active', 'deprecated-hidden-flag': 'active',
+	'disable-dependent-modules': 'active', 'fast-copy': 'active', 'legacy-gcs-public-prefix': 'active',
+	'legacy-base64gzip': 'completed', 'optional-hooks': 'active'
+};
+
+/** The tips `--no-tip` can suppress. */
+const TIPS = [
+	'debugging-docs', 'inputs-read-not-tracked', 'missing-dependency-config', 'stack-filter-nested-not-generated',
+	'stack-target-missing-type-stack', 'windows-symlink-warning'
+];
+
+/** The levels `--log-level` takes, in any case. */
+const LOG_LEVELS = ['stderr', 'stdout', 'error', 'warn', 'info', 'debug', 'trace'];
+
+/** The formats `--log-format` takes. */
+const LOG_FORMATS = ['bare', 'pretty', 'json', 'key-value'];
+
 /**
- * The environment variables that set a flag, the current name first. The rest are names Terragrunt has deprecated
- * and still reads, with a warning, unless strict mode forbids them.
+ * Checks a value of a global flag as Terragrunt does when it sets the flag.
+ *
+ * @param name the flag.
+ * @param value the value.
+ * @returns why the value is refused, or undefined when it is taken.
  */
-const FORMAT_ENVIRONMENT: Record<string, string[]> = {
-	'check': ['TG_CHECK', 'TG_HCLFMT_CHECK', 'TERRAGRUNT_CHECK'],
-	'diff': ['TG_DIFF', 'TG_HCLFMT_DIFF', 'TERRAGRUNT_DIFF'],
-	'stdin': ['TG_STDIN', 'TG_HCLFMT_STDIN', 'TERRAGRUNT_HCLFMT_STDIN'],
-	'file': ['TG_FILE', 'TG_HCLFMT_FILE', 'TERRAGRUNT_HCLFMT_FILE'],
-	'exclude-dir': ['TG_EXCLUDE_DIR', 'TG_HCLFMT_EXCLUDE_DIR', 'TERRAGRUNT_HCLFMT_EXCLUDE_DIR'],
-	'working-dir': ['TG_WORKING_DIR'],
-	'filter': ['TG_FILTER'],
-	'filter-affected': ['TG_FILTER_AFFECTED'],
-	'filters-file': ['TG_FILTERS_FILE'],
-	'no-filters-file': ['TG_NO_FILTERS_FILE'],
-	'strict-mode': ['TG_STRICT_MODE']
+function globalValueProblem(name: string, value: string): string | undefined {
+	switch (name) {
+		case 'log-level':
+			return LOG_LEVELS.some(level => level.toLowerCase() === value.toLowerCase()) ? undefined : `invalid level "${value}", supported levels: ${LOG_LEVELS.join(', ')}`;
+		case 'log-format':
+			return LOG_FORMATS.includes(value) ? undefined : `available values: ${LOG_FORMATS.join(',')}`;
+		case 'experiment':
+			return value in EXPERIMENTS ? undefined : `allowed experiment(s): ${Object.keys(EXPERIMENTS).filter(key => EXPERIMENTS[key] === 'ongoing').sort().join(', ')}`;
+		case 'strict-control':
+			return value in STRICT_CONTROLS ? undefined : `allowed control(s): ${Object.keys(STRICT_CONTROLS).filter(key => STRICT_CONTROLS[key] === 'active').sort().join(', ')}`;
+		case 'no-tip':
+			return TIPS.includes(value) ? undefined : `invalid tip suppression requested for \`--no-tip\`: '${value}'; valid tip(s) for suppression: ${TIPS.join(', ')}`;
+		default:
+			return undefined;
+	}
+}
+
+/**
+ * The environment variables that set each global flag, the current name first. The rest are names Terragrunt has
+ * deprecated and still reads, with a warning, unless a strict control forbids them.
+ */
+const GLOBAL_ENVIRONMENT: Record<string, string[]> = {
+	'working-dir': ['TG_WORKING_DIR', 'TERRAGRUNT_WORKING_DIR'],
+	'log-level': ['TG_LOG_LEVEL', 'TERRAGRUNT_LOG_LEVEL'],
+	'log-disable': ['TG_LOG_DISABLE', 'TERRAGRUNT_LOG_DISABLE'],
+	'log-show-abs-paths': ['TG_LOG_SHOW_ABS_PATHS', 'TERRAGRUNT_LOG_SHOW_ABS_PATHS'],
+	'no-color': ['TG_NO_COLOR', 'TERRAGRUNT_NO_COLOR'],
+	'log-format': ['TG_LOG_FORMAT', 'TERRAGRUNT_LOG_FORMAT', 'TERRAGRUNT_DISABLE_LOG_FORMATTING', 'TERRAGRUNT_JSON_LOG', 'TERRAGRUNT_TF_LOGS_TO_JSON'],
+	'log-custom-format': ['TG_LOG_CUSTOM_FORMAT', 'TERRAGRUNT_LOG_CUSTOM_FORMAT'],
+	'non-interactive': ['TG_NON_INTERACTIVE', 'TERRAGRUNT_NON_INTERACTIVE'],
+	'experiment-mode': ['TG_EXPERIMENT_MODE', 'TERRAGRUNT_EXPERIMENT_MODE'],
+	'experiment': ['TG_EXPERIMENT', 'TERRAGRUNT_EXPERIMENT'],
+	'no-tips': ['TG_NO_TIPS'],
+	'no-tip': ['TG_NO_TIP'],
+	'strict-mode': ['TG_STRICT_MODE', 'TERRAGRUNT_STRICT_MODE'],
+	'strict-control': ['TG_STRICT_CONTROL', 'TERRAGRUNT_STRICT_CONTROL'],
+	'profile-cpu': ['TG_PROFILE_CPU'],
+	'profile-mem': ['TG_PROFILE_MEM'],
+	'profile-goroutine': ['TG_PROFILE_GOROUTINE'],
+	'profile-dir': ['TG_PROFILE_DIR']
+};
+
+/** The deprecated names of `--log-format` that the legacy-logs strict control forbids as well. */
+const LEGACY_LOG_ENVIRONMENT = ['TERRAGRUNT_DISABLE_LOG_FORMATTING', 'TERRAGRUNT_JSON_LOG', 'TERRAGRUNT_TF_LOGS_TO_JSON'];
+
+/**
+ * The global flags whose values each enable something, so that the values in the environment and on the command
+ * line are all taken.
+ */
+const ENABLING_FLAGS = ['experiment', 'strict-control', 'no-tip'];
+
+/** The flags a command was given on its command line, by name, and the arguments that are not flags. */
+interface CommandFlags {
+	values: Map<string, string[]>;
+	switches: Map<string, boolean>;
+	positional: string[];
+}
+
+/** The flags a command takes besides the global ones. */
+interface CommandFlagTable {
+	values: Record<string, 'once' | 'many'>;
+	switches: string[];
+	aliases?: Record<string, string>;
+	/** The environment variables that set each of them, the current name first, as {@link GLOBAL_ENVIRONMENT}. */
+	environment: Record<string, string[]>;
+}
+
+/** What a command was asked for, by its flags and by the environment variables that set them. */
+export interface CommandSettings {
+	/** Whether the flag was set at all, on the command line or in the environment, whatever its value. */
+	given(flag: string): boolean;
+	/** A switch's value: the command line's, else the environment's, else false. */
+	switchOf(flag: string): boolean;
+	/** A flag's values: the command line's, else the environment's; for an enabling flag, both. */
+	valuesOf(flag: string): string[];
+	/** The arguments that are not flags, those after `--` included. */
+	positional: string[];
+}
+
+/**
+ * Reads a command's flags as Terragrunt's command line does: the command's own and the global ones, with one dash or
+ * two and a value after `=` or as the next argument; a flag that takes a value once, or a switch, refused when it is
+ * given again; and each global flag's value checked as it is set.
+ *
+ * @param argv the arguments after the command's name; `--` ends the flags.
+ * @param table the command's own flags.
+ * @returns what was given.
+ * @throws Error in Terragrunt's words when a flag is not one of the command's or the global ones, lacks its value,
+ *   is given twice where it may be given once, or has a value it cannot take.
+ */
+function readCommandFlags(argv: string[], table: CommandFlagTable): CommandFlags {
+	const valueFlags = { ...GLOBAL_VALUE_FLAGS, ...table.values };
+	const switchNames = [...GLOBAL_SWITCHES, ...table.switches];
+	const aliases = { ...GLOBAL_ALIASES, ...table.aliases };
+	const flags: CommandFlags = { values: new Map(), switches: new Map(), positional: [] };
+	let noColorSeen = false;
+	for (let index = 0; index < argv.length; index++) {
+		const argument = argv[index];
+		// Terragrunt keeps only the first --no-color, in any spelling, before it reads the flags.
+		if (argument.startsWith('-') && argument.slice(1).replace(/^-/, '').split('=')[0] === 'no-color') {
+			if (noColorSeen) continue;
+			noColorSeen = true;
+		}
+		if (argument === '--') {
+			flags.positional.push(...argv.slice(index + 1));
+			break;
+		}
+		if (!argument.startsWith('-') || argument === '-') {
+			flags.positional.push(argument);
+			continue;
+		}
+		if (argument.startsWith('---') || argument.startsWith('-=') || argument.startsWith('--=')) throw new Error(`bad flag syntax: ${argument}`);
+		const body = argument.replace(/^--?/, '');
+		const equals = body.indexOf('=');
+		const written = equals < 0 ? body : body.slice(0, equals);
+		const name = aliases[written] ?? written;
+		const inline = equals < 0 ? undefined : body.slice(equals + 1);
+		if (switchNames.includes(name)) {
+			if (flags.switches.has(name)) {
+				throw new Error(inline === undefined ? `invalid boolean flag ${written}: setting the flag multiple times` : `invalid boolean value "${inline}" for -${written}: setting the flag multiple times`);
+			}
+			const value = inline === undefined ? true : parseSwitch(inline);
+			if (value === undefined) throw new Error(`invalid boolean value "${inline}" for -${written}: must be one of: "0", "1", "f", "t", "false", "true"`);
+			flags.switches.set(name, value);
+			continue;
+		}
+		const arity = valueFlags[name];
+		if (arity === undefined) throw new Error(`flag provided but not defined: -${written}`);
+		const value = inline ?? argv[++index];
+		if (value === undefined) throw new Error(`flag needs an argument: -${written}`);
+		const problem = globalValueProblem(name, value);
+		if (problem !== undefined) throw new Error(`invalid value "${value}" for flag -${written}: ${problem}`);
+		if (arity === 'once' && flags.values.has(name)) throw new Error(`invalid value "${value}" for flag -${written}: setting the flag multiple times`);
+		flags.values.set(name, [...(flags.values.get(name) ?? []), value]);
+	}
+	return flags;
+}
+
+/**
+ * Reads what a command was asked for as Terragrunt reads it: first the environment variable of each flag, the current
+ * name before the deprecated ones, its value checked as the flag's would be, then the command line, which overrides
+ * it. A deprecated variable that the command line does not override is warned about, or refused under strict mode
+ * or a strict control against deprecated variables, and each completed experiment or strict control asked for is
+ * warned about, since setting one no longer does anything. Neither warning is given when help or the version is
+ * asked for.
+ *
+ * @param argv the arguments after the command's name.
+ * @param table the command's own flags.
+ * @param env the environment.
+ * @returns what was asked for.
+ * @throws Error in Terragrunt's words for a flag or variable that is refused or has a value it cannot take.
+ */
+function readCommandSettings(argv: string[], table: CommandFlagTable, env: NodeJS.ProcessEnv): CommandSettings {
+	const environment = { ...GLOBAL_ENVIRONMENT, ...table.environment };
+	const valueFlags = { ...GLOBAL_VALUE_FLAGS, ...table.values };
+	const fromEnvironment = new Map<string, { name: string; value: string }>();
+	const environmentSwitches = new Map<string, boolean>();
+	const environmentValues = new Map<string, string[]>();
+	const switchFromEnvironment = (name: string, text: string): boolean => {
+		const value = parseSwitch(text);
+		if (value === undefined) throw new Error(`invalid value "${text}" for env var ${name}: must be one of: "0", "1", "f", "t", "false", "true"`);
+		return value;
+	};
+	for (const [flag, names] of Object.entries(environment)) {
+		// An empty variable is unset.
+		const name = names.find(candidate => env[candidate] !== undefined && env[candidate] !== '');
+		if (name === undefined) continue;
+		const text = env[name]!;
+		fromEnvironment.set(flag, { name, value: text });
+		if (valueFlags[flag] === undefined) {
+			environmentSwitches.set(flag, switchFromEnvironment(name, text));
+			continue;
+		}
+		const items = valueFlags[flag] === 'many' ? text.split(',') : [text];
+		for (const item of items) {
+			const problem = globalValueProblem(flag, item);
+			if (problem !== undefined) throw new Error(`invalid value "${item}" for env var ${name}: ${problem}`);
+		}
+		environmentValues.set(flag, items);
+	}
+	// OpenTofu's TF_INPUT=false asks for what --non-interactive does, and is read when nothing else sets it.
+	if (!environmentSwitches.has('non-interactive') && env.TF_INPUT !== undefined && env.TF_INPUT !== '') {
+		environmentSwitches.set('non-interactive', !switchFromEnvironment('TF_INPUT', env.TF_INPUT));
+	}
+	const flags = readCommandFlags(argv, table);
+	const settings: CommandSettings = {
+		given: flag => flags.switches.has(flag) || flags.values.has(flag) || fromEnvironment.has(flag),
+		switchOf: flag => flags.switches.get(flag) ?? environmentSwitches.get(flag) ?? false,
+		valuesOf: flag => {
+			const written = flags.values.get(flag);
+			const set = environmentValues.get(flag) ?? [];
+			if (ENABLING_FLAGS.includes(flag)) return [...set, ...written ?? []];
+			return written ?? set;
+		},
+		positional: flags.positional
+	};
+	if (flags.switches.has('help') || flags.switches.has('version')) return settings;
+
+	const controls = settings.valuesOf('strict-control');
+	const strict = settings.switchOf('strict-mode') || controls.includes('deprecated-env-vars') || controls.includes('terragrunt-prefix-env-vars');
+	for (const [flag, used] of fromEnvironment) {
+		const current = environment[flag][0];
+		if (used.name === current || flags.switches.has(flag) || flags.values.has(flag)) continue;
+		if (strict || (LEGACY_LOG_ENVIRONMENT.includes(used.name) && controls.includes('legacy-logs'))) {
+			throw new Error(`The \`${used.name}\` environment variable is no longer supported. Use \`${current}=${used.value}\` instead.`);
+		}
+		console.error(`The \`${used.name}\` environment variable is deprecated and will be removed in a future version of Terragrunt. Use \`${current}=${used.value}\` instead.`);
+	}
+	const experiments = [...new Set(settings.valuesOf('experiment'))].filter(name => EXPERIMENTS[name] === 'completed').sort();
+	if (experiments.length > 0) {
+		console.error(`The following experiment(s) are already completed: ${experiments.join(', ')}. Please remove any completed experiments, as setting them no longer does anything. For a list of all ongoing experiments, and the outcomes of previous experiments, see https://docs.terragrunt.com/reference/experiments`);
+	}
+	const completedControls = [...new Set(controls)].filter(name => STRICT_CONTROLS[name] === 'completed').sort();
+	if (completedControls.length > 0) {
+		console.error(`The following strict control(s) are already completed: ${completedControls.join(', ')}. Please remove any completed strict controls, as setting them no longer does anything. For a list of all ongoing strict controls, and the outcomes of previous strict controls, see https://docs.terragrunt.com/reference/strict-mode or get the actual list by running the \`terragrunt info strict\` command.`);
+	}
+	return settings;
+}
+
+/** The flags of `terragrunt hcl format` besides the global ones. */
+const FORMAT_FLAGS: CommandFlagTable = {
+	values: {
+		'file': 'once', 'exclude-dir': 'many', 'filter': 'many', 'filters-file': 'once', 'discovery-boundary': 'once',
+		'parallelism': 'once'
+	},
+	switches: [
+		'check', 'diff', 'stdin', 'filter-affected', 'filter-allow-destroy', 'no-filters-file', 'queue-ignore-dag-order',
+		'queue-ignore-errors'
+	],
+	environment: {
+		'check': ['TG_CHECK', 'TG_HCLFMT_CHECK', 'TERRAGRUNT_CHECK'],
+		'diff': ['TG_DIFF', 'TG_HCLFMT_DIFF', 'TERRAGRUNT_DIFF'],
+		'stdin': ['TG_STDIN', 'TG_HCLFMT_STDIN', 'TERRAGRUNT_HCLFMT_STDIN'],
+		'file': ['TG_FILE', 'TG_HCLFMT_FILE', 'TERRAGRUNT_HCLFMT_FILE'],
+		'exclude-dir': ['TG_EXCLUDE_DIR', 'TG_HCLFMT_EXCLUDE_DIR', 'TERRAGRUNT_HCLFMT_EXCLUDE_DIR'],
+		'filter': ['TG_FILTER'],
+		'filter-affected': ['TG_FILTER_AFFECTED'],
+		'filters-file': ['TG_FILTERS_FILE'],
+		'no-filters-file': ['TG_NO_FILTERS_FILE']
+	}
 };
 
 /** What `hcl format` was asked to do. */
@@ -963,79 +1247,11 @@ async function filterFileLines(file: string): Promise<string[]> {
  *   where it may be given once; and when a filter is not valid.
  */
 async function parseFormatArgs(argv: string[], env: NodeJS.ProcessEnv): Promise<FormatOptions | 'help' | 'version'> {
-	const values = new Map<string, string[]>();
-	const switches = new Map<string, boolean>();
-	for (let index = 0; index < argv.length; index++) {
-		const argument = argv[index];
-		if (argument === '--') break;
-		// An argument that is not a flag is ignored, as Terragrunt ignores it.
-		if (!argument.startsWith('-') || argument === '-') continue;
-		const body = argument.replace(/^--?/, '');
-		const equals = body.indexOf('=');
-		const name = equals < 0 ? body : body.slice(0, equals);
-		const inline = equals < 0 ? undefined : body.slice(equals + 1);
-		if (FORMAT_SWITCHES.includes(name)) {
-			const value = inline === undefined ? true : parseSwitch(inline);
-			if (value === undefined) throw new Error(`invalid boolean value "${inline}" for flag -${name}`);
-			switches.set(name, value);
-			continue;
-		}
-		const arity = FORMAT_VALUE_FLAGS[name];
-		if (arity === undefined) throw new Error(`flag provided but not defined: -${name}`);
-		const value = inline ?? argv[++index];
-		if (value === undefined) throw new Error(`flag needs an argument: -${name}`);
-		if (arity === 'once' && values.has(name)) throw new Error(`invalid value "${value}" for flag -${name}: setting the flag multiple times`);
-		values.set(name, [...(values.get(name) ?? []), value]);
-	}
-	if (switches.get('help') || switches.get('h')) return 'help';
-	if (switches.get('version') || switches.get('v')) return 'version';
-
-	/**
-	 * Finds the environment variable that sets a flag: the current name, else the first deprecated one set.
-	 *
-	 * @param flag the flag.
-	 * @returns the variable's name and value, or undefined when none is set.
-	 */
-	const fromEnvironment = (flag: string): [string, string] | undefined => {
-		const names = FORMAT_ENVIRONMENT[flag] ?? [];
-		const name = names.find(candidate => env[candidate] !== undefined && env[candidate] !== '');
-		return name === undefined ? undefined : [name, env[name]!];
-	};
-	/**
-	 * Reads a switch from its flag, else from the environment.
-	 *
-	 * @param flag the flag.
-	 * @returns the switch's value, false when it is set nowhere.
-	 */
-	const switchOf = (flag: string): boolean => {
-		if (switches.has(flag)) return switches.get(flag)!;
-		const found = fromEnvironment(flag);
-		if (!found) return false;
-		const value = parseSwitch(found[1]);
-		if (value === undefined) throw new Error(`invalid value "${found[1]}" for env var ${found[0]}: must be one of: "0", "1", "f", "t", "false", "true"`);
-		return value;
-	};
-	/**
-	 * Reads a flag's values from the command line, else from the environment, where a list is comma-separated.
-	 *
-	 * @param flag the flag.
-	 * @returns the values, none when it is set nowhere.
-	 */
-	const valuesOf = (flag: string): string[] => {
-		if (values.has(flag)) return values.get(flag)!;
-		const found = fromEnvironment(flag);
-		if (!found) return [];
-		return FORMAT_VALUE_FLAGS[flag] === 'many' ? found[1].split(',') : [found[1]];
-	};
-
-	const strict = switchOf('strict-mode') || valuesOf('strict-control').includes('deprecated-env-vars');
-	for (const [flag, names] of Object.entries(FORMAT_ENVIRONMENT)) {
-		const used = fromEnvironment(flag);
-		if (!used || used[0] === names[0] || switches.has(flag) || values.has(flag)) continue;
-		const advice = `The \`${used[0]}\` environment variable is deprecated and will be removed in a future version of Terragrunt. Use \`${names[0]}=${used[1]}\` instead.`;
-		if (strict) throw new Error(advice);
-		console.error(advice);
-	}
+	// An argument that is not a flag is ignored, as Terragrunt ignores it.
+	const { given, switchOf, valuesOf } = readCommandSettings(argv, FORMAT_FLAGS, env);
+	// Help and version are shown whatever value they are given, as Terragrunt shows them.
+	if (given('help')) return 'help';
+	if (given('version')) return 'version';
 	const parallelism = valuesOf('parallelism')[0];
 	if (parallelism !== undefined && !/^[+-]?\d+$/.test(parallelism)) throw new Error(`invalid value "${parallelism}" for flag -parallelism: must be 32-bit integer`);
 
@@ -1443,38 +1659,72 @@ async function stackLifecycle(command: 'run' | 'output' | 'clean', argv: string[
 	return executeTerraformCommand(executionArgs);
 }
 
-async function renderConfig(argv: string[]): Promise<number> {
-	let workingDir = process.cwd();
-	let configName: string | undefined;
-	let json = false;
-	for (let index = 0; index < argv.length; index++) {
-		const argument = argv[index];
-		if (argument === '--help' || argument === '-h') {
-			console.log(renderUsage());
-			return 0;
-		}
-		if (argument === '--json' || argument === '--format=json') { json = true; continue; }
-		if (argument === '--format') {
-			const format = argv[++index];
-			if (format !== 'json') throw new Error('Only JSON render output is supported');
-			json = true;
-			continue;
-		}
-		if (argument === '--working-dir') {
-			const value = argv[++index];
-			if (!value) throw new Error('--working-dir requires a path');
-			workingDir = path.resolve(value);
-			continue;
-		}
-		if (argument === '--config') {
-			const value = argv[++index];
-			if (!value) throw new Error('--config requires a path');
-			configName = value;
-			continue;
-		}
-		if (argument.startsWith('-')) throw new Error(`Unknown render option ${argument}`);
+/** The flags of `terragrunt render` besides the global ones, with `--config`, the one flag of `run` it reads. */
+const RENDER_FLAGS: CommandFlagTable = {
+	values: { 'format': 'once', 'config': 'once', 'out': 'once' },
+	switches: ['json', 'write', 'with-metadata', 'disable-dependent-modules', 'all'],
+	aliases: { 'w': 'write', 'a': 'all', 'json-out': 'out' },
+	// Every flag of render's own is read from TG_RENDER_<NAME> as well, a name Terragrunt has deprecated.
+	environment: {
+		'format': ['TG_FORMAT', 'TG_RENDER_FORMAT'],
+		'json': ['TG_JSON', 'TG_RENDER_JSON'],
+		'write': ['TG_WRITE', 'TG_RENDER_WRITE'],
+		'out': ['TG_OUT', 'TG_RENDER_JSON_OUT', 'TERRAGRUNT_JSON_OUT', 'TG_RENDER_OUT'],
+		'with-metadata': ['TG_WITH_METADATA', 'TG_RENDER_JSON_WITH_METADATA', 'TERRAGRUNT_WITH_METADATA', 'TG_RENDER_WITH_METADATA'],
+		'disable-dependent-modules': [
+			'TG_DISABLE_DEPENDENT_MODULES', 'TG_RENDER_JSON_DISABLE_DEPENDENT_MODULES', 'TERRAGRUNT_JSON_DISABLE_DEPENDENT_MODULES',
+			'TG_RENDER_DISABLE_DEPENDENT_MODULES'
+		],
+		'all': ['TG_ALL', 'TG_RENDER_ALL'],
+		'config': ['TG_CONFIG', 'TERRAGRUNT_CONFIG']
 	}
-	if (!json) throw new Error('Render output requires --json or --format=json');
+};
+
+/** The switches of `terragrunt render` that tghclp does not carry out, refused when turned on rather than ignored. */
+const RENDER_UNSUPPORTED_SWITCHES = ['write', 'with-metadata', 'disable-dependent-modules', 'all'];
+
+/**
+ * Reads what `render` was asked for, by its flags, the global ones and their environment variables.
+ *
+ * @param argv the arguments after `render`.
+ * @param env the environment.
+ * @returns what was asked for.
+ * @throws Error in Terragrunt's words for a flag or variable that is refused or has a value it cannot take.
+ */
+export function readRenderSettings(argv: string[], env: NodeJS.ProcessEnv): CommandSettings {
+	return readCommandSettings(argv, RENDER_FLAGS, env);
+}
+
+/**
+ * Runs `tghclp render`, which prints a unit's configuration as `terragrunt render` does: as HCL unless JSON is asked
+ * for with `--json` or `--format json`, `--json` winning over `--format hcl`, and with the global flags taken after the
+ * command.
+ *
+ * @param argv the arguments after `render`.
+ * @returns 0 once the configuration is printed, 2 when a part of it could not be resolved.
+ * @throws when a flag is refused, the format is not hcl or json, or the configuration cannot be read.
+ */
+async function renderConfig(argv: string[]): Promise<number> {
+	const { given, switchOf, valuesOf, positional } = readRenderSettings(argv, process.env);
+	// Help and version are shown whatever value they are given, as Terragrunt shows them.
+	if (given('help')) {
+		console.log(renderUsage());
+		return 0;
+	}
+	if (given('version')) {
+		await printVersion();
+		return 0;
+	}
+	const unsupported = RENDER_UNSUPPORTED_SWITCHES.find(name => switchOf(name)) ?? (given('out') ? 'out' : undefined);
+	if (unsupported !== undefined) throw new Error(`tghclp render does not support --${unsupported}`);
+	// Terragrunt passes arguments that are not its flags on to OpenTofu, where get_terraform_cli_args() sees them.
+	if (positional.length > 0) throw new Error(`tghclp render does not pass arguments on to OpenTofu: ${positional.join(' ')}`);
+	const format = valuesOf('format')[0];
+	if (format !== undefined && format !== 'hcl' && format !== 'json') throw new Error(`invalid format: ${format}`);
+	// --json sets the format whatever value it is given, after --format, as Terragrunt's flag action does.
+	const json = given('json') || format === 'json';
+	const workingDir = path.resolve(valuesOf('working-dir')[0] ?? process.cwd());
+	let configName = valuesOf('config')[0];
 	// Terragrunt looks for its JSON configuration first.
 	configName ??= await pathExists(path.join(workingDir, 'terragrunt.hcl.json')) ? 'terragrunt.hcl.json' : 'terragrunt.hcl';
 	const configPath = path.resolve(workingDir, configName);
@@ -1486,12 +1736,15 @@ async function renderConfig(argv: string[]): Promise<number> {
 	if (realConfig.endsWith('.json')) {
 		const parsed: unknown = parseJsonDocument(content);
 		validateJSONShape(parsed, path.basename(realConfig));
-		process.stdout.write(`${renderedJson(terragruntConfigAsCty(await decodeJsonConfig(parsed, realConfig)))}\n`);
+		const config = await decodeJsonConfig(parsed, realConfig);
+		process.stdout.write(json ? `${renderedJson(terragruntConfigAsCty(config))}\n` : terragruntConfigAsHcl(config));
 		return 0;
 	}
-	const evaluator = evaluatorFor({terraformCommand: 'render', partialRender: true});
+	// Terragrunt passes OpenTofu -no-color when colour is turned off, and get_terraform_cli_args() sees it.
+	const terraformCliArgs = ['render', ...(switchOf('no-color') ? ['-no-color'] : [])];
+	const evaluator = evaluatorFor({terraformCommand: 'render', terraformCliArgs, experiments: valuesOf('experiment'), partialRender: true});
 	const config = await evaluator.evaluateRenderedConfig(realConfig, content, root, true);
-	process.stdout.write(`${renderedJson(terragruntConfigAsCty(config))}\n`);
+	process.stdout.write(json ? `${renderedJson(terragruntConfigAsCty(config))}\n` : terragruntConfigAsHcl(config));
 	const unresolved = evaluator.unresolvedRenderFields();
 	for (const entry of unresolved) {
 		process.stderr.write(`unresolved ${entry.field} in ${entry.file}: ${entry.reason}\n`);

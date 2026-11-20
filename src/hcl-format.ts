@@ -300,7 +300,27 @@ function formatCells(lines: FormatLine[]): void {
  * @returns the formatted text.
  */
 export function formatHclTokens(source: string): string {
-	const tokens = formatTokens(source);
+	return layOut(formatTokens(source));
+}
+
+/**
+ * Lays out tokens built rather than scanned, as hclwrite's `format` does to the tokens of a file it generates: each
+ * token's spaces before it are set from the canonical layout alone.
+ *
+ * @param tokens the tokens, without an `EOF` token.
+ * @returns the text.
+ */
+export function layOutHclTokens(tokens: readonly { type: HclTokenType; text: string }[]): string {
+	return layOut([...tokens.map(token => ({ type: token.type, text: token.text, spacesBefore: 0 })), { type: 'EOF', text: '', spacesBefore: 0 }]);
+}
+
+/**
+ * Sets the spaces before each token from the canonical layout and writes the tokens out.
+ *
+ * @param tokens the tokens, ending with an `EOF` token.
+ * @returns the text.
+ */
+function layOut(tokens: FormatToken[]): string {
 	const lines = linesForFormat(tokens);
 	formatIndent(lines);
 	formatSpaces(lines);
