@@ -1004,7 +1004,7 @@ describe('semantic configuration evaluation', () => {
 		const plain = result.inputs ? plainValue(result.inputs) as Record<string, unknown> : {};
 		assert.equal(typeof plain.compressed, 'string');
 		assert.equal(gunzipSync(Buffer.from(String(plain.compressed), 'base64')).toString(), 'hello');
-		assert.match(String(plain.password_hash), /^\$2[aby]\$10\$/u);
+		assert.match(String(plain.password_hash), /^\$2a\$10\$/u);
 		assert.match(String(plain.generated_at), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/u);
 		assert.equal(plain.decrypted, 'secret');
 	});

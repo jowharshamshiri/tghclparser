@@ -1197,7 +1197,7 @@
 		},
 		{
 			"name": "bcrypt",
-			"description": "Returns a bcrypt hash of the given string.\n\n* Generates a bcrypt hash of the input string.\n* Cost parameter determines the computational complexity.",
+			"description": "Returns a bcrypt hash of the given string, in the $2a$ format.\n\n* Generates a bcrypt hash of the input string, which may be at most 72 bytes.\n* Cost parameter determines the computational complexity.",
 			"parameters": [
 				{
 					"name": "str",
@@ -1213,10 +1213,9 @@
 						"number"
 					],
 					"required": false,
-					"description": "Cost parameter for bcrypt (default: 10)",
+					"description": "Cost parameter for bcrypt (default: 10, also used for a cost below 4; at most 31)",
 					"defaultValue": 10,
 					"validation": {
-						"min": 4,
 						"max": 31
 					}
 				}
@@ -1228,7 +1227,7 @@
 				],
 				"description": "Bcrypt hash of the input string",
 				"validation": {
-					"pattern": "^\\$2[ayb]\\$[0-9]{2}\\$[A-Za-z0-9./]{53}$"
+					"pattern": "^\\$2a\\$[0-9]{2}\\$[A-Za-z0-9./]{53}$"
 				}
 			},
 			"examples": [

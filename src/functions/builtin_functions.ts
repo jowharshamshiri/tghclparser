@@ -1,4 +1,4 @@
-import { constants, createHash, privateDecrypt, randomUUID } from 'node:crypto';
+import { constants, createHash, privateDecrypt, randomBytes, randomUUID } from 'node:crypto';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import path from 'node:path';
 import bcrypt from 'bcryptjs';
@@ -74,6 +74,19 @@ function integerArgument(args: RuntimeValue<ValueType>[], index: number, paramet
 		if (what === undefined) throw error;
 		throw new Error(`${what}: ${(error as Error).message}`);
 	}
+}
+
+/**
+ * Go's bcrypt.GenerateFromPassword, failing as OpenTofu's bcrypt reports it: a password of more than 72 bytes is
+ * refused, a cost below 4 is taken as the default 10 and one above 31 is refused, and the hash carries Go's version,
+ * `$2a$`.
+ */
+function goBcrypt(password: string, cost: bigint): string {
+	const failed = (message: string) => new Error(`error occurred generating password ${message}`);
+	if (Buffer.byteLength(password, 'utf8') > 72) throw failed('bcrypt: password length exceeds 72 bytes');
+	const rounds = cost < 4n ? 10n : cost;
+	if (rounds > 31n) throw failed(`crypto/bcrypt: cost ${rounds} is outside allowed inclusive range 4..31`);
+	return bcrypt.hashSync(password, `$2a$${String(rounds).padStart(2, '0')}$${bcrypt.encodeBase64(randomBytes(16), 16)}`);
 }
 
 /**
@@ -1134,11 +1147,10 @@ export const builtinFunctionGroup = {
 		reverse: async (args: RuntimeValue<ValueType>[]) => arrayValue([...arrayArgument(args, 0, 'reverse')].reverse()),
 		sensitive: async (args: RuntimeValue<ValueType>[]) => makeSensitiveValue(requireArgument(args, 0, 'sensitive')),
 		bcrypt: async (args: RuntimeValue<ValueType>[]) => {
+			// OpenTofu reads the cost into a Go int before it counts the arguments.
+			const cost = args.length > 1 ? numberArgument(args, 1, 'cost').toGoInt64() : 10n;
 			if (args.length > 2) throw new Error('bcrypt() takes no more than two arguments');
-			const password = stringArgument(args, 0, 'bcrypt');
-			const cost = args[1] ? integerArgument(args, 1, 'cost') : 10;
-			if (!Number.isInteger(cost) || cost < 4 || cost > 31) throw new Error('bcrypt cost must be an integer between 4 and 31');
-			return stringValue(bcrypt.hashSync(password, cost));
+			return markedLike(stringValue(goBcrypt(convertedString(requireArgument(args, 0, 'str'), 'str'), cost)), args);
 		},
 		rsadecrypt: async (args: RuntimeValue<ValueType>[]) => {
 			const ciphertext = stringArgument(args, 0, 'rsadecrypt');

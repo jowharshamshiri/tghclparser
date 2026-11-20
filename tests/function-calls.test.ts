@@ -3,6 +3,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import bcryptjs from 'bcryptjs';
+
 import { ConfigEvaluator } from '../src/Evaluator';
 import { plainValue } from './plain-values';
 
@@ -337,6 +339,77 @@ describe('function calls as Terragrunt evaluates them', () => {
 				['""', 0]
 			];
 			for (const [text, count] of lengths) assert.equal(await value(`length(${text})`), count, text);
+		});
+	});
+
+	describe('bcrypt', function () {
+		// Each hash at the default cost takes a tenth of a second to write and as long to check.
+		this.timeout(20000);
+
+		// A hash Terragrunt v1.2.2 gave for bcrypt("hello", 5): the check below accepts what Go's bcrypt writes, so it is
+		// the same check that holds each hash the parser writes. The salt is random, so no hash is compared as a whole.
+		const goHash = '$2a$05$8du67BcaXK35tB1B4frdp.yAXPWH74Ty5i.nApeU4joFHsdI8RfGO';
+
+		const hashOf = async (expression: string, password: string, cost: string) => {
+			const hash = String(await value(expression));
+			assert.match(hash, new RegExp(`^\\$2a\\$${cost}\\$[./A-Za-z0-9]{53}$`, 'u'), expression);
+			assert.equal(bcryptjs.compareSync(password, hash), true, expression);
+			// Changed at its start, since bcrypt reads no further than 72 bytes.
+			assert.equal(bcryptjs.compareSync(`!${password.slice(1)}`, hash), false, expression);
+		};
+
+		it('checks hashes as Go\'s bcrypt writes them', () => {
+			assert.equal(bcryptjs.compareSync('hello', goHash), true);
+			assert.equal(bcryptjs.compareSync('hellp', goHash), false);
+		});
+
+		it('writes a $2a$ hash at cost 10 by default', async () => {
+			await hashOf('bcrypt("hello")', 'hello', '10');
+		});
+
+		it('writes a $2a$ hash at the cost given', async () => {
+			await hashOf('bcrypt("hello", 4)', 'hello', '04');
+			await hashOf('bcrypt("hello", 5)', 'hello', '05');
+			await hashOf('bcrypt("hello", "6")', 'hello', '06');
+		});
+
+		it('takes a cost below 4 as the default cost', async () => {
+			for (const cost of ['3', '0', '-9223372036854775808']) await hashOf(`bcrypt("hello", ${cost})`, 'hello', '10');
+		});
+
+		it('hashes a number or a bool as the string it converts to', async () => {
+			await hashOf('bcrypt(5, 4)', '5', '04');
+			await hashOf('bcrypt(true, 4)', 'true', '04');
+		});
+
+		it('marks the hash sensitive when either argument is', async () => {
+			assert.equal(await value('issensitive(bcrypt(sensitive("x"), 4))'), true);
+			assert.equal(await value('issensitive(bcrypt("x", sensitive(4)))'), true);
+			assert.equal(await value('issensitive(bcrypt("x", 4))'), false);
+			await hashOf('nonsensitive(bcrypt(sensitive("x"), 4))', 'x', '04');
+		});
+
+		it('hashes a string of up to 72 bytes', async () => {
+			await hashOf(`bcrypt("${'a'.repeat(72)}", 4)`, 'a'.repeat(72), '04');
+			await hashOf(`bcrypt("${'é'.repeat(36)}", 4)`, 'é'.repeat(36), '04');
+		});
+
+		it('refuses what Go\'s bcrypt refuses', async () => {
+			const calls: Array<[string, string]> = [
+				['bcrypt("hello", 32)', 'error occurred generating password crypto/bcrypt: cost 32 is outside allowed inclusive range 4..31'],
+				['bcrypt("hello", 9007199254740993)', 'error occurred generating password crypto/bcrypt: cost 9007199254740993 is outside allowed inclusive range 4..31'],
+				[`bcrypt("${'a'.repeat(73)}")`, 'error occurred generating password bcrypt: password length exceeds 72 bytes'],
+				[`bcrypt("${'é'.repeat(36)}e", 4)`, 'error occurred generating password bcrypt: password length exceeds 72 bytes'],
+				[`bcrypt("${'a'.repeat(73)}", 32)`, 'error occurred generating password bcrypt: password length exceeds 72 bytes'],
+				['bcrypt("hello", 4.5)', 'value must be a whole number, between -9223372036854775808 and 9223372036854775807'],
+				['bcrypt("hello", 1e30)', 'value must be a whole number, between -9223372036854775808 and 9223372036854775807'],
+				['bcrypt("hello", 9223372036854775808)', 'value must be a whole number, between -9223372036854775808 and 9223372036854775807'],
+				['bcrypt("hello", 4.5, 5)', 'value must be a whole number, between -9223372036854775808 and 9223372036854775807'],
+				['bcrypt(null)', 'Invalid value for "str" parameter: argument must not be null.'],
+				['bcrypt("hello", "x")', 'Invalid value for "cost" parameter: a number is required.'],
+				['bcrypt("hello", null)', 'Invalid value for "cost" parameter: argument must not be null.']
+			];
+			for (const [call, message] of calls) assert.equal(await failure(call), message, call);
 		});
 	});
 });
