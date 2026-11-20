@@ -2422,6 +2422,61 @@ async function validateFile(
 	}];
 }
 
+/**
+ * Maps items through an async function with at most `limit` calls in flight.
+ * Once a call fails, no more are started, and the calls already running finish before the failure is thrown.
+ *
+ * @param items the items to map.
+ * @param limit the most calls running at once.
+ * @param fn the function applied to each item.
+ * @param onResult called with each result and its index as soon as it is ready, in the order calls finish.
+ * @returns the results, in the order of `items`.
+ * @throws the error of the failed call with the lowest index.
+ */
+export async function mapLimited<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>, onResult?: (result: R, index: number) => void): Promise<R[]> {
+	const results = Array.from<R>({ length: items.length });
+	let next = 0;
+	let failedAt = Number.POSITIVE_INFINITY;
+	let failure: unknown;
+	const worker = async (): Promise<void> => {
+		while (failedAt === Number.POSITIVE_INFINITY && next < items.length) {
+			const index = next++;
+			try {
+				results[index] = await fn(items[index]);
+			} catch (error) {
+				if (index < failedAt) {
+					failedAt = index;
+					failure = error;
+				}
+				return;
+			}
+			onResult?.(results[index], index);
+		}
+	};
+	await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
+	if (failedAt !== Number.POSITIVE_INFINITY) throw failure;
+	return results;
+}
+
+/**
+ * Puts results that arrive out of order back in order.
+ *
+ * @param emit called with each result once every result before it has been emitted.
+ * @returns a function to call with each result and its index, each index from 0 once.
+ */
+export function inOrder<R>(emit: (result: R) => void): (result: R, index: number) => void {
+	const waiting = new Map<number, R>();
+	let next = 0;
+	return (result, index) => {
+		waiting.set(index, result);
+		while (waiting.has(next)) {
+			const ready = waiting.get(next)!;
+			waiting.delete(next++);
+			emit(ready);
+		}
+	};
+}
+
 async function dependencyOrderedFiles(files: string[]): Promise<string[]> {
 	const byDirectory = new Map<string, string>();
 	for (const file of files) byDirectory.set(path.dirname(await fs.realpath(file)), file);
@@ -2600,17 +2655,21 @@ async function main(argv: string[]): Promise<number> {
 	const roots = parsed.paths.length > 0 ? parsed.paths.map(target => path.resolve(parsed.workingDir, target)) : [parsed.workingDir];
 	const files = (await Promise.all(roots.map(collectFiles))).flat().sort();
 	if (files.length === 0) throw new Error(`No Terragrunt HCL files found under ${parsed.workingDir}`);
-	const diagnostics = (await Promise.all(files.map(file => validateFile(file, parsed.workingDir, parsed.experiments, 'validate', true, parsed.offline)))).flat();
-	if (parsed.showConfigPath) {
-		if (diagnostics.length > 0) {
-			const paths = [...new Set(diagnostics.map(item => item.range.filename))];
-			if (parsed.json) process.stdout.write(`${JSON.stringify(paths)}\n`);
-			else for (const file of paths) process.stdout.write(`${file}\n`);
+	const printed = new Set<string>();
+	const print = (items: DiagnosticOutput[]): void => {
+		if (parsed.json) return;
+		for (const item of items) {
+			if (!parsed.showConfigPath) process.stderr.write(`${item.range.filename}: ${item.summary}: ${item.detail}\n`);
+			else if (!printed.has(item.range.filename)) {
+				printed.add(item.range.filename);
+				process.stdout.write(`${item.range.filename}\n`);
+			}
 		}
-	} else if (parsed.json) {
-		if (diagnostics.length > 0) process.stdout.write(`${JSON.stringify(diagnostics)}\n`);
-	} else if (diagnostics.length > 0) {
-		for (const item of diagnostics) process.stderr.write(`${item.range.filename}: ${item.summary}: ${item.detail}\n`);
+	};
+	const diagnostics = (await mapLimited(files, os.availableParallelism(), file => validateFile(file, parsed.workingDir, parsed.experiments, 'validate', true, parsed.offline), inOrder(print))).flat();
+	if (parsed.json && diagnostics.length > 0) {
+		const output = parsed.showConfigPath ? [...new Set(diagnostics.map(item => item.range.filename))] : diagnostics;
+		process.stdout.write(`${JSON.stringify(output)}\n`);
 	}
 	return diagnostics.length === 0 ? 0 : 1;
 }
