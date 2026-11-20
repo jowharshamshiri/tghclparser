@@ -930,6 +930,15 @@ const STRICT_CONTROLS: Record<string, 'active' | 'completed'> = {
 	'legacy-base64gzip': 'completed', 'optional-hooks': 'active'
 };
 
+/**
+ * The strict controls a command runs with, as Terragrunt enables them: every active one under `--strict-mode`, and
+ * otherwise those `--strict-control` names.
+ */
+function enabledStrictControls(settings: CommandSettings): string[] {
+	if (settings.switchOf('strict-mode')) return Object.keys(STRICT_CONTROLS).filter(name => STRICT_CONTROLS[name] === 'active');
+	return [...new Set(settings.valuesOf('strict-control'))];
+}
+
 /** The tips `--no-tip` can suppress. */
 const TIPS = [
 	'debugging-docs', 'inputs-read-not-tracked', 'missing-dependency-config', 'stack-filter-nested-not-generated',
@@ -1705,7 +1714,8 @@ export function readRenderSettings(argv: string[], env: NodeJS.ProcessEnv): Comm
  * @throws when a flag is refused, the format is not hcl or json, or the configuration cannot be read.
  */
 async function renderConfig(argv: string[]): Promise<number> {
-	const { given, switchOf, valuesOf, positional } = readRenderSettings(argv, process.env);
+	const settings = readRenderSettings(argv, process.env);
+	const { given, switchOf, valuesOf, positional } = settings;
 	// Help and version are shown whatever value they are given, as Terragrunt shows them.
 	if (given('help')) {
 		console.log(renderUsage());
@@ -1742,7 +1752,7 @@ async function renderConfig(argv: string[]): Promise<number> {
 	}
 	// Terragrunt passes OpenTofu -no-color when colour is turned off, and get_terraform_cli_args() sees it.
 	const terraformCliArgs = ['render', ...(switchOf('no-color') ? ['-no-color'] : [])];
-	const evaluator = evaluatorFor({terraformCommand: 'render', terraformCliArgs, experiments: valuesOf('experiment'), partialRender: true});
+	const evaluator = evaluatorFor({terraformCommand: 'render', terraformCliArgs, experiments: valuesOf('experiment'), strictControls: enabledStrictControls(settings), partialRender: true});
 	const config = await evaluator.evaluateRenderedConfig(realConfig, content, root, true);
 	process.stdout.write(json ? `${renderedJson(terragruntConfigAsCty(config))}\n` : terragruntConfigAsHcl(config));
 	const unresolved = evaluator.unresolvedRenderFields();
@@ -1795,6 +1805,7 @@ function evaluatorFor(options: {
 	terraformCommand?: string;
 	terraformCliArgs?: string[];
 	experiments?: string[];
+	strictControls?: readonly string[];
 	tfPath?: string;
 	partialRender?: boolean;
 	skipOutputs?: boolean;
@@ -1806,6 +1817,8 @@ function evaluatorFor(options: {
 		terraformCommand,
 		terraformCliArgs: options.terraformCliArgs ?? [],
 		...(options.experiments ? {experiments: options.experiments} : {}),
+		...(options.strictControls ? {strictControls: options.strictControls} : {}),
+		warn: message => console.error(message),
 		workspaceTrusted: true,
 		allowedPaths,
 		partialRender: options.partialRender,
@@ -1892,21 +1905,37 @@ function allowedMocks(request: DependencyRequest, terraformCommand: string): Map
 }
 
 /**
- * A dependency's outputs without reading them: the mocks the command is allowed, or none.
+ * A dependency's outputs without reading them: its mocks when it is disabled, else the mocks the command is allowed,
+ * or none.
  *
  * Terragrunt's `hcl validate` never runs `output`, so a configuration validates where its dependencies cannot be read,
  * such as a fresh checkout with no providers installed. No outputs is unresolved, which validation does not report.
  *
  * @param request the dependency the evaluator found, with its evaluated mock settings.
  * @param terraformCommand the command being checked for, which decides whether the mocks apply.
- * @returns `{ outputs: … }` from the allowed mocks, or undefined.
+ * @returns `{ outputs: … }` from the mocks, or undefined.
  */
 async function unreadDependencyOutputs(
 	request: DependencyRequest,
 	terraformCommand: string
 ): Promise<RuntimeValue<ValueType> | undefined> {
-	const mocks = allowedMocks(request, terraformCommand);
+	const mocks = request.enabled ? allowedMocks(request, terraformCommand) : request.mockOutputs?.value as Map<string, RuntimeValue<ValueType>> | undefined;
 	return mocks === undefined ? undefined : outputsValue(new Map(mocks));
+}
+
+/**
+ * What a dependency that reads no outputs gives, as Terragrunt's setRenderedOutputs leaves it: a disabled one its
+ * mocks, one that skips its outputs its mocks where the command may see them, which a render always may, and
+ * otherwise no outputs at all.
+ *
+ * @param request the dependency, disabled or skipping its outputs, with its evaluated mock settings.
+ * @param terraformCommand the command being run.
+ * @returns `{ outputs: … }` from the mocks, or a value without `outputs`.
+ */
+function skippedDependencyOutputs(request: DependencyRequest, terraformCommand: string): RuntimeValue<ValueType> {
+	const declared = request.mockOutputs?.value as Map<string, RuntimeValue<ValueType>> | undefined;
+	const shown = !request.enabled || terraformCommand === 'render' || allowedMocks(request, terraformCommand) !== undefined;
+	return shown && declared !== undefined ? outputsValue(new Map(declared)) : makeObjectValue(new Map());
 }
 
 /**
@@ -1921,7 +1950,9 @@ async function dependencyOutputs(
 	tfPath: string,
 	terraformCommand: string
 ): Promise<RuntimeValue<ValueType> | undefined> {
-	const {name, targetDir: target} = request;
+	if (!request.enabled || request.skipOutputs) return skippedDependencyOutputs(request, terraformCommand);
+	const name = request.name;
+	const target = request.target!.dir;
 	const mocks = allowedMocks(request, terraformCommand);
 	const mocksApply = mocks !== undefined;
 	const declared = request.mockOutputs?.value as Map<string, RuntimeValue<ValueType>> | undefined;

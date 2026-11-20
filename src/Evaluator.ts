@@ -34,8 +34,29 @@ import {
 	templatePart,
 	unwrapSensitive
 } from './functions/utils';
-import { decodeConfigFile, mergeDeep, mergeShallow, terragruntConfigAsCty, UNRESOLVED } from './terragrunt-config';
+import { decodeConfigFile, dependencyAddress, mergeDeep, mergeShallow, terragruntConfigAsCty, UNRESOLVED } from './terragrunt-config';
 import type { ConfigBlock, ConfigBody, Plain, TerragruntConfig } from './terragrunt-config';
+import {
+	conflictingMetaArgumentsMessage,
+	countElements,
+	dependencyLabelCollisionMessage,
+	DUPLICATE_DEPENDENCY_WARNING,
+	duplicateDependencyConfigPathMessage,
+	duplicateDependencyMessage,
+	duplicateExpansionBlockMessage,
+	EXPANSION_BLOCK,
+	forEachElements,
+	hclRange,
+	type InstanceKey,
+	instanceAddress,
+	instanceKeyText,
+	type MetaArgument,
+	misspelledExpansionBlock,
+	misspelledExpansionBlockMessage,
+	missingMetaArgumentMessage,
+	nameSuggestion
+} from './expansion';
+import { scanHclTokens } from './hcl-scanner';
 import { isDefect } from './unresolved';
 import { isWrittenOut } from './writtenOut';
 import type { Range } from 'vscode-languageserver';
@@ -57,6 +78,13 @@ export interface ConfigEvaluatorOptions {
 	terraformCommand?: string;
 	terraformCliArgs?: string[];
 	experiments?: string[];
+	/**
+	 * The strict controls enabled, by name, each turning what Terragrunt only warns about into an error: two
+	 * `dependency` blocks claiming one address or one `config_path` under `duplicate-dependency-labels`.
+	 */
+	strictControls?: readonly string[];
+	/** Where a warning Terragrunt logs goes, each once per evaluator; warnings are dropped when it is not set. */
+	warn?: (message: string) => void;
 	workspaceTrusted?: boolean;
 	/**
 	 * Directories outside the workspace root a configuration may still read.
@@ -102,16 +130,25 @@ export interface ConfigEvaluatorOptions {
  * into the unit, and its attributes evaluated in the scope of the file that declares each of them.
  */
 export interface DependencyRequest {
-	/** The block's label, which `dependency.<name>` reads. */
+	/**
+	 * The dependency's address, which messages name it by: the block's label, which `dependency.<name>` reads, and for
+	 * one element of an expanded block its key, as `name[key]`.
+	 */
 	name: string;
 	/** Absolute path of the unit the dependency belongs to. */
 	unitPath: string;
 	/** Absolute path of the file whose block decided the dependency, as messages name it. */
 	declaredIn: string;
-	/** Absolute path of the configuration `config_path` names, resolved against the unit's directory. */
-	targetConfigPath: string;
-	/** Absolute path of the directory the target configuration is in, where its outputs are read. */
-	targetDir: string;
+	/**
+	 * Where its outputs are read: the configuration `config_path` names, resolved against the unit's directory, and
+	 * the directory it is in. Absent for a dependency whose outputs are not read, one disabled or skipping its outputs,
+	 * whose `config_path` need not exist.
+	 */
+	target?: { configPath: string; dir: string };
+	/** The block's `enabled`: a disabled dependency reads nothing and gives its mocks. */
+	enabled: boolean;
+	/** The block's `skip_outputs`: its outputs are never read, and it gives its mocks where the command may see them. */
+	skipOutputs: boolean;
 	/** The evaluated `mock_outputs`, merged across included blocks; absent when none is declared. */
 	mockOutputs?: RuntimeValue<ValueType>;
 	/** The evaluated `mock_outputs_allowed_terraform_commands`, merged across included blocks; absent when none is declared. */
@@ -264,6 +301,20 @@ export class UnresolvedDependencyError extends UnresolvedRenderValueError {
 }
 
 /**
+ * The outputs of an element of an expanded dependency that cannot be known yet: reading one is unresolved, as reading
+ * an unexpanded dependency with no outputs is, while the element and its key are known.
+ */
+class UnresolvedDependencyOutputs extends Map<string, RuntimeValue<ValueType>> {
+	constructor(private readonly address: string) {
+		super();
+	}
+
+	override get(): RuntimeValue<ValueType> | undefined {
+		throw new UnresolvedDependencyError(this.address);
+	}
+}
+
+/**
  * A span of source, by character offset, and the value it evaluates to.
  *
  * `kind` says what the span is: an `expression`, or the `name` of an attribute, whose value is the one bound to it.
@@ -410,12 +461,20 @@ interface DependencyAttribute {
 }
 
 /**
- * A `dependency` block after Terragrunt's include merge: `config_path` from the highest-priority block that sets
- * it, and the mock settings of every block deep-merged into it, lowest priority first.
+ * A `dependency` block, or one element of an expanded block, after Terragrunt's include merge: `config_path`,
+ * `enabled` and `skip_outputs` from the highest-priority block that sets each, and the mock settings of every block
+ * deep-merged into it, lowest priority first. An element's attributes are evaluated in a scope that reads its
+ * `each` or `count`.
  */
 interface DependencyDeclaration {
+	/** The block's label. */
+	name: string;
+	/** Which element of an expanded block it is; absent for a block that was not expanded. */
+	key?: InstanceKey;
 	declaredIn: string;
 	configPath?: DependencyAttribute;
+	enabled?: DependencyAttribute;
+	skipOutputs?: DependencyAttribute;
 	mockOutputs: DependencyAttribute[];
 	mockOutputsAllowedTerraformCommands: DependencyAttribute[];
 }
@@ -430,7 +489,7 @@ interface UnitContext {
 	unitDir: string;
 	/** The unit's own scope, set as soon as the unit's file is parsed. */
 	scope?: Scope;
-	/** The unit's merged dependency blocks by name, built on the first dependency reference. */
+	/** The unit's merged dependency blocks by address, built on the first dependency reference. */
 	declarations?: Promise<Map<string, DependencyDeclaration>>;
 	/** Each dependency's resolution, so every reference to it shares one. */
 	resolved: Map<string, Promise<RuntimeValue<ValueType> | undefined>>;
@@ -611,6 +670,8 @@ export class ConfigEvaluator {
 	private readonly dependencyResolutionPath = new AsyncLocalStorage<readonly string[]>();
 	/** `options.allowedPaths` after realpath, resolved on first use. */
 	private allowedPathsResolved: string[] | undefined;
+	/** The warnings given, so each is given once. */
+	private readonly warned = new Set<string>();
 
 	constructor(options: ConfigEvaluatorOptions) {
 		this.options = options;
@@ -1516,34 +1577,128 @@ export class ConfigEvaluator {
 	 */
 	private configBody(result: FileResult, scope: Scope): ConfigBody {
 		const file = result.filePath;
-		const attribute = (field: string, node: TNode, written: boolean) => async (): Promise<Plain | typeof UNRESOLVED> => {
+		const attribute = (field: string, node: TNode, written: boolean, within: Scope) => async (): Promise<Plain | typeof UNRESOLVED> => {
 			const value = await this.renderField(file, field, async () => {
-				const evaluated = await this.evalNode(node, scope);
+				const evaluated = await this.evalNode(node, within);
 				return written ? computable(evaluated) : evaluated;
 			});
 			return value === undefined ? UNRESOLVED : unmarkedPlain(value);
+		};
+		const blockBody = (node: TNode, where: string, path: string, writes: boolean, within: Scope): ConfigBody => {
+			const body: ConfigBody = { where, attributes: new Map(), blocks: [] };
+			for (const child of node.children ?? []) {
+				if (child.type === 'attribute') body.attributes.set(String(child.value), attribute(`${path}.${String(child.value)}`, requiredValueNode(child), writes, within));
+				else if (child.type === 'block') body.blocks.push(block(child, path, writes));
+			}
+			return body;
 		};
 		const block = (node: TNode, prefix: string, written: boolean): ConfigBlock => {
 			const type = String(node.value);
 			const labels = (node.children ?? []).filter(child => child.type === 'parameter').map(child => String(child.value));
 			const path = [prefix, type, ...labels].filter(Boolean).join('.');
 			const writes = written || type === 'generate' || type === 'remote_state';
-			const body: ConfigBody = { where: `${file}: ${type}${labels.map(label => ` "${label}"`).join('')}`, attributes: new Map(), blocks: [] };
-			for (const child of node.children ?? []) {
-				if (child.type === 'attribute') body.attributes.set(String(child.value), attribute(`${path}.${String(child.value)}`, requiredValueNode(child), writes));
-				else if (child.type === 'block') body.blocks.push(block(child, path, writes));
+			const where = `${file}: ${type}${labels.map(label => ` "${label}"`).join('')}`;
+			const configBlock: ConfigBlock = { type, labels, body: blockBody(node, where, path, writes, scope) };
+			if (prefix === '' && type === 'dependency' && (node.children ?? []).some(child => child.type === 'block' && child.value === EXPANSION_BLOCK)) {
+				configBlock.expansion = {
+					elements: async () => (await this.expandBlock(node, scope))!.map(element => ({
+						key: element.key,
+						body: blockBody(node, where, instanceAddress(path, element.key), writes, element.scope)
+					})),
+					source: async () => ({
+						id: `${file}:${node.location!.start.offset}`,
+						text: scope.content.slice(node.location!.start.offset, node.location!.end.offset),
+						asCty: await this.bodyAsCty(node, scope)
+					})
+				};
 			}
-			return { type, labels, body };
+			return configBlock;
 		};
 		const body: ConfigBody = { where: file, attributes: new Map(), blocks: [] };
 		for (const child of result.scope.ast.children ?? []) {
 			if (child.type === 'block') body.blocks.push(block(child, '', false));
 			else if (child.type === 'assignment' && String(child.value) !== 'inputs') {
 				const name = String(child.value);
-				body.attributes.set(name, attribute(name, requiredValueNode(child, 'root_assignment_identifier'), name === 'generate' || name === 'remote_state'));
+				body.attributes.set(name, attribute(name, requiredValueNode(child, 'root_assignment_identifier'), name === 'generate' || name === 'remote_state', scope));
 			}
 		}
 		return body;
+	}
+
+	/**
+	 * A block's body as Terragrunt's BodyAsCty gives it for `render --json`, the way a JSON configuration writes it:
+	 * each attribute's value where it can be evaluated with no variables and no functions, and otherwise the template a
+	 * JSON configuration spells the expression with; a nested block as an object of its own.
+	 *
+	 * @param block the block.
+	 * @param scope the scope of the file it is written in.
+	 * @throws Error for a nested block with labels, which JSON cannot write as one object.
+	 */
+	private async bodyAsCty(block: TNode, scope: Scope): Promise<Record<string, Plain>> {
+		const attributes: Record<string, Plain> = {};
+		const blocks: Record<string, Plain> = {};
+		for (const child of block.children ?? []) {
+			if (child.type === 'attribute') {
+				attributes[String(child.value)] = await this.exprAsCty(requiredValueNode(child), scope);
+			} else if (child.type === 'block') {
+				const labels = (child.children ?? []).filter(entry => entry.type === 'parameter');
+				if (labels.length > 0) {
+					const header = (child.children ?? []).find(entry => entry.type === 'block_identifier')!;
+					throw new Error(`${hclRange(scope.filePath, scope.content, header.location!.start.offset, labels.at(-1)!.location!.end.offset)}: cannot render this block as JSON`);
+				}
+				blocks[String(child.value)] = await this.bodyAsCty(child, scope);
+			}
+		}
+		return { ...attributes, ...blocks };
+	}
+
+	/**
+	 * One expression as BodyAsCty writes it: a template rebuilt from its own source, unevaluated; an object or a tuple
+	 * one element at a time, unless an object's key cannot be known without evaluating it; anything else its value
+	 * when it reads no variable and calls no function, and otherwise `${…}` around its source, the template a JSON
+	 * configuration writes an expression with.
+	 */
+	private async exprAsCty(node: TNode, scope: Scope): Promise<Plain> {
+		const text = (expression: TNode): string => expressionSource(expression, scope.content);
+		switch (node.type) {
+			case 'string_lit':
+				return escapeTemplateMarkers(String(node.value));
+			case 'interpolated_string': {
+				const parts = node.children ?? [];
+				// A template that is one interpolation and nothing else is HCL's TemplateWrapExpr, which keeps the type of
+				// what it reads.
+				if (parts.length === 1 && parts[0].type === 'interpolation') return `\${${text(parts[0].children![0])}}`;
+				return parts.map(part => {
+					if (part.type === 'string_lit') return escapeTemplateMarkers(String(part.value));
+					if (part.type === 'interpolation') return `\${${text(part.children![0])}}`;
+					// A directive is written in template syntax already, its markers included.
+					return scope.content.slice(part.location!.start.offset, part.location!.end.offset);
+				}).join('');
+			}
+			case 'object': {
+				const out: Record<string, Plain> = {};
+				for (const item of node.children ?? []) {
+					// A key JSON cannot spell, such as one computed: the object goes back whole, as one interpolation.
+					if ((item.children ?? []).some(child => child.type === 'object_key')) return `\${${text(node)}}`;
+					out[String(item.value)] = await this.exprAsCty(requiredValueNode(item), scope);
+				}
+				return out;
+			}
+			case 'array_lit': {
+				const out: Plain[] = [];
+				for (const element of node.children ?? []) out.push(await this.exprAsCty(element, scope));
+				return out;
+			}
+			default:
+				if (variableRoots(node).length === 0 && !callsFunction(node)) {
+					try {
+						return unmarkedPlain(await this.evalNode(node, scope));
+					} catch {
+						// Unevaluable on its own, as HCL finds it with no context: written as the template.
+					}
+				}
+				return `\${${text(node)}}`;
+		}
 	}
 
 	/**
@@ -1551,25 +1706,31 @@ export class ConfigEvaluator {
 	 * unit's own, then its autoinclude merged over it shallowly, then each include merged under it, the last first,
 	 * by the include's strategy. The locals are the unit's own and the exclude block the unit's when it has one; the
 	 * inputs are those the evaluation merged. With `withOutputs`, each enabled dependency that does not skip its
-	 * outputs carries them.
+	 * outputs carries them, except an element of an expanded block, which is never written with its outputs.
+	 *
+	 * @throws Error for each fault Terragrunt finds decoding a file or merging them, among them a dependency label
+	 *   declared both with and without an expansion.
 	 */
 	private async readTerragruntConfig(result: FileResult, withOutputs: boolean): Promise<TerragruntConfig> {
 		for (const [name, issue] of result.unresolvedInputs) {
 			this.renderUnresolved.push({file: issue.file, field: `inputs.${name}`, reason: issue.reason});
 		}
-		const own = await decodeConfigFile(this.configBody(result, result.scope));
+		const own = await this.decodeFile(result, result.scope);
 		const autoinclude = result.scope.autoinclude;
-		if (autoinclude) mergeShallow(own, await decodeConfigFile(this.configBody(autoinclude, this.mergedScope(autoinclude, result))));
+		if (autoinclude) mergeShallow(own, await this.decodeFile(autoinclude, this.mergedScope(autoinclude, result)));
 		let config = own;
 		for (const name of [...result.scope.includes.keys()].reverse()) {
 			const include = result.scope.includes.get(name)!;
 			if (include.mergeStrategy === 'no_merge') continue;
-			const included = await decodeConfigFile(this.configBody(include.result, this.mergedScope(include.result, result)));
+			const included = await this.decodeFile(include.result, this.mergedScope(include.result, result));
 			if (include.mergeStrategy === 'deep') mergeDeep(included, config);
 			else mergeShallow(included, config);
 			config = included;
 		}
 		if (own.exclude) config.exclude = own.exclude;
+		const expanded = new Set(config.dependencyBlocks.filter(dependency => dependency.instance).map(dependency => dependency.name));
+		const collision = config.dependencyBlocks.find(dependency => !dependency.instance && expanded.has(dependency.name));
+		if (collision) throw new Error(dependencyLabelCollisionMessage(collision.name));
 
 		const locals: Record<string, Plain> = {};
 		for (const name of result.scope.locals.keys()) {
@@ -1580,11 +1741,38 @@ export class ConfigEvaluator {
 		config.inputs = result.inputs === null ? undefined : unmarkedPlain(makeObjectValue(result.inputs)) as Record<string, Plain>;
 
 		for (const dependency of withOutputs ? config.dependencyBlocks : []) {
-			if (dependency.enabled === false || dependency.skipOutputs === true) continue;
+			if (dependency.instance || dependency.enabled === false || dependency.skipOutputs === true) continue;
 			const value = await this.renderField(result.filePath, `dependency.${dependency.name}`, () => this.dependencyValue(dependency.name, result.scope));
 			if (value === undefined) continue;
 			const outputs = (unmarkedPlain(value) as Record<string, Plain>).outputs;
 			dependency.outputs = outputs === undefined ? null : outputs;
+		}
+		return config;
+	}
+
+	/**
+	 * One file's configuration, decoded as Terragrunt's ParseConfig decodes it before any merge: its `expansion`
+	 * blocks checked for spelling first, and its dependency blocks checked for two that claim one dependency, by
+	 * address or by `config_path`.
+	 *
+	 * @param result the file.
+	 * @param scope the scope it is decoded in.
+	 */
+	private async decodeFile(result: FileResult, scope: Scope): Promise<TerragruntConfig> {
+		assertExpansionSpelling(scope);
+		const config = await decodeConfigFile(this.configBody(result, scope));
+		// Terragrunt reports the first address claimed twice, and only when there is none, the first config_path.
+		if (this.reportDuplicateDependencies(result.filePath, config.dependencyBlocks.map(dependencyAddress))) return config;
+		const seen = new Map<string, string>();
+		for (const dependency of config.dependencyBlocks) {
+			if (dependency.enabled === false || typeof dependency.configPath !== 'string') continue;
+			const resolved = path.resolve(path.dirname(result.filePath), dependency.configPath);
+			const first = seen.get(resolved);
+			if (first !== undefined) {
+				this.duplicateDependencyFound(duplicateDependencyConfigPathMessage(result.filePath, first, dependencyAddress(dependency), dependency.configPath));
+				break;
+			}
+			seen.set(resolved, dependencyAddress(dependency));
 		}
 		return config;
 	}
@@ -1679,11 +1867,15 @@ export class ConfigEvaluator {
 	 * The value of `dependency.<name>` for the unit being evaluated. Every reference to a dependency, in the unit or
 	 * in a file merged into it, shares one resolution.
 	 *
+	 * A block expanded with `count` or `for_each` gives an object of its elements by key, each what an unexpanded
+	 * block gives, so `dependency.<name>[key].outputs` reads one element, as Terragrunt's DependencyBlocksToCtyValue
+	 * encodes it.
+	 *
 	 * @param name the dependency's label.
 	 * @param referencingScope the scope the reference is written in, which may be a merged file still being evaluated.
-	 * @returns `{ outputs: … }` as the resolver gives it.
+	 * @returns `{ outputs: … }` as the resolver gives it, or the elements' by key.
 	 * @throws UnresolvedDependencyError when the dependency is declared but has no outputs yet; an Error when it is not
-	 *   declared, is declared incorrectly, or reads itself.
+	 *   declared, is declared incorrectly, is declared both with and without an expansion, or reads itself.
 	 */
 	private async dependencyValue(name: string, referencingScope: Scope): Promise<RuntimeValue<ValueType>> {
 		const unit = referencingScope.unit;
@@ -1701,7 +1893,7 @@ export class ConfigEvaluator {
 		if (!resolution) {
 			resolution = this.dependencyResolutionPath.run(
 				[...resolving, name],
-				() => this.resolveUnitDependency(unit, name, referencingScope)
+				() => this.resolveNamedDependency(unit, name, referencingScope)
 			);
 			unit.resolved.set(name, resolution);
 		}
@@ -1711,23 +1903,60 @@ export class ConfigEvaluator {
 	}
 
 	/**
-	 * Finds a dependency in the unit's merged blocks, evaluates its attributes where each is written, and asks the
-	 * resolver for its outputs.
+	 * Finds every block or element of the unit's merged dependency blocks with a label, and resolves each.
+	 *
+	 * @returns the block's value, or its elements' by key; undefined when one of them has no outputs to give.
+	 */
+	private async resolveNamedDependency(unit: UnitContext, name: string, referencingScope: Scope): Promise<RuntimeValue<ValueType> | undefined> {
+		unit.declarations ??= this.dependencyDeclarations(unit, referencingScope);
+		const declarations = [...(await unit.declarations).values()].filter(declaration => declaration.name === name);
+		if (declarations.length === 0) throw new Error(`No dependency "${name}" block in ${unit.unitPath} or the configurations it includes`);
+		const elements = declarations.filter(declaration => declaration.key !== undefined);
+		if (elements.length === 0) return this.resolveUnitDependency(unit, declarations[0]);
+		if (elements.length !== declarations.length) throw new Error(dependencyLabelCollisionMessage(name));
+		const values = new Map<string, RuntimeValue<ValueType>>();
+		for (const element of elements) {
+			const address = instanceAddress(name, element.key);
+			// Its keys are known whatever its outputs are, so a key it lacks is still a fault.
+			values.set(
+				instanceKeyText(element.key!),
+				await this.resolveUnitDependency(unit, element)
+					?? makeObjectValue(new Map([['outputs', makeObjectValue(new UnresolvedDependencyOutputs(address))]]))
+			);
+		}
+		return makeObjectValue(values);
+	}
+
+	/**
+	 * Evaluates one dependency's attributes where each is written and asks the resolver for its outputs.
 	 *
 	 * @returns what the resolver gives, or undefined when there is no resolver or it has no outputs to give.
 	 */
-	private async resolveUnitDependency(unit: UnitContext, name: string, referencingScope: Scope): Promise<RuntimeValue<ValueType> | undefined> {
-		unit.declarations ??= this.dependencyDeclarations(unit, referencingScope);
-		const declaration = (await unit.declarations).get(name);
-		if (!declaration) throw new Error(`No dependency "${name}" block in ${unit.unitPath} or the configurations it includes`);
+	private async resolveUnitDependency(unit: UnitContext, declaration: DependencyDeclaration): Promise<RuntimeValue<ValueType> | undefined> {
+		const name = instanceAddress(declaration.name, declaration.key);
 		const where = `dependency "${name}" in ${declaration.declaredIn}`;
-		if (!declaration.configPath) throw new Error(`${where} is missing config_path`);
+		const flag = async (attribute: DependencyAttribute | undefined, field: string, absent: boolean): Promise<boolean> => {
+			if (!attribute) return absent;
+			const value = unwrapSensitive(await this.evalNode(attribute.node, attribute.scope));
+			if (value.type === 'null') return absent;
+			const converted = convertToBool(value);
+			if (converted === null) throw new Error(`${where}: ${field} must be a bool`);
+			return converted;
+		};
+		const enabled = await flag(declaration.enabled, 'enabled', true);
+		const skipOutputs = await flag(declaration.skipOutputs, 'skip_outputs', false);
 
-		const configPath = await this.evalNode(declaration.configPath.node, declaration.configPath.scope);
-		if (configPath.type !== 'string' || String(configPath.value) === '') throw new Error(`${where}: config_path must be a non-empty string`);
-		// Terragrunt resolves config_path against the unit's directory, wherever the block is written.
-		const target = path.resolve(unit.unitDir, String(configPath.value));
-		const targetConfigPath = await dependencyTargetConfig(target, where);
+		let target: DependencyRequest['target'];
+		// Terragrunt reads nothing from a dependency that is disabled or skips its outputs, so its config_path need not
+		// name anything that exists.
+		if (enabled && !skipOutputs) {
+			if (!declaration.configPath) throw new Error(`${where} is missing config_path`);
+			const configPath = await this.evalNode(declaration.configPath.node, declaration.configPath.scope);
+			if (configPath.type !== 'string' || String(configPath.value) === '') throw new Error(`${where}: config_path must be a non-empty string`);
+			// Terragrunt resolves config_path against the unit's directory, wherever the block is written.
+			const targetConfigPath = await dependencyTargetConfig(path.resolve(unit.unitDir, String(configPath.value)), where);
+			target = { configPath: targetConfigPath, dir: path.dirname(targetConfigPath) };
+		}
 
 		let mockOutputs: RuntimeValue<ValueType> | undefined;
 		for (const attribute of declaration.mockOutputs) {
@@ -1760,8 +1989,9 @@ export class ConfigEvaluator {
 			name,
 			unitPath: unit.unitPath,
 			declaredIn: declaration.declaredIn,
-			targetConfigPath,
-			targetDir: path.dirname(targetConfigPath),
+			...(target !== undefined ? { target } : {}),
+			enabled,
+			skipOutputs,
 			...(mockOutputs !== undefined ? { mockOutputs } : {}),
 			...(mockOutputsAllowedTerraformCommands !== undefined ? { mockOutputsAllowedTerraformCommands } : {})
 		};
@@ -1769,10 +1999,11 @@ export class ConfigEvaluator {
 	}
 
 	/**
-	 * The unit's `dependency` blocks by name after Terragrunt's include merge. The sibling autoinclude's block
-	 * replaces the unit's of the same name; each direct include is then merged beneath, the last include first: a
-	 * shallow include's block is replaced whole by a higher one of the same name, a deep include's has `config_path`
-	 * overridden, its `mock_outputs` deep-merged and its allowed commands concatenated. An include with
+	 * The unit's `dependency` blocks by address after Terragrunt's include merge, each block expanded into its
+	 * elements first, as each file decodes its own. The sibling autoinclude's block replaces the unit's of the same
+	 * address; each direct include is then merged beneath, the last include first: a shallow include's block is
+	 * replaced whole by a higher one of the same address, a deep include's has `config_path`, `enabled` and
+	 * `skip_outputs` overridden, its `mock_outputs` deep-merged and its allowed commands concatenated. An include with
 	 * `merge_strategy = "no_merge"` contributes nothing.
 	 */
 	private async dependencyDeclarations(unit: UnitContext, referencingScope: Scope): Promise<Map<string, DependencyDeclaration>> {
@@ -1785,7 +2016,9 @@ export class ConfigEvaluator {
 			if (await pathExists(autoPath)) top.push(await this.mergedFileScope(unit, autoPath, referencingScope));
 		}
 		for (const scope of top) {
-			for (const [name, block] of dependencyBlocks(scope)) declarations.set(name, dependencyDeclaration(block, scope));
+			for (const declaration of await this.fileDependencyDeclarations(scope)) {
+				declarations.set(instanceAddress(declaration.name, declaration.key), declaration);
+			}
 		}
 
 		const includes: Array<{ scope: Scope; strategy: MergeStrategy }> = [];
@@ -1796,15 +2029,19 @@ export class ConfigEvaluator {
 			includes.push({ scope: await this.mergedFileScope(unit, includePath, referencingScope), strategy: mergeStrategy });
 		}
 		for (const { scope, strategy } of includes.reverse()) {
-			for (const [name, block] of dependencyBlocks(scope)) {
-				const lower = dependencyDeclaration(block, scope);
-				const higher = declarations.get(name);
+			for (const lower of await this.fileDependencyDeclarations(scope)) {
+				const address = instanceAddress(lower.name, lower.key);
+				const higher = declarations.get(address);
 				if (!higher) {
-					declarations.set(name, lower);
+					declarations.set(address, lower);
 				} else if (strategy === 'deep') {
-					declarations.set(name, {
+					declarations.set(address, {
+						name: higher.name,
+						key: higher.key,
 						declaredIn: higher.declaredIn,
 						configPath: higher.configPath ?? lower.configPath,
+						enabled: higher.enabled ?? lower.enabled,
+						skipOutputs: higher.skipOutputs ?? lower.skipOutputs,
 						mockOutputs: [...lower.mockOutputs, ...higher.mockOutputs],
 						mockOutputsAllowedTerraformCommands: [...lower.mockOutputsAllowedTerraformCommands, ...higher.mockOutputsAllowedTerraformCommands]
 					});
@@ -1812,6 +2049,133 @@ export class ConfigEvaluator {
 			}
 		}
 		return declarations;
+	}
+
+	/**
+	 * One file's `dependency` blocks as declarations, in the order they are written, each expanded block giving one per
+	 * element. Two that claim one address are reported as Terragrunt reports them, and the later one is kept.
+	 *
+	 * @throws Error for a misspelled or malformed `expansion` block, a meta-argument Terragrunt refuses, and, under the
+	 *   `duplicate-dependency-labels` strict control, two blocks claiming one address.
+	 */
+	private async fileDependencyDeclarations(scope: Scope): Promise<DependencyDeclaration[]> {
+		assertExpansionSpelling(scope);
+		const declarations: DependencyDeclaration[] = [];
+		for (const block of scope.blocks) {
+			if (block.value !== 'dependency') continue;
+			const label = (block.children ?? []).find(child => child.type === 'parameter');
+			if (!label) throw new Error(`A dependency block in ${scope.filePath} has no name`);
+			const name = String(label.value);
+			const elements = await this.expandBlock(block, scope);
+			if (elements === undefined) {
+				declarations.push(dependencyDeclaration(block, name, undefined, scope));
+				continue;
+			}
+			for (const element of elements) declarations.push(dependencyDeclaration(block, name, element.key, element.scope));
+		}
+		this.reportDuplicateDependencies(scope.filePath, declarations.map(declaration => instanceAddress(declaration.name, declaration.key)));
+		return declarations;
+	}
+
+	/**
+	 * Reports the first address two dependency blocks of one file both claim, as Terragrunt's validateUniqueDependencies
+	 * does: an error under the `duplicate-dependency-labels` strict control, and otherwise a warning, the reference
+	 * reading the later block.
+	 *
+	 * @param configPath the file.
+	 * @param addresses each block's address, in the order they are written.
+	 * @returns whether one was found.
+	 */
+	private reportDuplicateDependencies(configPath: string, addresses: readonly string[]): boolean {
+		const seen = new Set<string>();
+		for (const address of addresses) {
+			if (seen.has(address)) {
+				this.duplicateDependencyFound(duplicateDependencyMessage(configPath, address));
+				return true;
+			}
+			seen.add(address);
+		}
+		return false;
+	}
+
+	/**
+	 * Two dependency blocks claim one dependency: an error under the `duplicate-dependency-labels` strict control, and
+	 * otherwise the control's warning and the message, each once.
+	 *
+	 * @throws Error with the message under the strict control.
+	 */
+	private duplicateDependencyFound(message: string): void {
+		if (this.options.strictControls?.includes('duplicate-dependency-labels')) throw new Error(message);
+		this.warnOnce(DUPLICATE_DEPENDENCY_WARNING);
+		this.warnOnce(message);
+	}
+
+	private warnOnce(message: string): void {
+		if (this.warned.has(message)) return;
+		this.warned.add(message);
+		this.options.warn?.(message);
+	}
+
+	/**
+	 * The elements of a block expanded by its `expansion` block, each with a scope that reads its `each` or `count`, as
+	 * Terragrunt's ExpandBlock gives them; undefined for a block with no `expansion` block. The meta-argument is
+	 * evaluated in the block's own scope, which reads neither.
+	 *
+	 * @param block the `dependency` block.
+	 * @param scope the scope of the file it is written in.
+	 * @throws Error in Terragrunt's words for a labelled `expansion` block, a second one, an argument or block it does
+	 *   not take, both meta-arguments or neither, and a value of the meta-argument Terragrunt refuses.
+	 */
+	private async expandBlock(block: TNode, scope: Scope): Promise<Array<{ key: InstanceKey; scope: Scope }> | undefined> {
+		const nested = (block.children ?? []).filter(child => child.type === 'block' && child.value === EXPANSION_BLOCK);
+		if (nested.length === 0) return undefined;
+		const range = (start: TNode, end: TNode = start): string => hclRange(scope.filePath, scope.content, start.location!.start.offset, end.location!.end.offset);
+		// HCL refuses a label on any expansion block before Terragrunt looks at how many there are.
+		for (const expansion of nested) {
+			const label = (expansion.children ?? []).find(child => child.type === 'parameter');
+			if (label) throw new Error(`${range(label)}: Extraneous label for ${EXPANSION_BLOCK}; No labels are expected for ${EXPANSION_BLOCK} blocks.`);
+		}
+		const header = (node: TNode): TNode => (node.children ?? []).find(child => child.type === 'block_identifier')!;
+		if (nested.length > 1) throw new Error(duplicateExpansionBlockMessage(range(header(nested[1])), String(block.value)));
+		const expansion = nested[0];
+
+		// The expansion block is read with its schema, so anything else in it is refused, in HCL's words.
+		const metaArguments: MetaArgument[] = ['for_each', 'count'];
+		const problems: string[] = [];
+		const attributes = new Map<MetaArgument, TNode>();
+		for (const child of expansion.children ?? []) {
+			if (child.type === 'attribute') {
+				const name = String(child.value);
+				const identifier = (child.children ?? []).find(entry => entry.type === 'attribute_identifier')!;
+				if (metaArguments.includes(name as MetaArgument)) {
+					attributes.set(name as MetaArgument, child);
+					continue;
+				}
+				const suggestion = nameSuggestion(name, metaArguments);
+				problems.push(`${range(identifier)}: Unsupported argument; An argument named "${name}" is not expected here.${suggestion === undefined ? '' : ` Did you mean "${suggestion}"?`}`);
+			} else if (child.type === 'block') {
+				const type = String(child.value);
+				const detail = metaArguments.includes(type as MetaArgument)
+					? ` Did you mean to define argument "${type}"? If so, use the equals sign to assign it a value.`
+					: '';
+				problems.push(`${range(header(child))}: Unsupported block type; Blocks of type "${type}" are not expected here.${detail}`);
+			}
+		}
+		if (problems.length > 0) throw new Error(problems.length === 1 ? problems[0] : `${problems[0]}, and ${problems.length - 1} other diagnostic(s)`);
+		const forEach = attributes.get('for_each');
+		const count = attributes.get('count');
+		if (forEach && count) throw new Error(conflictingMetaArgumentsMessage(range(header(expansion))));
+		const attribute = count ?? forEach;
+		if (!attribute) throw new Error(missingMetaArgumentMessage(range(header(expansion))));
+
+		const valueNode = requiredValueNode(attribute);
+		const value = await this.evalNode(valueNode, scope);
+		const attributeRange = range((attribute.children ?? []).find(entry => entry.type === 'attribute_identifier')!, valueNode);
+		const elements = count ? countElements(value, attributeRange) : forEachElements(value, attributeRange);
+		return elements.map(element => ({
+			key: element.key,
+			scope: { ...scope, comprehension: [...scope.comprehension, element.variables] }
+		}));
 	}
 
 	/**
@@ -2904,35 +3268,102 @@ function checkInputNumbers(inputs: Map<string, RuntimeValue<ValueType>>): void {
 	if (infinite) throw new Error('failed to serialize value: cannot serialize infinity as JSON');
 }
 
-/**
- * A file's `dependency` blocks by label. Two blocks with one label in a file are refused, as Terragrunt refuses them,
- * rather than one silently shadowing the other.
- */
-function dependencyBlocks(scope: Scope): Map<string, TNode> {
-	const blocks = new Map<string, TNode>();
-	for (const block of scope.blocks) {
-		if (block.value !== 'dependency') continue;
-		const label = (block.children ?? []).find(child => child.type === 'parameter');
-		if (!label) throw new Error(`A dependency block in ${scope.filePath} has no name`);
-		const name = String(label.value);
-		if (blocks.has(name)) throw new Error(`dependency "${name}" is declared more than once in ${scope.filePath}`);
-		blocks.set(name, block);
-	}
-	return blocks;
+/** Whether an expression calls a function anywhere in it, which HCL cannot evaluate without a context. */
+function callsFunction(node: TNode): boolean {
+	return node.type === 'function_call' || (node.children ?? []).some(callsFunction);
 }
 
-/** One `dependency` block as a declaration, its attributes paired with the scope they are written in. */
-function dependencyDeclaration(block: TNode, scope: Scope): DependencyDeclaration {
-	const attribute = (name: string): DependencyAttribute | undefined => {
-		const child = (block.children ?? []).find(entry => entry.type === 'attribute' && String(entry.value) === name);
+/**
+ * The source of an expression as HCL's range of it covers it: with the parentheses around it, which the parser leaves
+ * out of its nodes, and those its own range cuts through.
+ *
+ * @param node the expression, written where its context never puts a parenthesis of its own beside it: an attribute's
+ *   value, an element, an interpolation.
+ * @param content the text of the file it is written in.
+ */
+function expressionSource(node: TNode, content: string): string {
+	let start = node.location!.start.offset;
+	let end = node.location!.end.offset;
+	const before = (offset: number): number => {
+		let at = offset - 1;
+		while (at >= 0 && /\s/.test(content[at])) at--;
+		return at;
+	};
+	const after = (offset: number): number => {
+		let at = offset;
+		while (at < content.length && /\s/.test(content[at])) at++;
+		return at;
+	};
+	for (;;) {
+		let depth = 0;
+		let lowest = 0;
+		for (const token of scanHclTokens(content.slice(start, end))) {
+			if (token.type === 'OParen') depth++;
+			else if (token.type === 'CParen') lowest = Math.min(lowest, --depth);
+		}
+		if (lowest < 0) {
+			start = before(start);
+			continue;
+		}
+		if (depth > 0) {
+			end = after(end) + 1;
+			continue;
+		}
+		const open = before(start);
+		const close = after(end);
+		if (content[open] !== '(' || content[close] !== ')') return content.slice(start, end);
+		start = open;
+		end = close + 1;
+	}
+}
+
+/** Text written as an HCL template's literal, every sequence that would open a template escaped. */
+function escapeTemplateMarkers(text: string): string {
+	// A replacer, since a replacement string reads `$$` as one `$`.
+	return text.replaceAll('${', () => '$${').replaceAll('%{', () => '%%{');
+}
+
+/**
+ * Refuses a labelled `dependency` block of a file that nests a misspelling of `expansion`, as Terragrunt's
+ * ValidateExpansionSpelling does before it reads the file, since the block would otherwise run without its iteration.
+ *
+ * @throws Error naming the block, the file and the misspelled name.
+ */
+function assertExpansionSpelling(scope: Scope): void {
+	for (const block of scope.blocks) {
+		if (block.value !== 'dependency') continue;
+		const labels = (block.children ?? []).filter(child => child.type === 'parameter');
+		if (labels.length !== 1) continue;
+		const nested = (block.children ?? []).filter(child => child.type === 'block').map(child => String(child.value));
+		const name = misspelledExpansionBlock(nested);
+		if (name !== undefined) throw new Error(misspelledExpansionBlockMessage('dependency', String(labels[0].value), scope.filePath, name));
+	}
+}
+
+/**
+ * One `dependency` block, or one element of an expanded block, as a declaration, its attributes paired with the scope
+ * they are evaluated in.
+ *
+ * @param block the block.
+ * @param name its label.
+ * @param key the element's key; undefined for a block that was not expanded.
+ * @param scope the scope of the file it is written in, reading the element's `each` or `count` for an element.
+ */
+function dependencyDeclaration(block: TNode, name: string, key: InstanceKey | undefined, scope: Scope): DependencyDeclaration {
+	const attribute = (attributeName: string): DependencyAttribute | undefined => {
+		const child = (block.children ?? []).find(entry => entry.type === 'attribute' && String(entry.value) === attributeName);
 		const node = child?.children?.find(entry => entry.type !== 'attribute_identifier');
 		return node ? { node, scope } : undefined;
 	};
 	const mockOutputs = attribute('mock_outputs');
 	const allowed = attribute('mock_outputs_allowed_terraform_commands');
 	return {
+		name,
+		...(key !== undefined ? { key } : {}),
 		declaredIn: scope.filePath,
 		configPath: attribute('config_path'),
+		enabled: attribute('enabled'),
+		skipOutputs: attribute('skip_outputs'),
 		mockOutputs: mockOutputs ? [mockOutputs] : [],
 		mockOutputsAllowedTerraformCommands: allowed ? [allowed] : []
 	};

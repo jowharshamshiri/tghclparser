@@ -13,9 +13,9 @@
 import { CtyNumber } from './cty-number';
 import { isGoPrint } from './go-quote';
 import { layOutHclTokens } from './hcl-format';
-import type { HclTokenType } from './hcl-scanner';
-import type { Dependency, ErrorHook, ExtraArguments, GenerateConfig, Hook, Plain, TerragruntConfig } from './terragrunt-config';
-import { compareBytes, dependencyAsCty, terragruntConfigAsCty } from './terragrunt-config';
+import { type HclTokenType, scanHclTokens } from './hcl-scanner';
+import type { Dependency, ErrorHook, ExtraArguments, GenerateConfig, Hook, Plain, SourceBlock, TerragruntConfig } from './terragrunt-config';
+import { compareBytes, dependencyAsCty, dependencyGroups, terragruntConfigAsCty } from './terragrunt-config';
 
 interface Token {
 	type: HclTokenType;
@@ -177,6 +177,31 @@ function dependencyBlock(body: Body, dependency: Dependency): void {
 	});
 }
 
+/**
+ * An expanded dependency block as render writes it, by appendExpansionPreview: the block as it is written, then the
+ * elements it expanded into, each as `dependencyBlock` writes it, as lines of a comment set off by a blank line. They
+ * stay comments because every element repeats the block's label.
+ *
+ * @param body the file's body.
+ * @param source the block as it is written.
+ * @param elements the dependencies it expanded into, in the order they were decoded.
+ */
+function expansionPreview(body: Body, source: SourceBlock, elements: Dependency[]): void {
+	// The block's own tokens, comments and all, end at its closing brace.
+	body.tokens.push(...scanHclTokens(source.text).filter(token => token.type !== 'EOF').map(token => ({ type: token.type, text: token.text })));
+	const lines = ['Expands to:', ''];
+	elements.forEach((dependency, index) => {
+		if (index > 0) lines.push('');
+		const element = new Body();
+		dependencyBlock(element, dependency);
+		lines.push(...layOutHclTokens(element.tokens).replace(/\n+$/, '').split('\n'));
+	});
+	// The first newline ends the block's last line, the second sets the preview off from it.
+	body.tokens.push({ type: 'Newline', text: '\n' }, { type: 'Newline', text: '\n' });
+	for (const line of lines) body.tokens.push({ type: 'Comment', text: line === '' ? '#\n' : `# ${line}\n` });
+	body.tokens.push({ type: 'Newline', text: '\n' });
+}
+
 function generateBlock(body: Body, name: string, generate: GenerateConfig): void {
 	body.block('generate', [name], block => {
 		block.attribute('path', generate.path);
@@ -242,7 +267,10 @@ export function terragruntConfigAsHcl(config: TerragruntConfig): string {
 		const paths = attr(attr(asCty, 'dependencies'), 'paths');
 		root.block('dependencies', [], block => block.attribute('paths', paths));
 	}
-	for (const dependency of config.dependencyBlocks) dependencyBlock(root, dependency);
+	for (const group of dependencyGroups(config.dependencyBlocks)) {
+		if (group.source) expansionPreview(root, group.source, group.dependencies);
+		else for (const dependency of group.dependencies) dependencyBlock(root, dependency);
+	}
 	for (const name of [...config.generate.keys()].sort(compareBytes)) generateBlock(root, name, config.generate.get(name)!);
 	for (const flag of config.featureFlags ?? []) {
 		const flagAsCty = attr(attr(asCty, 'feature'), flag.name);

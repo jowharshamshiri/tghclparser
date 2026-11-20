@@ -540,6 +540,17 @@
         { "name": "mock_outputs", "description": "Outputs used when real outputs are unavailable.", "required": false, "types": ["object"] },
         { "name": "mock_outputs_allowed_terraform_commands", "description": "Commands allowed to consume mock outputs.", "required": false, "types": ["array"] },
         { "name": "mock_outputs_merge_strategy_with_state", "description": "How state outputs merge into mocks.", "required": false, "types": ["string"], "validation": { "allowedValues": ["no_merge", "shallow", "deep_map_only"] } }
+      ],
+      "blocks": [
+        {
+          "type": "expansion",
+          "description": "Reads the dependency once per element of a collection, each element a dependency read as dependency.<name>[key].",
+          "max": 1,
+          "attributes": [
+            { "name": "for_each", "description": "A set, map, or object to iterate over. Each element produces one dependency, keyed by each.key, whose body reads each.key and each.value. Set either for_each or count, not both.", "required": false, "types": ["array", "object"] },
+            { "name": "count", "description": "How many dependencies to produce, a whole number of zero or more, keyed by their zero-based position, which the body reads as count.index. Set either for_each or count, not both.", "required": false, "types": ["number"] }
+          ]
+        }
       ]
     },
     {

@@ -12,6 +12,7 @@
  */
 
 import { CtyNumber } from './cty-number';
+import { instanceAddress, type InstanceKey } from './expansion';
 
 /** A value as runtimeValueToPlain gives it. */
 export type Plain = unknown;
@@ -74,9 +75,30 @@ export interface RemoteState {
 	encryption: Record<string, Plain> | undefined;
 }
 
-/** A `dependency` block. */
+/**
+ * A `dependency` block as it is written, quoted for the elements an `expansion` block split it into: what `render`
+ * prints above the elements, and what `render --json` prints in their place.
+ */
+export interface SourceBlock {
+	/** Where the block is written, which every element of one block shares. */
+	id: string;
+	/** The block's text, from its type to its closing brace. */
+	text: string;
+	/** The block's body as a JSON configuration would write it, each reference left as a template. */
+	asCty: Plain;
+}
+
+/** Which element of an expanded block a dependency is, and the block it came from. */
+export interface DependencyInstance {
+	key: InstanceKey;
+	source: SourceBlock;
+}
+
+/** A `dependency` block, or one element of a block expanded with `count` or `for_each`. */
 export interface Dependency {
 	name: string;
+	/** Set on an element of an expanded block. */
+	instance?: DependencyInstance;
 	configPath: Plain;
 	enabled?: boolean;
 	skipOutputs?: boolean;
@@ -194,6 +216,14 @@ export interface ConfigBlock {
 	type: string;
 	labels: string[];
 	body: ConfigBody;
+	/**
+	 * Set on a block that nests an `expansion` block: its elements, each with its key and its body read with its
+	 * `each` or `count`, and the block as written.
+	 */
+	expansion?: {
+		elements: () => Promise<Array<{ key: InstanceKey; body: ConfigBody }>>;
+		source: () => Promise<SourceBlock>;
+	};
 }
 
 /** The value of each attribute of a body that can be known, by name; an unknown one is left out, as unset. */
@@ -485,11 +515,37 @@ function decodeRemoteStateAttribute(value: Plain, where: string): RemoteState {
 	return remoteStateOf(values, where, true);
 }
 
-async function decodeDependency(block: ConfigBlock): Promise<Dependency> {
-	const where = block.body.where;
-	const name = onlyLabel(block, where);
-	refuseBlocks(block.body, []);
-	const values = await readAttributes(block.body, ['config_path', 'enabled', 'skip_outputs', 'mock_outputs', 'mock_outputs_allowed_terraform_commands', 'mock_outputs_merge_with_state', 'mock_outputs_merge_strategy_with_state']);
+/**
+ * The dependencies a `dependency` block gives: itself, or one for each element of its `expansion`, in the order the
+ * elements are iterated, none for an expansion over nothing. Every element is decoded before any fault is reported,
+ * as Terragrunt decodes them, and the first fault found is reported.
+ */
+async function decodeDependencies(block: ConfigBlock): Promise<Dependency[]> {
+	const name = onlyLabel(block, block.body.where);
+	if (!block.expansion) {
+		refuseBlocks(block.body, []);
+		return [await decodeDependency(name, block.body)];
+	}
+	refuseBlocks(block.body, ['expansion']);
+	const elements = await block.expansion.elements();
+	if (elements.length === 0) return [];
+	const source = await block.expansion.source();
+	const dependencies: Dependency[] = [];
+	const faults: unknown[] = [];
+	for (const element of elements) {
+		try {
+			dependencies.push({ ...await decodeDependency(name, element.body), instance: { key: element.key, source } });
+		} catch (error) {
+			faults.push(error);
+		}
+	}
+	if (faults.length > 0) throw faults[0];
+	return dependencies;
+}
+
+async function decodeDependency(name: string, body: ConfigBody): Promise<Dependency> {
+	const where = body.where;
+	const values = await readAttributes(body, ['config_path', 'enabled', 'skip_outputs', 'mock_outputs', 'mock_outputs_allowed_terraform_commands', 'mock_outputs_merge_with_state', 'mock_outputs_merge_strategy_with_state']);
 	return {
 		name,
 		configPath: values.has('config_path') ? values.get('config_path') : null,
@@ -745,8 +801,8 @@ export async function decodeConfigFile(body: ConfigBody): Promise<TerragruntConf
 				});
 				break;
 			case 'dependency': {
-				const dependency = await unlessUnresolved(() => decodeDependency(block));
-				if (dependency) config.dependencyBlocks.push(dependency);
+				const dependencies = await unlessUnresolved(() => decodeDependencies(block));
+				if (dependencies) config.dependencyBlocks.push(...dependencies);
 				break;
 			}
 			case 'generate': {
@@ -966,7 +1022,7 @@ export function mergeShallow(target: TerragruntConfig, source: TerragruntConfig)
 			mergeTerraformLists(target.terraform, source.terraform);
 		}
 	}
-	target.dependencyBlocks = mergeByName(target.dependencyBlocks, source.dependencyBlocks, dependency => dependency.name, (_, from) => from);
+	target.dependencyBlocks = mergeByName(target.dependencyBlocks, source.dependencyBlocks, dependencyAddress, (_, from) => from);
 	target.dependencies = mergeModuleDependencies(target.dependencies, source.dependencies);
 	if (target.featureFlags !== undefined || source.featureFlags !== undefined) {
 		target.featureFlags = mergeByName(target.featureFlags ?? [], source.featureFlags ?? [], flag => flag.name, (_, from) => from);
@@ -1052,7 +1108,7 @@ export function mergeDeep(target: TerragruntConfig, source: TerragruntConfig): v
 		mergeErrors(target.errors, source.errors);
 	}
 	target.dependencies = mergeModuleDependencies(target.dependencies, source.dependencies);
-	target.dependencyBlocks = mergeByName(target.dependencyBlocks, source.dependencyBlocks, dependency => dependency.name, deepMergeDependency);
+	target.dependencyBlocks = mergeByName(target.dependencyBlocks, source.dependencyBlocks, dependencyAddress, deepMergeDependency);
 	if (target.featureFlags !== undefined || source.featureFlags !== undefined) {
 		target.featureFlags = mergeByName(target.featureFlags ?? [], source.featureFlags ?? [], flag => flag.name, (into, from) => ({
 			name: from.name || into.name,
@@ -1080,9 +1136,19 @@ export function mergeDeep(target: TerragruntConfig, source: TerragruntConfig): v
 	}
 }
 
-/** A dependency block merged deeply into another of its name, as Dependency.DeepMerge does. */
+/**
+ * A dependency's address, which include merging matches blocks on: its label, and for an element of an expanded block
+ * its key, since every element carries the label its block was written with.
+ */
+export function dependencyAddress(dependency: Dependency): string {
+	return instanceAddress(dependency.name, dependency.instance?.key);
+}
+
+/** A dependency block merged deeply into another of its address, as Dependency.DeepMerge does. */
 function deepMergeDependency(into: Dependency, from: Dependency): Dependency {
 	const merged: Dependency = { ...into };
+	// The expansion of the block merged in replaces the other's outright, so the element is quoted from it.
+	if (from.instance !== undefined) merged.instance = from.instance;
 	if (typeof from.configPath === 'string' && from.configPath !== '') merged.configPath = from.configPath;
 	if (from.enabled !== undefined) merged.enabled = from.enabled;
 	if (from.skipOutputs !== undefined) merged.skipOutputs = from.skipOutputs;
@@ -1182,6 +1248,46 @@ export function remoteStateAsCty(state: RemoteState): Record<string, Plain> {
 	};
 }
 
+/**
+ * The dependencies gathered back under the blocks they were written as: an element of an expanded block in its
+ * block's group, at the place of the block's first element, and every other dependency in a group of its own.
+ */
+export function dependencyGroups(dependencies: readonly Dependency[]): Array<{ source?: SourceBlock; dependencies: Dependency[] }> {
+	const groups: Array<{ source?: SourceBlock; dependencies: Dependency[] }> = [];
+	const bySource = new Map<string, number>();
+	for (const dependency of dependencies) {
+		const source = dependency.instance?.source;
+		if (source === undefined) {
+			groups.push({ dependencies: [dependency] });
+			continue;
+		}
+		const at = bySource.get(source.id);
+		if (at !== undefined) {
+			groups[at].dependencies.push(dependency);
+			continue;
+		}
+		bySource.set(source.id, groups.length);
+		groups.push({ source, dependencies: [dependency] });
+	}
+	return groups;
+}
+
+/**
+ * The dependency blocks by label, as dependencyBlocksAsCty gives them. An expanded block is given as it is written,
+ * since its elements all carry its label.
+ */
+function dependenciesAsCty(dependencies: readonly Dependency[]): Record<string, Plain> {
+	const out: Record<string, Plain> = {};
+	for (const group of dependencyGroups(dependencies)) {
+		if (group.source !== undefined) {
+			out[group.dependencies[0].name] = group.source.asCty;
+			continue;
+		}
+		for (const dependency of group.dependencies) out[dependency.name] = dependencyAsCty(dependency);
+	}
+	return out;
+}
+
 /** A dependency block as GoTypeToCty gives it. */
 export function dependencyAsCty(dependency: Dependency): Record<string, Plain> {
 	return {
@@ -1227,7 +1333,7 @@ export function terragruntConfigAsCty(config: TerragruntConfig): Record<string, 
 		iam_assume_role_session_name: config.iamAssumeRoleSessionName,
 		iam_web_identity_token: config.iamWebIdentityToken,
 		dependencies: config.dependencies ? { paths: config.dependencies.paths } : null,
-		dependency: byName(config.dependencyBlocks, dependencyAsCty),
+		dependency: dependenciesAsCty(config.dependencyBlocks),
 		generate: Object.fromEntries([...config.generate].map(([name, generate]) => [name, generateAsCty(generate)])),
 		iam_assume_role_duration: nullable(config.iamAssumeRoleDuration),
 		inputs: config.inputs === undefined ? null : throughJson(config.inputs),

@@ -39,7 +39,7 @@ describe('dependency resolution', () => {
 			workspaceTrusted: true,
 			resolveDependency: async request => {
 				requests.push(request);
-				const values = outputs[path.basename(request.targetDir)];
+				const values = outputs[path.basename(request.target!.dir)];
 				if (!values) return undefined;
 				return makeObjectValue(new Map([['outputs', makeObjectValue(new Map(
 					Object.entries(values).map(([key, value]) => [key, { type: 'string', value }])
@@ -57,8 +57,9 @@ describe('dependency resolution', () => {
 	const plain = (request: DependencyRequest) => ({
 		name: request.name,
 		declaredIn: path.relative(root, request.declaredIn),
-		targetConfigPath: path.relative(root, request.targetConfigPath),
-		targetDir: path.relative(root, request.targetDir),
+		target: request.target && { configPath: path.relative(root, request.target.configPath), dir: path.relative(root, request.target.dir) },
+		enabled: request.enabled,
+		skipOutputs: request.skipOutputs,
 		mockOutputs: request.mockOutputs === undefined ? undefined : plainValue(request.mockOutputs),
 		mockOutputsAllowedTerraformCommands: request.mockOutputsAllowedTerraformCommands
 	});
@@ -229,8 +230,9 @@ describe('dependency resolution', () => {
 		assert.deepEqual(requests.map(plain), [{
 			name: 'vpc',
 			declaredIn: 'root.hcl',
-			targetConfigPath: path.join('vpc', 'terragrunt.hcl'),
-			targetDir: 'vpc',
+			target: { configPath: path.join('vpc', 'terragrunt.hcl'), dir: 'vpc' },
+			enabled: true,
+			skipOutputs: false,
 			mockOutputs: { id: 'vpc-mock' },
 			mockOutputsAllowedTerraformCommands: ['plan']
 		}]);
@@ -252,8 +254,8 @@ describe('dependency resolution', () => {
 		const { evaluator, requests } = recording({ vpc: { id: 'vpc-123' } });
 		await evaluate(evaluator);
 		assert.deepEqual(requests.map(plain), [{
-			name: 'vpc', declaredIn: path.join('app', 'terragrunt.hcl'), targetConfigPath: path.join('vpc', 'terragrunt.hcl'),
-			targetDir: 'vpc', mockOutputs: undefined, mockOutputsAllowedTerraformCommands: undefined
+			name: 'vpc', declaredIn: path.join('app', 'terragrunt.hcl'), target: { configPath: path.join('vpc', 'terragrunt.hcl'), dir: 'vpc' },
+			enabled: true, skipOutputs: false, mockOutputs: undefined, mockOutputsAllowedTerraformCommands: undefined
 		}]);
 	});
 
@@ -270,7 +272,7 @@ describe('dependency resolution', () => {
 		const { evaluator, requests } = recording({ vpc: { id: 'vpc-123' } });
 		await evaluate(evaluator);
 		assert.deepEqual(requests.map(plain), [{
-			name: 'vpc', declaredIn: path.join('app', 'terragrunt.hcl'), targetConfigPath: path.join('vpc', 'terragrunt.hcl'), targetDir: 'vpc',
+			name: 'vpc', declaredIn: path.join('app', 'terragrunt.hcl'), target: { configPath: path.join('vpc', 'terragrunt.hcl'), dir: 'vpc' }, enabled: true, skipOutputs: false,
 			mockOutputs: { a: 'root', b: 'unit', nested: { x: 'root', y: 'unit' } },
 			mockOutputsAllowedTerraformCommands: ['plan', 'validate']
 		}]);
@@ -289,7 +291,7 @@ describe('dependency resolution', () => {
 		const { evaluator, requests } = recording({ network: { id: 'net-1' } });
 		const result = await evaluate(evaluator);
 		assert.deepEqual(plainValue(result.inputs!), { id: 'net-1' });
-		assert.deepEqual(requests.map(request => path.relative(root, request.targetDir)), ['network']);
+		assert.deepEqual(requests.map(request => path.relative(root, request.target!.dir)), ['network']);
 	});
 
 	it('asks the resolver once however often a dependency is read', async () => {
