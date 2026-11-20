@@ -13,8 +13,12 @@ describe('module inputs from terraform source', () => {
 	let directory: string;
 	let workspace: Workspace;
 
+	// The fixture lies in a directory reached through no link, as macOS's
+	// temporary folder under /var is not: get_repo_root answers with its links
+	// resolved, as Terragrunt's does, and a message names the module relative
+	// to the unit's directory as written.
 	beforeEach(async () => {
-		directory = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-inputs-'));
+		directory = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'tghclparser-inputs-'));
 		workspace = new Workspace();
 		workspace.setWorkspaceRoot(URI.file(directory).toString());
 		await fs.mkdir(path.join(directory, 'modules', 'app'), { recursive: true });

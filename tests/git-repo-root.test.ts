@@ -222,12 +222,14 @@ inputs = {
 	});
 
 	// The walk examines 1024 directories at most, the start among them, as
-	// internal/git/repo_root.go bounds it; a macOS path cannot be deep enough
-	// for a release binary to show it there. The walk is asked directly, as
-	// get_repo_root asks it: evaluating a unit this deep would first search all
-	// of its directories for the workspace's root.hcl, a second walk that is
-	// not under test and that tripled the walks' time. The get_repo_root tests
-	// above cover the route through an evaluation.
+	// internal/git/repo_root.go bounds it. A path that deep holds over 2048
+	// bytes and macOS refuses one of more than 1024 (its PATH_MAX), so there no
+	// walk, Terragrunt's or this one, can reach the bound, and the tree cannot
+	// be made: the test runs where a path may be that long. The walk is asked
+	// directly, as get_repo_root asks it: evaluating a unit this deep would
+	// first search all of its directories for the workspace's root.hcl, a
+	// second walk that is not under test and that tripled the walks' time. The
+	// get_repo_root tests above cover the route through an evaluation.
 	//
 	// Every step names a path of over a thousand components, so the kernel
 	// looks each one up again: on a 4-CPU Linux guest at rest, making the tree
@@ -237,6 +239,7 @@ inputs = {
 	// than in afterEach so that its time is counted against this test's
 	// timeout.
 	it('finds a root 1023 directories above the unit, and gives up one further', async function () {
+		if (process.platform === 'darwin') this.skip();
 		this.timeout(10000);
 		const root = path.join(real, 'base');
 		const within = path.join(root, ...Array.from({ length: 1023 }, () => 'd'));

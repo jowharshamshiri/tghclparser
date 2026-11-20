@@ -11,8 +11,12 @@ import { LocatedWorkspaceError, Workspace } from '../src/Workspace';
 describe('current Terragrunt workspace graph', () => {
 	let directory: string;
 
+	// The fixture lies in a directory reached through no link, as macOS's
+	// temporary folder under /var is not: get_repo_root answers with its links
+	// resolved, as Terragrunt's does, and the graph names a file relative to the
+	// workspace root as written, as Terragrunt's find names what a unit reads.
 	beforeEach(async () => {
-		directory = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-'));
+		directory = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'tghclparser-'));
 	});
 
 	afterEach(async () => {
