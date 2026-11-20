@@ -1,6 +1,6 @@
 import { domainToASCII } from 'node:url';
 
-import { isLocalSource, splitModuleSource } from './module-variables';
+import { isLocalSource, normaliseSubdirectory, splitModuleSource } from './module-variables';
 
 /** What a `terraform { source }` value names, once its form has been recognised. */
 export type ModuleSourceClass =
@@ -125,7 +125,7 @@ function classifyRegistrySource(text: string, defaultHost: string): ModuleSource
 	let subdirectory = '';
 	const separator = modulePath.indexOf('//');
 	if (separator >= 0) {
-		subdirectory = modulePath.slice(separator + 2).replace(/^\/+/, '');
+		subdirectory = normaliseSubdirectory(modulePath.slice(separator + 2));
 		modulePath = modulePath.slice(0, separator);
 	}
 	const subdirectoryProblem = subdirectoryFault(subdirectory);
@@ -199,7 +199,7 @@ function classifyGitSource(parts: ReturnType<typeof splitModuleSource>): ModuleS
  * Checks a subdirectory before it can reach git or the filesystem: no `..` segment, backslash, NUL or leading dash,
  * which git would read as an option.
  *
- * @param subdirectory a `//subdirectory` after leading slashes were dropped.
+ * @param subdirectory a normalised `//subdirectory`.
  * @returns why it must not be used, or undefined when it is acceptable.
  */
 export function subdirectoryFault(subdirectory: string): string | undefined {

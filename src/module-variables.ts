@@ -126,10 +126,21 @@ export interface ModuleFileError {
 const maximumDefaultLength = 120;
 
 /**
+ * Puts a `//subdirectory` in the form a path join gives it, as Terragrunt does: leading and trailing slashes are
+ * dropped, repeated ones collapsed and `.` segments removed, so `modules/x//`, `modules//x` and `./modules/x` name
+ * `modules/x`.
+ *
+ * @param subdirectory the text after the `//` separator.
+ * @returns the subdirectory, empty when it names the module itself.
+ */
+export function normaliseSubdirectory(subdirectory: string): string {
+	return subdirectory.split('/').filter(segment => segment !== '' && segment !== '.').join('/');
+}
+
+/**
  * Splits a module source the way go-getter does: an optional forced getter prefix such as `git::`, the repository,
- * a `//subdirectory` inside it, and the `ref`, `version` and `depth` query parameters. Leading slashes in the
- * subdirectory are dropped, so the common `modules/x///` form names the module itself rather than the filesystem
- * root.
+ * a `//subdirectory` inside it, and the `ref`, `version` and `depth` query parameters. The subdirectory is
+ * normalised, so the common `modules/x///` form names the module itself rather than the filesystem root.
  *
  * @param source the source as written or evaluated.
  * @returns the parts; `subdirectory` is empty when there is none, and `parameters` lists every query key given.
@@ -152,7 +163,7 @@ export function splitModuleSource(source: string): {repository: string; subdirec
 	const separator = value.indexOf('//', searchStart);
 	if (separator >= 0) {
 		repository = value.slice(0, separator);
-		subdirectory = value.slice(separator + 2).replace(/^\/+/, '');
+		subdirectory = normaliseSubdirectory(value.slice(separator + 2));
 	}
 	return {
 		repository,

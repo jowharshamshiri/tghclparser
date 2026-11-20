@@ -18,6 +18,17 @@ describe('module source classification', () => {
 		expect(classifyModuleSource('tfr:///ns/name/aws///')).to.include({ subdirectory: '' });
 	});
 
+	it('normalises the slashes in a subdirectory, as a path join does', () => {
+		expect(classifyModuleSource('tfr:///terraform-aws-modules/iam/aws//modules/iam-assumable-role//?version=5.20.0')).to.include({ subdirectory: 'modules/iam-assumable-role', constraint: '5.20.0' });
+		expect(classifyModuleSource('tfr:///ns/name/aws//modules//sub/')).to.include({ subdirectory: 'modules/sub' });
+		expect(classifyModuleSource('tfr:///terraform-aws-modules/iam/aws//./modules/iam-assumable-role?version=5.20.0')).to.include({ subdirectory: 'modules/iam-assumable-role', constraint: '5.20.0' });
+		expect(classifyModuleSource('tfr:///ns/name/aws//modules/./sub/.')).to.include({ subdirectory: 'modules/sub' });
+		expect(classifyModuleSource('tfr:///ns/name/aws//.')).to.include({ subdirectory: '' });
+		expect(classifyModuleSource('git::https://example.com/repo.git//modules//app//?ref=v1', { origin: 'registry' })).to.include({ subdirectory: 'modules/app' });
+		expect(classifyModuleSource('../../modules/app//sub//')).to.include({ subdirectory: 'sub' });
+		expect(splitModuleSource('https://example.com/module.zip//modules///app/')).to.include({ subdirectory: 'modules/app' });
+	});
+
 	it('reports malformed registry sources with the reason', () => {
 		const reasons = [
 			['tfr:///ns/name', 'is not namespace/name/provider'],
