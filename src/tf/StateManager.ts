@@ -3,8 +3,8 @@ import * as path from 'node:path';
 
 import { URI } from 'vscode-uri';
 
-import { CtyNumber } from '../cty-number';
-import { makeStringValue, parseJsonDocument } from '../functions/utils';
+import { unmarshalType, unmarshalValue } from '../cty-json';
+import { parseJsonDocument } from '../functions/utils';
 import type { RuntimeValue, ValueType } from '../model';
 
 import type { TerraformState } from './model';
@@ -75,65 +75,11 @@ export class StateManager {
 	}
 
 	/**
-	 * Converts a terraform output value to a RuntimeValue
+	 * An output's value decoded as of the type the state records for it, as Terragrunt decodes a dependency's outputs
+	 * from a state file.
 	 */
-	private convertToRuntimeValue(value: unknown, type: string | [string, unknown]): RuntimeValue<ValueType> {
-		if (Array.isArray(type)) {
-			const [constructor, elementType] = type;
-			if (constructor === 'list' || constructor === 'tuple' || constructor === 'set') {
-				if (!Array.isArray(value)) throw new Error(`Terraform state output declared ${constructor} but contains a non-array value`);
-				const elementTypes = constructor === 'tuple' && Array.isArray(elementType) ? elementType : undefined;
-				return {
-					type: 'array',
-					value: value.map((item, index) => this.convertToRuntimeValue(item, this.normalizeType(elementTypes?.[index] ?? elementType, item)))
-				};
-			}
-			if (constructor === 'map' || constructor === 'object') {
-				if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-					throw new Error(`Terraform state output declared ${constructor} but contains a non-object value`);
-				}
-				const entries = new Map<string, RuntimeValue<ValueType>>();
-				for (const [key, item] of Object.entries(value)) {
-					const declared = constructor === 'object' && typeof elementType === 'object' && elementType !== null
-						? (elementType as Record<string, unknown>)[key]
-						: elementType;
-					entries.set(key, this.convertToRuntimeValue(item, this.normalizeType(declared, item)));
-				}
-				return { type: 'object', value: entries };
-			}
-			throw new Error(`Unsupported Terraform state output type constructor: ${constructor}`);
-		}
-		switch (type) {
-			case 'string': {
-				return makeStringValue(String(value));
-			}
-			case 'number': {
-				if (!(value instanceof CtyNumber)) throw new Error('Terraform state output declared number but contains a non-number value');
-				return { type: 'number', value };
-			}
-			case 'bool':
-			case 'boolean': {
-				return { type: 'boolean', value: Boolean(value) };
-			}
-			case 'null': {
-				if (value !== null) throw new Error('Terraform state output declared null but contains a value');
-				return { type: 'null', value: null };
-			}
-			default: {
-				throw new Error(`Unsupported Terraform state output type: ${type}`);
-			}
-		}
-	}
-
-	private normalizeType(type: unknown, value: unknown): string | [string, unknown] {
-		if (typeof type === 'string' || (Array.isArray(type) && typeof type[0] === 'string')) return type as string | [string, unknown];
-		if (value === null) return 'null';
-		if (value instanceof CtyNumber) return 'number';
-		if (Array.isArray(value)) return ['tuple', value.map(item => this.normalizeType(undefined, item))];
-		if (typeof value === 'object') {
-			return ['object', Object.fromEntries(Object.entries(value).map(([key, item]) => [key, this.normalizeType(undefined, item)]))];
-		}
-		return typeof value;
+	private convertToRuntimeValue(value: unknown, type: unknown): RuntimeValue<ValueType> {
+		return unmarshalValue(value, unmarshalType(type));
 	}
 
 	/**

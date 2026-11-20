@@ -11,6 +11,7 @@ import { URI } from 'vscode-uri';
 import { DiagnosticSeverity } from 'vscode-languageserver';
 
 import { CtyNumber } from './cty-number';
+import { unmarshalType, unmarshalValue } from './cty-json';
 import { ConfigEvaluator, UnresolvedDependencyOutputError, runtimeValueToPlain } from './Evaluator';
 import type { DependencyRequest } from './Evaluator';
 import { compareStrings, convertToRuntimeValue, makeObjectValue, parseJsonDocument } from './functions/utils';
@@ -1958,12 +1959,19 @@ async function dependencyOutputs(
 	if (!isRecord(raw)) {
 		return unreadable('output command returned an invalid output map');
 	}
+	// Each output's value is decoded as of the type recorded with it, as Terragrunt's
+	// TerraformOutputJSONToCtyValueMap decodes it.
 	const outputs = new Map<string, RuntimeValue<ValueType>>();
 	for (const [key, entry] of Object.entries(raw)) {
 		if (!isRecord(entry) || !('value' in entry)) {
 			return unreadable(`output ${key} has no value`);
 		}
-		outputs.set(key, convertToRuntimeValue(entry.value));
+		if (!('type' in entry)) return unreadable(`output ${key} has no type`);
+		try {
+			outputs.set(key, unmarshalValue(entry.value, unmarshalType(entry.type)));
+		} catch (error) {
+			return unreadable(`output ${key}: ${(error as Error).message}`);
+		}
 	}
 	// A unit that has never been applied is this case, not the one above:
 	// `tofu output -json` prints {} and exits 0 when there is no state, so the

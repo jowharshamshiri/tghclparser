@@ -4,13 +4,13 @@ import type { CompletionItem, Diagnostic, DocumentLink, LocationLink, MarkupCont
 import { URI } from 'vscode-uri';
 
 import { CtyNumber } from './cty-number';
-import { comparison } from './cty-operations';
-import { coerceToString, makeStringValue, unwrapSensitive } from './functions/utils';
+import { comparison, conditionValue } from './cty-operations';
+import { ctyDynamic } from './cty-types';
+import { coerceToString, makeNullValue, makeStringValue, unwrapSensitive } from './functions/utils';
 import { readInlineFunction, synthesizeDefinition, tokenToNode } from './inline-functions';
 import type { FunctionContext, FunctionDefinition, ResolvedReference, RuntimeValue, TerragruntConfig, TokenType, ValueType } from './model';
 import { Token } from './model';
 import type { ModuleFileError, ModuleType, ModuleVariable } from './module-variables';
-import { conditionValue } from './cty-operations';
 import { TextChange } from './text-change';
 import { mergeObjectTypes, ValueTypeReader } from './value-types';
 import type { EvaluatedSpan } from './Evaluator';
@@ -794,7 +794,7 @@ export class ParsedDocument {
 	private traverseValue(value: RuntimeValue<ValueType>, parts: string[]): RuntimeValue<ValueType> {
 		if (parts.length === 0) return value;
 
-		const nullValue: RuntimeValue<'null'> = { type: 'null', value: null };
+		const nullValue = makeNullValue(ctyDynamic);
 
 		switch (value.type) {
 			case 'object':

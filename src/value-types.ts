@@ -1,3 +1,4 @@
+import { friendlyTypeName } from './functions/utils';
 import type { RuntimeValue, ValueType } from './model';
 import type { ModuleType, ModuleTypeAttribute } from './module-variables';
 
@@ -142,7 +143,7 @@ export function valueAt(value: RuntimeValue<ValueType> | undefined, path: string
 
 /**
  * An evaluated value in a few characters: a string, number or boolean as itself, a long string cut with an ellipsis,
- * and anything else by its kind.
+ * and anything else by the name go-cty gives its type, such as `tuple` or `list of string`.
  *
  * @param value the evaluated value.
  * @returns the summary.
@@ -158,10 +159,9 @@ export function valueSummary(value: RuntimeValue<ValueType>): string {
 		case 'boolean':
 			return String(value.value);
 		case 'array':
-			return 'tuple';
 		case 'object':
 		case 'block':
-			return 'object';
+			return friendlyTypeName(value);
 		default:
 			return value.type;
 	}

@@ -1531,7 +1531,7 @@ export class ConfigEvaluator {
 				const evaluated = await this.evalNode(node, scope);
 				return written ? computable(evaluated) : evaluated;
 			});
-			return value === undefined ? UNRESOLVED : unmarkedPlain(value);
+			return value === undefined ? UNRESOLVED : runtimeValueToPlain(value);
 		};
 		const block = (node: TNode, prefix: string, written: boolean): ConfigBlock => {
 			const type = String(node.value);
@@ -1584,16 +1584,16 @@ export class ConfigEvaluator {
 		const locals: Record<string, Plain> = {};
 		for (const name of result.scope.locals.keys()) {
 			const value = await this.renderField(result.filePath, `locals.${name}`, () => this.resolveLocal(result.scope, name));
-			if (value !== undefined) locals[name] = unmarkedPlain(value);
+			if (value !== undefined) locals[name] = runtimeValueToPlain(value);
 		}
 		config.locals = Object.keys(locals).length > 0 ? locals : undefined;
-		config.inputs = result.inputs === null ? undefined : unmarkedPlain(makeObjectValue(result.inputs)) as Record<string, Plain>;
+		config.inputs = result.inputs === null ? undefined : runtimeValueToPlain(makeObjectValue(result.inputs)) as Record<string, Plain>;
 
 		for (const dependency of withOutputs ? config.dependencyBlocks : []) {
 			if (dependency.enabled === false || dependency.skipOutputs === true) continue;
 			const value = await this.renderField(result.filePath, `dependency.${dependency.name}`, () => this.dependencyValue(dependency.name, result.scope));
 			if (value === undefined) continue;
-			const outputs = (unmarkedPlain(value) as Record<string, Plain>).outputs;
+			const outputs = (runtimeValueToPlain(value) as Record<string, Plain>).outputs;
 			dependency.outputs = outputs === undefined ? null : outputs;
 		}
 		return config;
@@ -2166,7 +2166,8 @@ export class ConfigEvaluator {
 					const valueNode = child.children?.find(c => c.type !== 'attribute_identifier' && c.type !== 'object_key');
 					if (!keyNode) return [{ key: String(child.value), value: await this.evalNode(valueNode, scope), inherited: false }];
 					const [key, value] = await this.evalOperands([keyNode.children?.[0], valueNode], scope);
-					return [{ key: this.atNode(keyNode.children?.[0], scope, () => objectKey(computable(key))), value, inherited: false }];
+					const keyValue = computable(key);
+					return [{ key: this.atNode(keyNode.children?.[0], scope, () => objectKey(keyValue)), value, inherited: false }];
 				}];
 			}
 			if (child.type === 'inheritance') {
@@ -2357,7 +2358,7 @@ export class ConfigEvaluator {
 				groups.set(key, group);
 			} else {
 				if (map.has(key)) {
-					throw new Error(`Duplicate object key; Two different items produced the key "${key}" in this 'for' expression. If duplicates are expected, use the ellipsis (...) after the value expression to enable grouping by key.`);
+					throw new Error(`Two different items produced the key "${key}" in this 'for' expression. If duplicates are expected, use the ellipsis (...) after the value expression to enable grouping by key.`);
 				}
 				map.set(key, value);
 			}
@@ -3086,7 +3087,7 @@ export const ENCRYPTED_VALUE = '(encrypted)';
 
 /**
  * A value in plain JavaScript: strings, booleans, null, arrays and records, and each number a {@link CtyNumber},
- * which JSON.stringify writes as its exact decimal text.
+ * which JSON.stringify writes as its exact decimal text. A sensitive value is the value it holds.
  */
 export function runtimeValueToPlain(value: RuntimeValue<ValueType>): unknown {
 	switch (value.type) {
@@ -3097,6 +3098,9 @@ export function runtimeValueToPlain(value: RuntimeValue<ValueType>): unknown {
 			return value.value;
 		case 'null':
 			return null;
+		case 'sensitive' as ValueType:
+			// Sensitivity marks how a value is shown, not what it is: Terragrunt unmarks what it decodes and renders.
+			return runtimeValueToPlain(value.value as RuntimeValue<ValueType>);
 		case 'array':
 			return (value.value as RuntimeValue<ValueType>[]).map(runtimeValueToPlain);
 		case 'object':
@@ -3109,26 +3113,6 @@ export function runtimeValueToPlain(value: RuntimeValue<ValueType>): unknown {
 		}
 		default:
 			return null;
-	}
-}
-
-/**
- * A value in plain JavaScript as {@link runtimeValueToPlain} gives it, with every sensitive mark taken off first, as
- * Terragrunt unmarks what it decodes into its configuration.
- */
-function unmarkedPlain(value: RuntimeValue<ValueType>): Plain {
-	const unmarked = unwrapSensitive(value);
-	switch (unmarked.type) {
-		case 'array':
-			return (unmarked.value as RuntimeValue<ValueType>[]).map(unmarkedPlain);
-		case 'object':
-		case 'block': {
-			const out: Record<string, Plain> = {};
-			for (const [key, entry] of (unmarked.value as Map<string, RuntimeValue<ValueType>>).entries()) out[key] = unmarkedPlain(entry);
-			return out;
-		}
-		default:
-			return runtimeValueToPlain(unmarked);
 	}
 }
 
