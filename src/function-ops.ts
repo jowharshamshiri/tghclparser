@@ -112,12 +112,18 @@ export class FunctionOperation implements Op<RuntimeValue<ValueType> | undefined
 	}
 }
 
+// ops-ts is published only as an ES module, so the CommonJS build reaches it through import(). It is loaded once:
+// every function call goes through here, and each import() resolves its specifier again, through every module hook
+// registered in the process.
+let opsModule: Promise<typeof import('@jowharshamshiri/ops-ts')> | undefined;
+
 export async function invokeFunctionOperation(
 	op: FunctionOperation,
 	args: RuntimeValue<ValueType>[],
 	context: FunctionContext
 ): Promise<RuntimeValue<ValueType> | undefined> {
-	const { DryContext, WetContext } = await import('@jowharshamshiri/ops-ts');
+	opsModule ??= import('@jowharshamshiri/ops-ts');
+	const { DryContext, WetContext } = await opsModule;
 	const dry = new DryContext()
 		.withValue(FUNCTION_NAME_KEY, op.functionName)
 		.withValue(FUNCTION_ARGS_KEY, serializeArgs(args));
