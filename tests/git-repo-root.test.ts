@@ -232,9 +232,10 @@ inputs = {
 	// Every step names a path of over a thousand components, so the kernel
 	// looks each one up again: on a 4-CPU Linux guest at rest, making the tree
 	// takes about 170 ms, the two walks about 450 ms and removing the tree about
-	// 550 ms. It is removed here rather than in afterEach so that its time is
-	// counted against this test's timeout, which allows for a machine loaded
-	// several times over.
+	// 550 ms, and the test about 1.5 s in all; with every CPU kept busy by
+	// another process it takes about 2.3 s. The tree is removed here rather
+	// than in afterEach so that its time is counted against this test's
+	// timeout.
 	it('finds a root 1023 directories above the unit, and gives up one further', async function () {
 		this.timeout(10000);
 		const root = path.join(real, 'base');

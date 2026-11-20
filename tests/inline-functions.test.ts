@@ -578,7 +578,10 @@ describe('inline function failure reporting', () => {
 		);
 	});
 
-	it('supports bounded recursion and stops runaway recursion with one clear message', async () => {
+	// Reaching the limit takes 128 calls, at about two milliseconds each: on a 4-CPU Linux guest the test takes about
+	// 330 ms at rest and 1.45 s with every CPU kept busy by another process.
+	it('supports bounded recursion and stops runaway recursion with one clear message', async function () {
+		this.timeout(5000);
 		assert.deepEqual(
 			await evaluateInputs([
 				'function fact(n) {',
@@ -598,10 +601,12 @@ describe('inline function failure reporting', () => {
 		assert.ok(message.length < 200, `expected a concise message, got ${message.length} characters`);
 	});
 
-	it('bounds each evaluation by its own nesting when evaluations share an evaluator', async () => {
-		// A language server keeps one evaluator and evaluates files concurrently. Each recursion below is 71 calls
-		// deep, within the limit of 128; only their sum, 142, is not. Every call costs about a millisecond, so the
-		// recursions are no deeper than that sum needs.
+	// A language server keeps one evaluator and evaluates files concurrently. Each recursion below is 71 calls deep,
+	// within the limit of 128; only their sum, 142, is not. Every call costs about two milliseconds, so the recursions
+	// are no deeper than that sum needs: on a 4-CPU Linux guest the test takes about 300 ms at rest and 1 s with every
+	// CPU kept busy by another process.
+	it('bounds each evaluation by its own nesting when evaluations share an evaluator', async function () {
+		this.timeout(5000);
 		const shared = evaluator();
 		const content = 'function down(n) {\n  if (n <= 0) return 0;\n  return await tg.call("down", n - 1);\n}\n\ninputs = { d = down(70) }\n';
 		const dirs = await Promise.all([0, 1].map(() => fs.mkdtemp(path.join(os.tmpdir(), 'inline-fn-'))));
