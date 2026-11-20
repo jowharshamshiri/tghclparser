@@ -17,6 +17,60 @@
     return heredocMarkerStack[heredocMarkerStack.length - 1];
   }
 
+  // What Go's unicode.IsSpace counts as white space. Written by code point, since the grammar's code is copied into
+  // the parser with its escapes read, and a line separator in a regular expression literal would end it.
+  const goSpace = {
+    test(character) {
+      const code = character.codePointAt(0);
+      return (code >= 0x09 && code <= 0x0D) || code === 0x20 || code === 0x85 || code === 0xA0 || code === 0x1680
+        || (code >= 0x2000 && code <= 0x200A) || code === 0x2028 || code === 0x2029 || code === 0x202F
+        || code === 0x205F || code === 0x3000;
+    }
+  };
+
+  // The white space at the start of a text, as the grapheme clusters it holds: "\r\n" is one, every other white space
+  // character one each.
+  function leadingSpace(text) {
+    let end = 0;
+    let clusters = 0;
+    while (end < text.length && goSpace.test(text[end])) {
+      end += text[end] === '\r' && text[end + 1] === '\n' ? 2 : 1;
+      clusters++;
+    }
+    return { end, clusters };
+  }
+
+  // The tokens of a `<<-` heredoc with the least white space any line starts with taken off the start of each line,
+  // as hclsyntax's flushHeredocTemplateParts does: counted in grapheme clusters, from the literal tokens that start
+  // lines. A line of nothing but white space is not counted, and a line starting with a sequence has none.
+  function flushHeredoc(tokens) {
+    let least = Infinity;
+    let newline = true;
+    const starts = new Set();
+    for (const token of tokens) {
+      if (newline) {
+        newline = false;
+        if (token.literal === undefined) {
+          least = 0;
+        } else {
+          const space = leadingSpace(token.literal);
+          if (!(space.end === token.literal.length && token.literal.endsWith('\n'))) {
+            least = Math.min(least, space.clusters);
+            starts.add(token);
+          }
+        }
+      }
+      if (token.literal !== undefined && token.literal.endsWith('\n')) newline = true;
+    }
+    if (least === Infinity || least === 0) return tokens;
+    return tokens.map(token => {
+      if (!starts.has(token)) return token;
+      let end = 0;
+      for (let cluster = 0; cluster < least; cluster++) end += token.literal[end] === '\r' && token.literal[end + 1] === '\n' ? 2 : 1;
+      return { ...token, literal: token.literal.slice(end) };
+    });
+  }
+
   // Joins the literal characters of a string, each a `{ literal, location }`, into runs that keep the source range
   // they were written in; an interpolation ends a run. A literal part of an interpolated string is a token of its
   // own, so it must cover only its own text, or it would hide the interpolations after it.
@@ -634,12 +688,8 @@ Object = "{" _ pairs:(Pair (_ ","? _ Pair)* (_ ",")?)? _ "}" {
 StringLiteral = QuotedString / Heredoc
 Heredoc = "<<" trim:"-"? marker:beginMarker newline content:heredocContent endMarkerLine {
   popHeredocMarker();
-  const literals = consolidateLiteralParts(stripTemplate(content));
-  // `<<-` trims every line of the literal text.
-  const parts = trim === "-"
-    ? literals.map(part => part.literal !== undefined ? { ...part, literal: part.literal.split('\n').map(line => line.trim()).join('\n') } : part)
-    : literals;
-  return templateNode(parts, location());
+  const tokens = stripTemplate(content);
+  return templateNode(consolidateLiteralParts(trim === "-" ? flushHeredoc(tokens) : tokens), location());
 }
 
 // A heredoc's characters and sequences, as stripTemplate takes them: a line ends a literal token.

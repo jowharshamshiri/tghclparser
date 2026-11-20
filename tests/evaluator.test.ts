@@ -6,6 +6,7 @@ import path from 'node:path';
 import { ConfigEvaluator } from '../src/Evaluator';
 import { makeArrayValue, makeSensitiveValue, makeStringValue } from '../src/functions/utils';
 import type { RuntimeValue, ValueType } from '../src/model';
+import { terragruntConfigAsCty } from '../src/terragrunt-config';
 import { plainValue } from './plain-values';
 import { ENCRYPTED_SOPS_JSON, ENCRYPTED_SOPS_YAML, withoutSops, withoutSopsKey } from './sops-fixture';
 
@@ -1116,9 +1117,7 @@ describe('semantic configuration evaluation', () => {
 			].join('\n');
 			await fs.writeFile(unitPath, unit);
 
-			const rendered = plainValue(
-				await evaluator.evaluateRenderedConfig(unitPath, unit, unitDir)
-			) as Record<string, unknown>;
+			const rendered = terragruntConfigAsCty(await evaluator.evaluateRenderedConfig(unitPath, unit, unitDir));
 			const generate = rendered.generate as Record<string, Record<string, unknown>>;
 			assert.ok(generate.provider, 'the included block is part of what the unit renders');
 			assert.equal(generate.provider.path, 'provider.tf');
@@ -1200,6 +1199,48 @@ describe('semantic configuration evaluation', () => {
 		const result = await evaluator.evaluateUnit(configPath, content, process.cwd());
 		assert.equal(result.error, undefined);
 		assert.deepEqual(plainValue(result.inputs!), { plain: 'a\nb\n', flush: 'a\nb\n', empty: '' });
+	});
+
+	// What Terragrunt v1.2.2 renders for the same heredocs: `<<-` takes off the least white space any line starts
+	// with, not all of it, so what is indented within the heredoc stays indented.
+	it('takes the common indentation off a <<- heredoc', async () => {
+		const content = [
+			'inputs = {',
+			'  nested = <<-EOT',
+			'    provider "aws" {',
+			'      region = "us-east-1"',
+			'    }',
+			'  EOT',
+			'  blank = <<-EOT',
+			'      a',
+			'  ',
+			'',
+			'    b',
+			'  EOT',
+			'  sequence = <<-EOT',
+			'    a',
+			'${"x"}',
+			'    b',
+			'  EOT',
+			'  inner = <<-EOT',
+			'    a ${"x"}  c',
+			'      b',
+			'  EOT',
+			'  tabs = <<-EOT',
+			'\t\ta',
+			'\tb',
+			'  EOT',
+			'}'
+		].join('\n');
+		const result = await evaluator.evaluateUnit(configPath, content, process.cwd());
+		assert.equal(result.error, undefined);
+		assert.deepEqual(plainValue(result.inputs!), {
+			nested: 'provider "aws" {\n  region = "us-east-1"\n}\n',
+			blank: '  a\n  \n\nb\n',
+			sequence: '    a\nx\n    b\n',
+			inner: 'a x  c\n  b\n',
+			tabs: '\ta\nb\n'
+		});
 	});
 
 	it('reduces the template escapes the way Terragrunt does', async () => {
@@ -1289,9 +1330,7 @@ describe('semantic configuration evaluation', () => {
 			const unit = 'include "root" {\n  path = find_in_parent_folders("terragrunt.hcl")\n}\n';
 			await fs.writeFile(unitPath, unit);
 
-			const rendered = plainValue(
-				await evaluator.evaluateRenderedConfig(unitPath, unit, unitDir)
-			) as Record<string, unknown>;
+			const rendered = terragruntConfigAsCty(await evaluator.evaluateRenderedConfig(unitPath, unit, unitDir));
 			const generate = rendered.generate as Record<string, Record<string, unknown>>;
 			assert.equal(
 				generate.g.contents,
@@ -1871,12 +1910,14 @@ describe('semantic configuration evaluation', () => {
 				const unit = [
 					`locals { secrets = ${secrets} }`,
 					'generate "secret" {',
-					'  path     = "secret.txt"',
-					'  contents = local.secrets.token',
+					'  path      = "secret.txt"',
+					'  if_exists = "overwrite"',
+					'  contents  = local.secrets.token',
 					'}',
 					'generate "plain" {',
-					'  path     = "plain.txt"',
-					'  contents = "plain"',
+					'  path      = "plain.txt"',
+					'  if_exists = "overwrite"',
+					'  contents  = "plain"',
 					'}',
 					'remote_state {',
 					'  backend = "s3"',
@@ -1888,10 +1929,11 @@ describe('semantic configuration evaluation', () => {
 				await fs.writeFile(unitPath, unit);
 				const reader = encryptedReader(true);
 				const rendered = await withoutSopsKey(() => reader.evaluateRenderedConfig(unitPath, unit, root));
-				const plain = plainValue(rendered) as Record<string, unknown>;
-				assert.deepEqual(plain.generate, { secret: { path: 'secret.txt' }, plain: { path: 'plain.txt', contents: 'plain' } });
-				assert.equal(Object.prototype.hasOwnProperty.call(plain, 'remote_state'), false, JSON.stringify(plain.remote_state));
-				assert.deepEqual(reader.unresolvedRenderFields().map(issue => issue.field).sort(), ['generate.secret.contents', 'remote_state']);
+				// A block whose required attribute cannot be known is left out whole, not written with a value nobody gave.
+				assert.deepEqual([...rendered.generate.keys()], ['plain']);
+				assert.equal(rendered.generate.get('plain')?.contents, 'plain');
+				assert.equal(rendered.remoteState, undefined);
+				assert.deepEqual(reader.unresolvedRenderFields().map(issue => issue.field).sort(), ['generate.secret.contents', 'remote_state.config']);
 			} finally {
 				await fs.rm(root, { recursive: true, force: true });
 			}

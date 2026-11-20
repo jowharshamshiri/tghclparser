@@ -151,13 +151,42 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(root, {recursive: true, force: true});
 	});
 
-	it('renders JSON configuration without dropping the authored structure', async () => {
+	it('renders a sensitive local as its value, as Terragrunt v1.2.2 does', async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-render-sensitive-'));
+		await fs.writeFile(path.join(root, 'terragrunt.hcl'), 'locals {\n  secret = sensitive("s3cr3t")\n  revealed = nonsensitive(local.secret)\n}\n');
+		const cli = path.resolve('dist/cli.cjs');
+		const result = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', root], {encoding: 'utf8'});
+		expect(result.status).to.equal(0, result.stderr);
+		expect(result.stdout).to.contain('"locals":{"revealed":"s3cr3t","secret":"s3cr3t"}');
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
+	it('escapes JSON strings as Go does when rendering JSON', async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-render-escape-'));
+		await fs.writeFile(path.join(root, 'terragrunt.hcl'), 'inputs = {\n  "<k>" = "<a> & b\\u2028c\\u2029"\n}\n');
+		const cli = path.resolve('dist/cli.cjs');
+		const result = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', root], {encoding: 'utf8'});
+		expect(result.status).to.equal(0, result.stderr);
+		// What Terragrunt v1.2.2 prints for the same inputs.
+		expect(result.stdout).to.contain('"inputs":{"\\u003ck\\u003e":"\\u003ca\\u003e \\u0026 b\\u2028c\\u2029"}');
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
+	it('renders a JSON configuration as the configuration Terragrunt decodes from it, and finds it by default', async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-render-json-'));
 		await fs.writeFile(path.join(root, 'terragrunt.hcl.json'), JSON.stringify({inputs: {region: 'eu-west-1'}, terraform: {source: './module'}}));
 		const cli = path.resolve('dist/cli.cjs');
-		const result = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', root, '--config', 'terragrunt.hcl.json'], {encoding: 'utf8'});
-		expect(result.status).to.equal(0, result.stderr);
-		expect(JSON.parse(result.stdout)).to.deep.equal({inputs: {region: 'eu-west-1'}, terraform: {source: './module'}});
+		// What Terragrunt v1.2.2 prints for the same file, by name and found on its own.
+		const expected = '{"dependencies":null,"dependency":{},"download_dir":"","feature":{},"generate":{},"iam_assume_role_duration":null,'
+			+ '"iam_assume_role_session_name":"","iam_role":"","iam_web_identity_token":"","inputs":{"region":"eu-west-1"},"locals":null,'
+			+ '"terraform":{"after_hook":{},"before_hook":{},"copy_terraform_lock_file":null,"error_hook":{},"exclude_from_copy":null,'
+			+ '"extra_arguments":{},"include_in_copy":null,"source":"./module"},"terraform_binary":"","terraform_version_constraint":"",'
+			+ '"terragrunt_version_constraint":""}\n';
+		for (const args of [['--config', 'terragrunt.hcl.json'], []]) {
+			const result = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', root, ...args], {encoding: 'utf8'});
+			expect(result.status).to.equal(0, result.stderr);
+			expect(result.stdout).to.equal(expected);
+		}
 		await fs.rm(root, {recursive: true, force: true});
 	});
 
@@ -1342,21 +1371,21 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(made.root, {recursive: true, force: true});
 	});
 
-	it('does not report an inherited generate block replaced by the unit', async () => {
+	it('refuses a generate block a unit declares again over an included one, as Terragrunt v1.2.2 does', async () => {
 		const cli = path.resolve('dist/cli.cjs');
 		const made = await workspaceWithUnappliedDependency([
 			'include "root" { path = find_in_parent_folders("terragrunt.hcl") }',
-			'generate "file" {\n  path = "x.tf"\n  contents = "known"\n}'
+			'generate "file" {\n  path = "x.tf"\n  if_exists = "overwrite"\n  contents = "known"\n}'
 		]);
+		// The included block is refused even though its contents cannot be known yet: the label is what clashes.
 		await fs.writeFile(path.join(made.root, 'terragrunt.hcl'), [
 			'dependency "producer" { config_path = "../producer" }',
-			'generate "file" {\n  path = "x.tf"\n  contents = dependency.producer.outputs.answer\n}'
+			'generate "file" {\n  path = "x.tf"\n  if_exists = "overwrite"\n  contents = dependency.producer.outputs.answer\n}'
 		].join('\n'));
 		const result = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', made.consumer],
 			{cwd: made.consumer, encoding: 'utf8'});
-		expect(result.status).to.equal(0, result.stderr);
-		expect(JSON.parse(result.stdout).generate.file.contents).to.equal('known');
-		expect(result.stderr).to.equal('');
+		expect(result.status).to.equal(1);
+		expect(result.stderr).to.contain('Detected generate blocks with the same name: [file]');
 		await fs.rm(made.root, {recursive: true, force: true});
 	});
 

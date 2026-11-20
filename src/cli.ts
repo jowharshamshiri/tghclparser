@@ -26,6 +26,8 @@ import { filterFiles, FilterSyntaxError, parseFilter } from './terragrunt-filter
 import type { Filter } from './terragrunt-filter';
 import { unifiedDiff } from './unified-diff';
 import { createRegistryResolver } from './registry';
+import { decodeJsonConfig, terragruntConfigAsCty } from './terragrunt-config';
+import type { ErrorHook, Hook, TerragruntConfig } from './terragrunt-config';
 import { RemoteModuleStore } from './remote-modules';
 import { parseHclSyntax } from './syntax';
 import { LocatedWorkspaceError, Workspace } from './Workspace';
@@ -1271,11 +1273,16 @@ function renderedJson(plain: unknown): string {
 		}
 		if (Array.isArray(value)) return `[${value.map((item, index) => write(item, `${path}.${index}`)).join(',')}]`;
 		if (isRecord(value)) {
-			return `{${Object.keys(value).sort(compareStrings).map(key => `${JSON.stringify(key)}:${write(value[key], `${path}.${key}`)}`).join(',')}}`;
+			return `{${Object.keys(value).sort(compareStrings).map(key => `${goJsonString(key)}:${write(value[key], `${path}.${key}`)}`).join(',')}}`;
 		}
-		return JSON.stringify(value);
+		return typeof value === 'string' ? goJsonString(value) : JSON.stringify(value);
 	};
 	return write(plain, '');
+}
+
+/** A string as Go's encoding/json writes it: as JSON does, and with `<`, `>`, `&`, U+2028 and U+2029 escaped too. */
+function goJsonString(value: string): string {
+	return JSON.stringify(value).replace(/[<>&\u2028\u2029]/g, character => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`);
 }
 
 /**
@@ -1438,7 +1445,7 @@ async function stackLifecycle(command: 'run' | 'output' | 'clean', argv: string[
 
 async function renderConfig(argv: string[]): Promise<number> {
 	let workingDir = process.cwd();
-	let configName = 'terragrunt.hcl';
+	let configName: string | undefined;
 	let json = false;
 	for (let index = 0; index < argv.length; index++) {
 		const argument = argv[index];
@@ -1468,6 +1475,8 @@ async function renderConfig(argv: string[]): Promise<number> {
 		if (argument.startsWith('-')) throw new Error(`Unknown render option ${argument}`);
 	}
 	if (!json) throw new Error('Render output requires --json or --format=json');
+	// Terragrunt looks for its JSON configuration first.
+	configName ??= await pathExists(path.join(workingDir, 'terragrunt.hcl.json')) ? 'terragrunt.hcl.json' : 'terragrunt.hcl';
 	const configPath = path.resolve(workingDir, configName);
 	const root = await fs.realpath(workingDir);
 	const realConfig = await fs.realpath(configPath);
@@ -1477,25 +1486,17 @@ async function renderConfig(argv: string[]): Promise<number> {
 	if (realConfig.endsWith('.json')) {
 		const parsed: unknown = parseJsonDocument(content);
 		validateJSONShape(parsed, path.basename(realConfig));
-		process.stdout.write(`${renderedJson(parsed)}\n`);
+		process.stdout.write(`${renderedJson(terragruntConfigAsCty(await decodeJsonConfig(parsed, realConfig)))}\n`);
 		return 0;
 	}
 	const evaluator = evaluatorFor({terraformCommand: 'render', partialRender: true});
-	const result = await evaluator.evaluateRenderedConfig(realConfig, content, root);
-	process.stdout.write(`${renderedJson(runtimeValueToPlain(result))}\n`);
+	const config = await evaluator.evaluateRenderedConfig(realConfig, content, root, true);
+	process.stdout.write(`${renderedJson(terragruntConfigAsCty(config))}\n`);
 	const unresolved = evaluator.unresolvedRenderFields();
 	for (const entry of unresolved) {
 		process.stderr.write(`unresolved ${entry.field} in ${entry.file}: ${entry.reason}\n`);
 	}
 	return unresolved.length > 0 ? 2 : 0;
-}
-
-function generatedEntries(value: unknown): Array<[string, Record<string, unknown>]> {
-	if (!isRecord(value)) return [];
-	return Object.entries(value as Record<string, unknown>).map(([name, entry]) => {
-		if (!isRecord(entry)) throw new Error(`generate "${name}" must evaluate to an object`);
-		return [name, entry as Record<string, unknown>];
-	});
 }
 
 /**
@@ -1759,13 +1760,11 @@ async function materializeGeneratedFiles(
 	// mocked output failed on the one path that most needs it: a destroy of a
 	// unit whose dependency was never applied.
 	const evaluator = evaluatorFor({tfPath, terraformCommand});
-	const rendered = runtimeValueToPlain(await evaluator.evaluateRenderedConfig(configPath, content, workDir)) as Record<string, unknown>;
-	const generate = generatedEntries(rendered.generate);
-	for (const [name, entry] of generate) {
+	const config = await evaluator.evaluateRenderedConfig(configPath, content, workDir);
+	for (const [name, entry] of config.generate) {
 		const relativePath = entry.path;
 		const contents = entry.contents;
-		if (typeof relativePath !== 'string' || relativePath.length === 0) throw new Error(`generate "${name}" requires a non-empty path`);
-		if (typeof contents !== 'string') throw new Error(`generate "${name}" requires string contents`);
+		if (relativePath.length === 0) throw new Error(`generate "${name}" requires a non-empty path`);
 		const root = await fs.realpath(workDir);
 		const target = path.resolve(path.dirname(configPath), relativePath);
 		// Both sides through realpath, or the comparison is between two
@@ -1781,7 +1780,7 @@ async function materializeGeneratedFiles(
 		const relative = path.relative(root, resolvedTarget);
 		if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error(`Generated file is outside the working directory: ${target}`);
 		const exists = await pathExists(target);
-		const ifExists = typeof entry.if_exists === 'string' ? entry.if_exists : 'overwrite_terragrunt';
+		const ifExists = entry.ifExists;
 		if (exists && (ifExists === 'skip' || ifExists === 'skip_if_exists')) continue;
 		if (exists && ifExists === 'error') throw new Error(`Generated file already exists: ${target}`);
 		// `overwrite_terragrunt` means "overwrite a file THIS TOOL generated",
@@ -2163,10 +2162,9 @@ async function catalogJSONL(argv: string[]): Promise<number> {
 	const configPath = path.join(workingDir, 'terragrunt.hcl');
 	const content = await fs.readFile(configPath, 'utf8');
 	const evaluator = evaluatorFor();
-	const rendered = runtimeValueToPlain(await evaluator.evaluateRenderedConfig(configPath, content, workingDir)) as Record<string, unknown>;
-	const catalog = rendered.catalog;
-	if (!isRecord(catalog)) throw new Error('catalog configuration is required');
-	const urls = (catalog as Record<string, unknown>).urls;
+	const catalog = await evaluator.evaluateCatalogConfig(configPath, content, workingDir);
+	if (!catalog) throw new Error('catalog configuration is required');
+	const urls = catalog.urls;
 	if (!Array.isArray(urls) || urls.some(url => typeof url !== 'string')) throw new Error('catalog.urls must be a list of strings');
 	for (const source of urls as string[]) {
 		const acquired = await acquireModuleSource(source, workingDir);
@@ -2175,9 +2173,8 @@ async function catalogJSONL(argv: string[]): Promise<number> {
 			const components = await discoverConfigs(catalogRoot, false, catalogRoot);
 			for (const component of components.filter(item => item.type === 'unit')) {
 			const componentContent = await fs.readFile(component.absPath, 'utf8');
-			const componentRendered = runtimeValueToPlain(await evaluator.evaluateRenderedConfig(component.absPath, componentContent, workingDir)) as Record<string, unknown>;
-			const terraform = componentRendered.terraform as Record<string, unknown> | undefined;
-			process.stdout.write(`${JSON.stringify({kind: 'unit', title: path.basename(component.path), description: '', source, dir: component.path, component_source: terraform?.source ?? '', copyable: true})}\n`);
+			const componentConfig = await evaluator.evaluateRenderedConfig(component.absPath, componentContent, workingDir);
+			process.stdout.write(`${JSON.stringify({kind: 'unit', title: path.basename(component.path), description: '', source, dir: component.path, component_source: componentConfig.terraform?.source ?? '', copyable: true})}\n`);
 			}
 		} finally {
 			await acquired.cleanup();
@@ -2223,19 +2220,16 @@ async function backendCommand(argv: string[]): Promise<number> {
 		const sourceContent = await fs.readFile(sourcePath, 'utf8');
 		const destinationContent = await fs.readFile(destinationPath, 'utf8');
 		const evaluator = evaluatorFor();
-		const sourceRendered = runtimeValueToPlain(await evaluator.evaluateRenderedConfig(sourcePath, sourceContent, workingDir)) as Record<string, unknown>;
-		const destinationRendered = runtimeValueToPlain(await evaluator.evaluateRenderedConfig(destinationPath, destinationContent, workingDir)) as Record<string, unknown>;
-		const sourceState = sourceRendered.remote_state as Record<string, unknown> | undefined;
-		const destinationState = destinationRendered.remote_state as Record<string, unknown> | undefined;
-		if (!sourceState || !destinationState || typeof sourceState.backend !== 'string' || sourceState.backend !== destinationState.backend) throw new Error('backend migrate requires matching source and destination remote_state backends');
-		backendMigrate(sourceState.backend, backendConfigObject(sourceState), backendConfigObject(destinationState), workingDir);
+		const sourceState = terragruntConfigAsCty(await evaluator.evaluateRenderedConfig(sourcePath, sourceContent, workingDir)).remote_state as Record<string, unknown> | undefined;
+		const destinationState = terragruntConfigAsCty(await evaluator.evaluateRenderedConfig(destinationPath, destinationContent, workingDir)).remote_state as Record<string, unknown> | undefined;
+		if (!sourceState || !destinationState || sourceState.backend !== destinationState.backend) throw new Error('backend migrate requires matching source and destination remote_state backends');
+		backendMigrate(String(sourceState.backend), backendConfigObject(sourceState), backendConfigObject(destinationState), workingDir);
 		return 0;
 	}
 	const configPath = path.join(workingDir, 'terragrunt.hcl');
 	const content = await fs.readFile(configPath, 'utf8');
 	const evaluator = evaluatorFor();
-	const rendered = runtimeValueToPlain(await evaluator.evaluateRenderedConfig(configPath, content, workingDir)) as Record<string, unknown>;
-	const remoteState = rendered.remote_state as Record<string, unknown> | undefined;
+	const remoteState = terragruntConfigAsCty(await evaluator.evaluateRenderedConfig(configPath, content, workingDir)).remote_state as Record<string, unknown> | undefined;
 	if (!remoteState || typeof remoteState.backend !== 'string') throw new Error('remote_state.backend is required for backend operations');
 	if (operation === 'bootstrap') {
 		if (remoteState.backend === 'local') {
@@ -2279,11 +2273,11 @@ async function executeTerraformCommand(argv: string[]): Promise<number> {
 	for (const configFile of selected) {
 		const unitDir = path.dirname(configFile);
 		const content = await fs.readFile(configFile, 'utf8');
-		let rendered: Record<string, unknown>;
+		let rendered: TerragruntConfig;
 		if (configFile.endsWith('.json')) {
 			const parsed: unknown = parseJsonDocument(content);
 			validateJSONShape(parsed, path.basename(configFile));
-			rendered = parsed as Record<string, unknown>;
+			rendered = await decodeJsonConfig(parsed, configFile);
 		} else {
 		await materializeGeneratedFiles(configFile, content, executionWorkingDir, options.tfPath, options.command);
 			const evaluator = evaluatorFor({
@@ -2291,7 +2285,7 @@ async function executeTerraformCommand(argv: string[]): Promise<number> {
 				terraformCliArgs: options.args,
 				tfPath: options.tfPath,
 			});
-			rendered = runtimeValueToPlain(await evaluator.evaluateRenderedConfig(configFile, content, executionWorkingDir)) as Record<string, unknown>;
+			rendered = await evaluator.evaluateRenderedConfig(configFile, content, executionWorkingDir);
 		}
 		await runHooks(rendered, 'before_hook', options.command, unitDir, executionWorkingDir);
 		const result = spawnSync(executable, [options.command, ...options.args], {
@@ -2535,26 +2529,20 @@ async function dependencyOrderedFiles(files: string[]): Promise<string[]> {
 	return result;
 }
 
-async function runHooks(rendered: Record<string, unknown>, hookName: 'before_hook' | 'after_hook' | 'error_hook', command: string, unitDir: string, workDir: string): Promise<void> {
-	const terraform = rendered.terraform;
-	if (!isRecord(terraform)) return;
-	const hooks = (terraform as Record<string, unknown>)[hookName];
-	if (!isRecord(hooks)) return;
-	for (const entry of Object.values(hooks as Record<string, unknown>)) {
-		if (!isRecord(entry)) throw new Error(`${hookName} entries must be objects`);
-		const hook = entry as Record<string, unknown>;
-		const commands = hook.commands;
-		if (!Array.isArray(commands) || !commands.every(item => typeof item === 'string')) throw new Error(`${hookName}.commands must be a list of strings`);
-		if (!(commands as string[]).includes(command)) continue;
-		if (hook.if !== undefined && hook.if !== true) continue;
-		const execute = hook.execute;
-		if (!Array.isArray(execute) || execute.length === 0 || !execute.every(item => typeof item === 'string')) throw new Error(`${hookName}.execute must be a non-empty list of strings`);
-		const requestedDir = typeof hook.working_dir === 'string' ? path.resolve(unitDir, hook.working_dir) : unitDir;
+async function runHooks(config: TerragruntConfig, hookName: 'before_hook' | 'after_hook' | 'error_hook', command: string, unitDir: string, workDir: string): Promise<void> {
+	const terraform = config.terraform;
+	if (!terraform) return;
+	const hooks: Array<Hook | ErrorHook> = hookName === 'before_hook' ? terraform.beforeHooks : hookName === 'after_hook' ? terraform.afterHooks : terraform.errorHooks;
+	for (const hook of hooks) {
+		if (!(hook.commands ?? []).includes(command)) continue;
+		if ('if' in hook && hook.if === false) continue;
+		const execute = hook.execute ?? [];
+		const requestedDir = hook.workingDir === undefined ? unitDir : path.resolve(unitDir, hook.workingDir);
 		const configuredDir = path.join(await fs.realpath(path.dirname(requestedDir)), path.basename(requestedDir));
 		const root = await fs.realpath(workDir);
 		const relative = path.relative(root, configuredDir);
 		if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error(`${hookName}.working_dir is outside the working directory`);
-		const result = spawnSync(String(execute[0]), (execute as string[]).slice(1), {cwd: configuredDir, stdio: 'inherit', shell: false});
+		const result = spawnSync(execute[0], execute.slice(1), {cwd: configuredDir, stdio: 'inherit', shell: false});
 		if (result.error) throw new Error(`Unable to execute ${hookName}: ${result.error.message}`);
 		if ((result.status ?? 1) !== 0) throw new Error(`${hookName} exited with status ${result.status ?? 1}`);
 	}

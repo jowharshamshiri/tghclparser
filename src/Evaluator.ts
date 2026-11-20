@@ -34,6 +34,8 @@ import {
 	templatePart,
 	unwrapSensitive
 } from './functions/utils';
+import { decodeConfigFile, mergeDeep, mergeShallow, terragruntConfigAsCty, UNRESOLVED } from './terragrunt-config';
+import type { ConfigBlock, ConfigBody, Plain, TerragruntConfig } from './terragrunt-config';
 import { isDefect } from './unresolved';
 import { isWrittenOut } from './writtenOut';
 import type { Range } from 'vscode-languageserver';
@@ -836,12 +838,38 @@ export class ConfigEvaluator {
 		return targets;
 	}
 
-	async evaluateRenderedConfig(configPath: string, content: string, workDir: string): Promise<RuntimeValue<ValueType>> {
+	/**
+	 * A unit's configuration as Terragrunt holds it once decoded and merged with what it includes: what `render`
+	 * prints, and what `read_terragrunt_config()` reads.
+	 *
+	 * @param withOutputs whether to read the outputs of each dependency, which only what shows the configuration whole
+	 *   needs: they are read whether anything refers to them or not.
+	 */
+	async evaluateRenderedConfig(configPath: string, content: string, workDir: string, withOutputs = false): Promise<TerragruntConfig> {
 		this.assertTrusted('Rendered configuration evaluation');
 		const workspaceRoot = await this.resolveWorkspaceRoot(workDir);
 		this.renderUnresolved.length = 0;
 		const result = await this.evaluateFile(configPath, content, workspaceRoot);
-		return this.readConfigObject(result);
+		return this.readTerragruntConfig(result, withOutputs);
+	}
+
+	/**
+	 * The unit's own `catalog` block, which only `catalog` reads, each attribute as it evaluates; undefined when the
+	 * unit has none.
+	 */
+	async evaluateCatalogConfig(configPath: string, content: string, workDir: string): Promise<Record<string, Plain> | undefined> {
+		this.assertTrusted('Rendered configuration evaluation');
+		const workspaceRoot = await this.resolveWorkspaceRoot(workDir);
+		this.renderUnresolved.length = 0;
+		const result = await this.evaluateFile(configPath, content, workspaceRoot);
+		const catalog = this.configBody(result, result.scope).blocks.find(block => block.type === 'catalog');
+		if (!catalog) return undefined;
+		const values: Record<string, Plain> = {};
+		for (const [name, read] of catalog.body.attributes) {
+			const value = await read();
+			if (value !== UNRESOLVED) values[name] = value;
+		}
+		return values;
 	}
 
 	async evaluateAtPosition(
@@ -1404,7 +1432,7 @@ export class ConfigEvaluator {
 					this.newUnitContext(target),
 					() => this.evaluateFile(target, fileContent, scope.workspaceRoot)
 				);
-				return this.readConfigObject(result);
+				return convertToRuntimeValue(terragruntConfigAsCty(await this.readTerragruntConfig(result, true)));
 			},
 			readTFVarsFile: async (relativePath: string) => {
 				this.assertTrusted('read_tfvars_file');
@@ -1472,173 +1500,93 @@ export class ConfigEvaluator {
 	}
 
 	/**
-	 * Every `generate` block that applies to a unit, by label.
-	 *
-	 * Inherited through includes, which is the whole reason this is not simply
-	 * a read of the unit's own blocks: the near-universal arrangement puts the
-	 * blocks in a root configuration and the units include it, so a unit's own
-	 * file usually declares none. Rendering only the unit's own left the
-	 * generated files unwritten, and OpenTofu then ran against a directory
-	 * whose `.tf` files referenced locals nothing had defined -- "Undefined
-	 * local local.base_terragrunt_dir", from a `main.tf` that was correct.
-	 *
-	 * Includes are read first and the unit's own last, so a unit overrides an
-	 * inherited block of the same label rather than gaining a second one.
-	 * Each block is evaluated in the scope that DECLARED it, because its
-	 * contents interpolate that file's locals.
+	 * The scope a file merged into a unit is decoded in: its own, for its locals and the files it reads, with the
+	 * unit's directory and includes, since Terragrunt parses an included file for the unit that includes it and
+	 * `get_terragrunt_dir()` and `get_parent_terragrunt_dir()` there answer about that unit.
 	 */
-	private async readGenerateBlocks(result: FileResult): Promise<Map<string, RuntimeValue<ValueType>>> {
-		const blocks = new Map<string, RuntimeValue<ValueType>>();
-		const unresolvedByLabel = new Map<string, Array<{file: string; field: string; reason: string}>>();
-		const collect = async (from: FileResult): Promise<void> => {
-			for (const include of from.scope.includes.values()) {
-				await collect(include.result);
-			}
-			if (from.scope.autoinclude) await collect(from.scope.autoinclude);
-			// The declaring file's locals, the INCLUDING unit's paths. An
-			// inherited block interpolates the root's locals, so it has to be
-			// evaluated where they are defined; but `get_terragrunt_dir` and
-			// `get_parent_terragrunt_dir` in the same block are questions
-			// about the unit being rendered, and the root has no including
-			// config of its own to answer the second one with.
-			const scope: Scope = from === result
-				? from.scope
-				: { ...from.scope, unitDir: result.scope.dir, includes: result.scope.includes };
-			for (const [label, attributes] of from.scope.generate) {
-				const rendered = new Map<string, RuntimeValue<ValueType>>();
-				const unresolved: Array<{file: string; field: string; reason: string}> = [];
-				for (const [name, node] of attributes) {
-					try {
-						// What a generate block renders is written to a file, which a value sops left encrypted must
-						// never reach.
-						rendered.set(name, computable(await this.evalNode(node, scope)));
-					} catch (error) {
-						if (!this.options.partialRender || !(error instanceof UnresolvedRenderValueError)) throw error;
-						unresolved.push({file: from.filePath, field: `generate.${label}.${name}`, reason: error.message});
-					}
-				}
-				blocks.set(label, makeObjectValue(rendered));
-				unresolvedByLabel.set(label, unresolved);
-			}
-		};
-		await collect(result);
-		for (const unresolved of unresolvedByLabel.values()) this.renderUnresolved.push(...unresolved);
-		return blocks;
+	private mergedScope(from: FileResult, unit: FileResult): Scope {
+		return from === unit ? from.scope : { ...from.scope, unitDir: unit.scope.dir, includes: unit.scope.includes };
 	}
 
-	private async readConfigObject(result: FileResult): Promise<RuntimeValue<ValueType>> {
+	/**
+	 * One file's configuration as the decoder reads it: its blocks and its attributes other than `inputs`, each
+	 * attribute evaluated in the given scope when it is read. A value that cannot be known yet is recorded as
+	 * unresolved and read as unset. What is written to a file, a `generate` block's or the backend's, may not hold a
+	 * value sops left encrypted.
+	 */
+	private configBody(result: FileResult, scope: Scope): ConfigBody {
+		const file = result.filePath;
+		const attribute = (field: string, node: TNode, written: boolean) => async (): Promise<Plain | typeof UNRESOLVED> => {
+			const value = await this.renderField(file, field, async () => {
+				const evaluated = await this.evalNode(node, scope);
+				return written ? computable(evaluated) : evaluated;
+			});
+			return value === undefined ? UNRESOLVED : unmarkedPlain(value);
+		};
+		const block = (node: TNode, prefix: string, written: boolean): ConfigBlock => {
+			const type = String(node.value);
+			const labels = (node.children ?? []).filter(child => child.type === 'parameter').map(child => String(child.value));
+			const path = [prefix, type, ...labels].filter(Boolean).join('.');
+			const writes = written || type === 'generate' || type === 'remote_state';
+			const body: ConfigBody = { where: `${file}: ${type}${labels.map(label => ` "${label}"`).join('')}`, attributes: new Map(), blocks: [] };
+			for (const child of node.children ?? []) {
+				if (child.type === 'attribute') body.attributes.set(String(child.value), attribute(`${path}.${String(child.value)}`, requiredValueNode(child), writes));
+				else if (child.type === 'block') body.blocks.push(block(child, path, writes));
+			}
+			return { type, labels, body };
+		};
+		const body: ConfigBody = { where: file, attributes: new Map(), blocks: [] };
+		for (const child of result.scope.ast.children ?? []) {
+			if (child.type === 'block') body.blocks.push(block(child, '', false));
+			else if (child.type === 'assignment' && String(child.value) !== 'inputs') {
+				const name = String(child.value);
+				body.attributes.set(name, attribute(name, requiredValueNode(child, 'root_assignment_identifier'), name === 'generate' || name === 'remote_state'));
+			}
+		}
+		return body;
+	}
+
+	/**
+	 * The configuration of the unit a file result is for, decoded and merged as Terragrunt's ParseConfig does: the
+	 * unit's own, then its autoinclude merged over it shallowly, then each include merged under it, the last first,
+	 * by the include's strategy. The locals are the unit's own and the exclude block the unit's when it has one; the
+	 * inputs are those the evaluation merged. With `withOutputs`, each enabled dependency that does not skip its
+	 * outputs carries them.
+	 */
+	private async readTerragruntConfig(result: FileResult, withOutputs: boolean): Promise<TerragruntConfig> {
 		for (const [name, issue] of result.unresolvedInputs) {
 			this.renderUnresolved.push({file: issue.file, field: `inputs.${name}`, reason: issue.reason});
 		}
-		const output = new Map<string, RuntimeValue<ValueType>>();
-		const locals = new Map<string, RuntimeValue<ValueType>>();
+		const own = await decodeConfigFile(this.configBody(result, result.scope));
+		const autoinclude = result.scope.autoinclude;
+		if (autoinclude) mergeShallow(own, await decodeConfigFile(this.configBody(autoinclude, this.mergedScope(autoinclude, result))));
+		let config = own;
+		for (const name of [...result.scope.includes.keys()].reverse()) {
+			const include = result.scope.includes.get(name)!;
+			if (include.mergeStrategy === 'no_merge') continue;
+			const included = await decodeConfigFile(this.configBody(include.result, this.mergedScope(include.result, result)));
+			if (include.mergeStrategy === 'deep') mergeDeep(included, config);
+			else mergeShallow(included, config);
+			config = included;
+		}
+		if (own.exclude) config.exclude = own.exclude;
+
+		const locals: Record<string, Plain> = {};
 		for (const name of result.scope.locals.keys()) {
 			const value = await this.renderField(result.filePath, `locals.${name}`, () => this.resolveLocal(result.scope, name));
-			if (value !== undefined) locals.set(name, value);
+			if (value !== undefined) locals[name] = unmarkedPlain(value);
 		}
-		output.set('dependencies', makeNullValue());
-		output.set('dependency', makeObjectValue(new Map()));
-		output.set('download_dir', makeStringValue(''));
-		output.set('feature', makeObjectValue(new Map()));
-		output.set('generate', makeObjectValue(await this.readGenerateBlocks(result)));
-		output.set('iam_assume_role_duration', makeNullValue());
-		output.set('iam_assume_role_session_name', makeStringValue(''));
-		output.set('iam_role', makeStringValue(''));
-		output.set('iam_web_identity_token', makeStringValue(''));
-		output.set('terraform_binary', makeStringValue(''));
-		output.set('terraform_version_constraint', makeStringValue(''));
-		output.set('terragrunt_version_constraint', makeStringValue(''));
-		output.set('locals', locals.size > 0 ? makeObjectValue(locals) : makeNullValue());
-		output.set('inputs', result.inputs !== null ? makeObjectValue(result.inputs) : makeObjectValue(new Map()));
-		const terraform = new Map<string, RuntimeValue<ValueType>>();
-		for (const [name, node] of result.scope.terraform) {
-			const value = await this.renderField(result.filePath, `terraform.${name}`, () => this.evalNode(node, result.scope));
-			if (value !== undefined) terraform.set(name, value);
-		}
-		const terraformDefaults = new Map<string, RuntimeValue<ValueType>>([
-			['after_hook', makeObjectValue(new Map())],
-			['before_hook', makeObjectValue(new Map())],
-			['copy_terraform_lock_file', makeNullValue()],
-			['error_hook', makeObjectValue(new Map())],
-			['exclude_from_copy', makeNullValue()],
-			['extra_arguments', makeObjectValue(new Map())],
-			['include_in_copy', makeNullValue()]
-		]);
-		for (const [name, value] of terraform) terraformDefaults.set(name, value);
-		const terraformBlock = result.scope.blocks.find(block => block.value === 'terraform');
-		if (terraformBlock) {
-			for (const child of terraformBlock.children ?? []) {
-				if (child.type !== 'block') continue;
-				const name = String(child.value);
-				const value = await this.renderField(result.filePath, `terraform.${name}`, () => this.evaluateBlock(child, result.scope));
-				if (value === undefined) continue;
-				const labels = (child.children ?? []).filter(item => item.type === 'parameter').map(item => String(item.value));
-				if (labels.length > 0) {
-					const current = terraformDefaults.get(name);
-					const entries = current && (current.type === 'object' || current.type === 'block') ? new Map(current.value as Map<string, RuntimeValue<ValueType>>) : new Map<string, RuntimeValue<ValueType>>();
-					entries.set(labels[0], value);
-					terraformDefaults.set(name, makeObjectValue(entries));
-				} else {
-					terraformDefaults.set(name, value);
-				}
-			}
-		}
-		output.set('terraform', makeObjectValue(terraformDefaults));
-		for (const block of result.scope.blocks) {
-			// `generate` is read above, inherited blocks with the unit's own, each in the scope that declares it.
-			if (['locals', 'terraform', 'include', 'generate'].includes(String(block.value))) continue;
-			const name = String(block.value);
-			const labels = (block.children ?? []).filter(child => child.type === 'parameter').map(child => String(child.value));
-			// remote_state's config is written to the backend file it generates, which a value sops left encrypted must
-			// never reach.
-			const value = await this.renderField(
-				result.filePath,
-				`${name}${labels[0] ? `.${labels[0]}` : ''}`,
-				async () => name === 'remote_state'
-					? computable(await this.evaluateBlock(block, result.scope))
-					: this.evaluateBlock(block, result.scope)
-			);
-			if (value === undefined) continue;
-			if (labels.length > 0) {
-				const existing = output.get(name);
-				const entries = existing && (existing.type === 'object' || existing.type === 'block')
-					? new Map(existing.value as Map<string, RuntimeValue<ValueType>>)
-					: new Map<string, RuntimeValue<ValueType>>();
-				entries.set(labels[0], value);
-				output.set(name, makeObjectValue(entries));
-			} else if (!output.has(name) || (output.get(name)?.type === 'object' && (output.get(name)?.value as Map<string, RuntimeValue<ValueType>>).size === 0)) {
-				output.set(name, value);
-			}
-		}
-		for (const [name, node] of result.scope.rootAttrs) {
-			const value = await this.renderField(result.filePath, name, () => this.evalNode(node, result.scope));
-			if (value !== undefined) output.set(name, value);
-		}
-		return makeObjectValue(output);
-	}
+		config.locals = Object.keys(locals).length > 0 ? locals : undefined;
+		config.inputs = result.inputs === null ? undefined : unmarkedPlain(makeObjectValue(result.inputs)) as Record<string, Plain>;
 
-	private async evaluateBlock(block: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
-		const values = new Map<string, RuntimeValue<ValueType>>();
-		for (const child of block.children ?? []) {
-			if (child.type !== 'attribute') continue;
-			const value = child.children?.find(item => item.type !== 'attribute_identifier');
-			if (value) values.set(String(child.value), await this.evalNode(value, scope));
+		for (const dependency of withOutputs ? config.dependencyBlocks : []) {
+			if (dependency.enabled === false || dependency.skipOutputs === true) continue;
+			const value = await this.renderField(result.filePath, `dependency.${dependency.name}`, () => this.dependencyValue(dependency.name, result.scope));
+			if (value === undefined) continue;
+			const outputs = (unmarkedPlain(value) as Record<string, Plain>).outputs;
+			dependency.outputs = outputs === undefined ? null : outputs;
 		}
-		for (const child of block.children ?? []) {
-			if (child.type !== 'block') continue;
-			const name = String(child.value);
-			const value = await this.evaluateBlock(child, scope);
-			const labels = (child.children ?? []).filter(item => item.type === 'parameter').map(item => String(item.value));
-			if (labels.length > 0) {
-				const current = values.get(name);
-				const entries = current && (current.type === 'object' || current.type === 'block') ? new Map(current.value as Map<string, RuntimeValue<ValueType>>) : new Map<string, RuntimeValue<ValueType>>();
-				entries.set(labels[0], value);
-				values.set(name, makeObjectValue(entries));
-			} else {
-				values.set(name, value);
-			}
-		}
-		return makeObjectValue(values);
+		return config;
 	}
 
 	private async readTFVars(target: string, content: string): Promise<RuntimeValue<ValueType>> {
@@ -3196,6 +3144,26 @@ export function runtimeValueToPlain(value: RuntimeValue<ValueType>): unknown {
 		}
 		default:
 			return null;
+	}
+}
+
+/**
+ * A value in plain JavaScript as {@link runtimeValueToPlain} gives it, with every sensitive mark taken off first, as
+ * Terragrunt unmarks what it decodes into its configuration.
+ */
+function unmarkedPlain(value: RuntimeValue<ValueType>): Plain {
+	const unmarked = unwrapSensitive(value);
+	switch (unmarked.type) {
+		case 'array':
+			return (unmarked.value as RuntimeValue<ValueType>[]).map(unmarkedPlain);
+		case 'object':
+		case 'block': {
+			const out: Record<string, Plain> = {};
+			for (const [key, entry] of (unmarked.value as Map<string, RuntimeValue<ValueType>>).entries()) out[key] = unmarkedPlain(entry);
+			return out;
+		}
+		default:
+			return runtimeValueToPlain(unmarked);
 	}
 }
 
