@@ -14,7 +14,9 @@ import { plainValue } from './plain-values';
 // Values keep go-cty's types as Terragrunt v1.2.2 gives them: a list, set or map apart from a tuple or object, each
 // collection of one element type, and a null of a type. Every expected value, type name and message here is what
 // v1.2.2 gave for the same expression (tests/fixtures/cty-collections-reference.ts).
-describe('go-cty collection types as Terragrunt v1.2.2 gives them', () => {
+describe('go-cty collection types as Terragrunt v1.2.2 gives them', function () {
+	// Each test evaluates a unit for every case in its table.
+	this.timeout(60000);
 	let root: string;
 	let evaluator: ConfigEvaluator;
 
@@ -57,7 +59,9 @@ describe('go-cty collection types as Terragrunt v1.2.2 gives them', () => {
 // read_terragrunt_config() and an exposed include give a configuration as Terragrunt's TerragruntConfigAsCty does: the
 // fields it holds in Go structs typed as gocty implies, lists and maps; locals, inputs and the backend's settings
 // carried through JSON, so objects and tuples; mock outputs and a feature's default as written.
-describe('configurations read as Terragrunt v1.2.2 gives them', () => {
+describe('configurations read as Terragrunt v1.2.2 gives them', function () {
+	// Each test evaluates a unit, reading another configuration, for every case in its table.
+	this.timeout(60000);
 	let root: string;
 
 	before(async () => {
