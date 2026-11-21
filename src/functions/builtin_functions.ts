@@ -3,16 +3,18 @@ import { gunzipSync, gzipSync } from 'node:zlib';
 import path from 'node:path';
 import bcrypt from 'bcryptjs';
 
+import { formatDate, instant, parseTimestamp } from '../cty-datetime';
 import { CtyNumber, parseGoInteger } from '../cty-number';
+import { CorruptInputError, decodeStdBase64 } from '../go-base64';
 import { goQuoted } from '../go-quote';
 import { graphemeClusters } from '../grapheme-clusters';
+import { ianaEncoding, textEncoding } from '../text-encodings';
 import type { FunctionContext, RuntimeValue, ValueType } from '../model';
-import { convertToNumber } from '../cty-operations';
-import { type CtyType, ctyNumber, ctyString, objectOf, tupleOf } from '../cty-types';
-import { argumentError } from '../function-signature';
+import { type CtyType, ctyNumber, ctyString, friendlyName, objectOf, tupleOf } from '../cty-types';
+import { ArgumentError } from '../function-signature';
 import { assumeFunctions, markedLike } from './assume_functions';
 import { collectionFunctions } from './collection_functions';
-import { addressRange, contains, type IP, type IPNet, parseCIDR, parseIP, to4 } from './ipaddr';
+import { addressRange, contains, type IP, type IPNet, ipNetString, maskOnes, nextSubnet, parseCIDR, parseIP, previousSubnet, to4 } from './ipaddr';
 import { renderTemplate } from './template';
 import { fileset } from './fileset';
 import { expandTerragruntGlob } from './terragrunt_glob';
@@ -31,6 +33,7 @@ import {
 	markEncrypted,
 	parseJsonDocument,
 	unwrapSensitive,
+	valueType,
 } from './utils';
 
 function requireArgument(args: RuntimeValue<ValueType>[], index: number, name: string): RuntimeValue<ValueType> {
@@ -46,38 +49,22 @@ function stringArgument(args: RuntimeValue<ValueType>[], index: number, name: st
 }
 
 /**
- * An argument for a go-cty number parameter, converted as HCL converts a function argument: a number as it is, and a
- * string read as go-cty reads a number. A sensitive argument gives its number; the caller marks the result.
+ * The number HCL converted an argument for a go-cty number parameter to. A sensitive argument gives its number; the
+ * caller marks the result.
  *
  * @param args the call's arguments.
  * @param index the argument's position.
- * @param parameter the go-cty parameter's name, which HCL's messages give.
  */
-function numberArgument(args: RuntimeValue<ValueType>[], index: number, parameter: string): CtyNumber {
-	const argument = unwrapSensitive(requireArgument(args, index, parameter));
-	if (argument.type === 'null') throw new Error(`Invalid value for "${parameter}" parameter: argument must not be null.`);
-	try {
-		return convertToNumber(argument);
-	} catch (error) {
-		throw new Error(`Invalid value for "${parameter}" parameter: ${error instanceof Error ? error.message : String(error)}.`);
-	}
+function numberArgument(args: RuntimeValue<ValueType>[], index: number): CtyNumber {
+	return unwrapSensitive(args[index]).value as CtyNumber;
 }
 
 /**
  * An argument for a go-cty number parameter that the function reads into a Go int, which go-cty refuses unless the
- * number is whole and fits an int64.
- *
- * @param what how go-cty introduces the failure for this argument, such as `invalid start index`; left out where it
- *   reports the bare conversion failure.
+ * number is whole and fits an int64, as a failed call.
  */
-function integerArgument(args: RuntimeValue<ValueType>[], index: number, parameter: string, what?: string): number {
-	const value = numberArgument(args, index, parameter);
-	try {
-		return Number(value.toGoInt64());
-	} catch (error) {
-		if (what === undefined) throw error;
-		throw new Error(`${what}: ${(error as Error).message}`);
-	}
+function integerArgument(args: RuntimeValue<ValueType>[], index: number): number {
+	return Number(numberArgument(args, index).toGoInt64());
 }
 
 /**
@@ -95,7 +82,7 @@ function float64Value(value: number): RuntimeValue<'number'> {
  */
 function extreme(args: RuntimeValue<ValueType>[], direction: 1 | -1): CtyNumber {
 	if (args.length === 0) throw new Error('must pass at least one number');
-	const numbers = args.map((_, index) => numberArgument(args, index, 'numbers'));
+	const numbers = args.map((_, index) => numberArgument(args, index));
 	let kept = CtyNumber.fromFloat64(direction > 0 ? -Infinity : Infinity);
 	for (const number of numbers) if (number.compare(kept) * direction > 0) kept = number;
 	return kept;
@@ -295,7 +282,7 @@ function regexResultType(expression: RegExp): CtyType {
 	const names = groupNames(expression.source);
 	if (groups === 0) return ctyString;
 	if (names.length > 0 && names.length < groups) {
-		throw argumentError({ name: 'pattern' }, 'invalid regexp pattern: cannot mix both named and unnamed capture groups');
+		throw new ArgumentError(0, 'invalid regexp pattern: cannot mix both named and unnamed capture groups');
 	}
 	if (names.length === 0) return tupleOf(Array.from({ length: groups }, () => ctyString));
 	return objectOf(new Map(names.map(name => [name, ctyString])));
@@ -309,8 +296,21 @@ function regexResult(match: RegExpExecArray, type: CtyType): RuntimeValue<ValueT
 	return objectValue(new Map([...(type as Extract<CtyType, { kind: 'object' }>).attributes.keys()].map(name => [name, group(match.groups?.[name])])));
 }
 
+/**
+ * A pattern compiled, refused as go-cty refuses one it cannot compile: an argument error on the pattern. The reason is
+ * JavaScript's, not RE2's.
+ */
+function compilePattern(pattern: string, flags = ''): RegExp {
+	try {
+		return new RegExp(convertPatternGroups(pattern), flags);
+	} catch (error) {
+		if (!(error instanceof SyntaxError)) throw error;
+		throw new ArgumentError(0, `invalid regexp pattern: ${error.message.replace(/^Invalid regular expression: \/.*\/[a-z]*: /su, '')}`);
+	}
+}
+
 function regexMatch(pattern: string, value: string): RuntimeValue<ValueType> {
-	const expression = new RegExp(convertPatternGroups(pattern));
+	const expression = compilePattern(pattern);
 	const type = regexResultType(expression);
 	const match = expression.exec(value);
 	if (!match) throw new Error('pattern did not match any part of the given string');
@@ -318,7 +318,7 @@ function regexMatch(pattern: string, value: string): RuntimeValue<ValueType> {
 }
 
 function regexAll(pattern: string, value: string): RuntimeValue<'array'> {
-	const expression = new RegExp(convertPatternGroups(pattern), 'g');
+	const expression = compilePattern(pattern, 'g');
 	const type = regexResultType(expression);
 	const results: RuntimeValue<ValueType>[] = [];
 	let match: RegExpExecArray | null;
@@ -672,21 +672,26 @@ function parseCsvRow(row: string): string[] {
 	return cells;
 }
 
-/** A string argument as go-cty converts one, refused when it is null or not a primitive. */
-function convertedString(argument: RuntimeValue<ValueType>, parameter: string): string {
-	const value = unwrapSensitive(argument);
-	if (value.type === 'null') throw new Error(`Invalid value for "${parameter}" parameter: argument must not be null.`);
-	if (value.type !== 'string' && value.type !== 'number' && value.type !== 'boolean') {
-		throw new Error(`Invalid value for "${parameter}" parameter: string required.`);
-	}
-	return String(value.value);
+/** The string HCL converted an argument for a go-cty string parameter to, a sensitive one's unwrapped. */
+function convertedString(argument: RuntimeValue<ValueType>): string {
+	return String(unwrapSensitive(argument).value);
 }
 
-/** Go's base64.StdEncoding.DecodeString: padded standard base64, where only line breaks are skipped. */
+/** Go's base64.StdEncoding.DecodeString, or undefined for text it refuses. */
 function decodeStandardBase64(text: string): Buffer | undefined {
-	const encoded = text.replace(/[\r\n]/gu, '');
-	if (encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(encoded)) return undefined;
-	return Buffer.from(encoded, 'base64');
+	try {
+		return decodeStdBase64(text);
+	} catch (error) {
+		if (error instanceof CorruptInputError) return undefined;
+		throw error;
+	}
+}
+
+/** The IANA name of the encoding OpenTofu's text functions are given, refused as they refuse a name x/text lacks. */
+function namedEncoding(name: string): string {
+	const encoding = ianaEncoding(name);
+	if (encoding === undefined) throw new ArgumentError(1, `${goQuoted(name)} is not a supported IANA encoding name or alias in this OpenTofu version`);
+	return encoding;
 }
 
 const isHex = (character: string | undefined): boolean => character !== undefined && /^[0-9A-Fa-f]$/u.test(character);
@@ -725,7 +730,7 @@ export const builtinFunctionGroup = {
 		...assumeFunctions,
 		...collectionFunctions,
 		base64gunzip: async (args: RuntimeValue<ValueType>[]) => {
-			const text = convertedString(args[0], 'str');
+			const text = convertedString(args[0]);
 			const sensitive = (args[0].type as string) === 'sensitive';
 			const compressed = decodeStandardBase64(text);
 			if (!compressed) throw new Error(`failed to decode base64 data ${sensitive ? '(sensitive value)' : text}`);
@@ -738,8 +743,8 @@ export const builtinFunctionGroup = {
 			return markedLike(stringValue(decompressed.toString('utf8')), args.slice(0, 1));
 		},
 		cidrcontains: async (args: RuntimeValue<ValueType>[]) => {
-			const prefix = convertedString(args[0], 'containing_prefix');
-			const address = convertedString(args[1], 'contained_ip_or_prefix');
+			const prefix = convertedString(args[0]);
+			const address = convertedString(args[1]);
 			const containing = parseCIDR(prefix);
 			let start = parseIP(address);
 			let end: IP | undefined;
@@ -759,17 +764,12 @@ export const builtinFunctionGroup = {
 			return markedLike(booleanValue(result), args);
 		},
 		templatestring: async (args: RuntimeValue<ValueType>[], context: FunctionContext) => {
-			const template = convertedString(args[0], 'data');
-			const vars = unwrapSensitive(args[1]);
-			if (vars.type !== 'object' && vars.type !== 'block') {
-				throw new Error('Invalid value for "vars" parameter: invalid vars value: must be a map.');
-			}
-			const rendered = await renderTemplate(template, vars, context);
+			const rendered = await renderTemplate(convertedString(args[0]), args[1], context);
 			return (rendered.type as string) === 'sensitive' ? rendered : markedLike(rendered, args);
 		},
-		urldecode: async (args: RuntimeValue<ValueType>[]) => markedLike(stringValue(queryUnescape(convertedString(args[0], 'str'))), args),
+		urldecode: async (args: RuntimeValue<ValueType>[]) => markedLike(stringValue(queryUnescape(convertedString(args[0]))), args),
 		abspath: async (args: RuntimeValue<ValueType>[], context: FunctionContext) => stringValue(path.resolve(context.workingDirectory, stringArgument(args, 0, 'abspath'))),
-		abs: async (args: RuntimeValue<ValueType>[]) => markedLike(numberValue(numberArgument(args, 0, 'num').absolute()), args),
+		abs: async (args: RuntimeValue<ValueType>[]) => markedLike(numberValue(numberArgument(args, 0).absolute()), args),
 		basename: async (args: RuntimeValue<ValueType>[]) => stringValue(path.basename(stringArgument(args, 0, 'basename'))),
 		base64decode: async (args: RuntimeValue<ValueType>[]) => stringValue(Buffer.from(stringArgument(args, 0, 'base64decode'), 'base64').toString('utf8')),
 		base64encode: async (args: RuntimeValue<ValueType>[]) => stringValue(Buffer.from(stringArgument(args, 0, 'base64encode'), 'utf8').toString('base64')),
@@ -777,14 +777,14 @@ export const builtinFunctionGroup = {
 		base64sha256: async (args: RuntimeValue<ValueType>[]) => stringValue(createHash('sha256').update(stringArgument(args, 0, 'base64sha256'), 'utf8').digest('base64')),
 		base64sha512: async (args: RuntimeValue<ValueType>[]) => stringValue(createHash('sha512').update(stringArgument(args, 0, 'base64sha512'), 'utf8').digest('base64')),
 		can: async (args: RuntimeValue<ValueType>[]) => booleanValue(args.length > 0),
-		ceil: async (args: RuntimeValue<ValueType>[]) => markedLike(numberValue(numberArgument(args, 0, 'num').ceil()), args),
+		ceil: async (args: RuntimeValue<ValueType>[]) => markedLike(numberValue(numberArgument(args, 0).ceil()), args),
 		chomp: async (args: RuntimeValue<ValueType>[]) => {
 			const value = stringArgument(args, 0, 'chomp');
 			return stringValue(value.replace(/(?:\r?\n)+$/u, ''));
 		},
 		cidrhost: async (args: RuntimeValue<ValueType>[]) => {
 			const { network, prefix } = parseCidr(stringArgument(args, 0, 'cidrhost'));
-			let host = integerArgument(args, 1, 'hostnum');
+			let host = integerArgument(args, 1);
 			const hostBits = 32 - prefix;
 			const maxHost = (1 << hostBits) - 2;
 			if (host === -1) host = (1 << hostBits) - 1;
@@ -798,8 +798,8 @@ export const builtinFunctionGroup = {
 		},
 		cidrsubnet: async (args: RuntimeValue<ValueType>[]) => {
 			const { network, prefix } = parseCidr(stringArgument(args, 0, 'cidrsubnet'));
-			const newBits = integerArgument(args, 1, 'newbits');
-			const netNumber = integerArgument(args, 2, 'netnum');
+			const newBits = integerArgument(args, 1);
+			const netNumber = integerArgument(args, 2);
 			if (newBits < 0 || newBits > 32) throw new Error('cidrsubnet newbits out of range');
 			const resultPrefix = prefix + newBits;
 			if (resultPrefix > 32) throw new Error('cidrsubnet prefix exceeds 32 bits');
@@ -808,16 +808,41 @@ export const builtinFunctionGroup = {
 			const subnetwork = (network | (netNumber << (32 - resultPrefix))) >>> 0;
 			return stringValue(`${ipFromInteger(subnetwork)}/${resultPrefix}`);
 		},
+		// OpenTofu's cidrsubnets: consecutive subnets of the prefix, each extending it by its number of bits, every refusal
+		// an argument error on the argument it is about.
 		cidrsubnets: async (args: RuntimeValue<ValueType>[]) => {
-			const { network, prefix } = parseCidr(stringArgument(args, 0, 'cidrsubnets'));
-			const newBitsList = args.slice(1).map((_, index) => integerArgument(args, index + 1, 'newbits'));
+			let network: IPNet;
+			try {
+				network = parseCIDR(convertedString(args[0]));
+			} catch (error) {
+				throw new ArgumentError(0, `invalid CIDR expression: ${(error as Error).message}`);
+			}
+			const startPrefix = maskOnes(network.mask);
+			const bits = network.ip.length * 8;
+			const extension = (index: number): number => {
+				try {
+					return integerArgument(args, index);
+				} catch (error) {
+					throw new ArgumentError(index, (error as Error).message);
+				}
+			};
+			if (args.length === 1) return makeListValue(ctyString, []);
+			let [current] = previousSubnet(network, extension(1) + startPrefix);
 			const results: RuntimeValue<ValueType>[] = [];
-			let current = network;
-			for (const newBits of newBitsList) {
-				if (newBits < 0 || prefix + newBits > 32) throw new Error('cidrsubnets prefix exceeds 32 bits');
-				const resultPrefix = prefix + newBits;
-				results.push(stringValue(`${ipFromInteger(current >>> 0)}/${resultPrefix}`));
-				current = (current + (1 << (32 - resultPrefix))) >>> 0;
+			for (let index = 1; index < args.length; index++) {
+				const newBits = extension(index);
+				if (newBits < 1) throw new ArgumentError(index, 'must extend prefix by at least one bit');
+				const length = newBits + startPrefix;
+				if (length > bits) {
+					const protocol = bits === 32 ? 'IPv4' : bits === 128 ? 'IPv6' : 'IP';
+					throw new ArgumentError(index, `would extend prefix to ${length} bits, which is too long for an ${protocol} address`);
+				}
+				const [next, rollover] = nextSubnet(current, length);
+				if (rollover || !contains(network, next.ip)) {
+					throw new ArgumentError(index, `not enough remaining address space for a subnet with a prefix of ${length} bits after ${ipNetString(current)}`);
+				}
+				current = next;
+				results.push(stringValue(ipNetString(current)));
 			}
 			return makeListValue(ctyString, results);
 		},
@@ -836,11 +861,11 @@ export const builtinFunctionGroup = {
 			return sensitive ? makeSensitiveValue(files) : files;
 		},
 		endswith: async (args: RuntimeValue<ValueType>[]) => booleanValue(stringArgument(args, 0, 'endswith').endsWith(stringArgument(args, 1, 'endswith'))),
-		floor: async (args: RuntimeValue<ValueType>[]) => markedLike(numberValue(numberArgument(args, 0, 'num').floor()), args),
+		floor: async (args: RuntimeValue<ValueType>[]) => markedLike(numberValue(numberArgument(args, 0).floor()), args),
 		format: async (args: RuntimeValue<ValueType>[]) => stringValue(formatFunction(stringArgument(args, 0, 'format'), args.slice(1))),
 		formatlist: async (args: RuntimeValue<ValueType>[]) => makeListValue(ctyString, formatListFunction(stringArgument(args, 0, 'formatlist'), args.slice(1)).map(stringValue)),
 		indent: async (args: RuntimeValue<ValueType>[]) => {
-			const spaces = ' '.repeat(integerArgument(args, 0, 'spaces'));
+			const spaces = ' '.repeat(integerArgument(args, 0));
 			const lines = stringArgument(args, 1, 'indent').split('\n');
 			return stringValue(lines.map((line, index) => (index === 0 ? line : spaces + line)).join('\n'));
 		},
@@ -851,7 +876,7 @@ export const builtinFunctionGroup = {
 			// HCL has converted each list to a list of strings, so an element that is not a string is a null.
 			return stringValue(args.slice(1).flatMap((_, list) => arrayArgument(args, list + 1, 'join').map((value, index) => {
 				if (value.type === 'null') {
-					throw argumentError({ name: 'lists' }, `element ${index}${lists > 1 ? ` of list ${list + 1}` : ''} is null; cannot concatenate null values`);
+					throw new ArgumentError(list + 1, `element ${index}${lists > 1 ? ` of list ${list + 1}` : ''} is null; cannot concatenate null values`);
 				}
 				return String(value.value);
 			})).join(separator));
@@ -868,8 +893,8 @@ export const builtinFunctionGroup = {
 		},
 		jsonencode: async (args: RuntimeValue<ValueType>[]) => stringValue(jsonEncode(requireArgument(args, 0, 'jsonencode'))),
 		log: async (args: RuntimeValue<ValueType>[]) => {
-			const number = numberArgument(args, 0, 'num').toGoFloat64();
-			const base = numberArgument(args, 1, 'base').toGoFloat64();
+			const number = numberArgument(args, 0).toGoFloat64();
+			const base = numberArgument(args, 1).toGoFloat64();
 			return markedLike(float64Value(Math.log(number) / Math.log(base)), args);
 		},
 		lower: async (args: RuntimeValue<ValueType>[]) => stringValue(stringArgument(args, 0, 'lower').toLocaleLowerCase()),
@@ -889,24 +914,18 @@ export const builtinFunctionGroup = {
 		min: async (args: RuntimeValue<ValueType>[]) => markedLike(numberValue(extreme(args, -1)), args),
 		nonsensitive: async (args: RuntimeValue<ValueType>[]) => unwrapSensitive(requireArgument(args, 0, 'nonsensitive')),
 		parseint: async (args: RuntimeValue<ValueType>[]) => {
-			const text = unwrapSensitive(requireArgument(args, 0, 'number'));
-			if (text.type === 'null') throw new Error('Invalid value for "number" parameter: argument must not be null.');
-			if (text.type !== 'string') {
-				const typeName = text.type === 'boolean' ? 'bool' : text.type === 'array' ? 'tuple' : text.type === 'block' ? 'object' : text.type;
-				throw new Error(`Invalid value for "number" parameter: first argument must be a string, not ${typeName}.`);
-			}
-			const baseNumber = numberArgument(args, 1, 'base');
+			const text = args[0];
+			const type = valueType(text);
+			if (type.kind !== 'string') throw new ArgumentError(0, `first argument must be a string, not ${friendlyName(type)}`);
 			let base: number;
 			try {
-				base = Number(baseNumber.toGoInt64());
+				base = integerArgument(args, 1);
 			} catch (error) {
-				throw new Error(`Invalid value for "base" parameter: ${error instanceof Error ? error.message : String(error)}.`);
+				throw new ArgumentError(1, (error as Error).message);
 			}
-			if (base < 2 || base > 62) throw new Error('Invalid value for "base" parameter: base must be a whole number between 2 and 62 inclusive.');
+			if (base < 2 || base > 62) throw new ArgumentError(1, 'base must be a whole number between 2 and 62 inclusive');
 			const parsed = parseGoInteger(String(text.value), base);
-			if (parsed === undefined) {
-				throw new Error(`Invalid value for "number" parameter: cannot parse ${goQuoted(String(text.value))} as a base ${base} integer.`);
-			}
+			if (parsed === undefined) throw new ArgumentError(0, `cannot parse ${goQuoted(String(text.value))} as a base ${base} integer`);
 			return markedLike(numberValue(CtyNumber.fromBigInt(parsed)), args);
 		},
 		pathexpand: async (args: RuntimeValue<ValueType>[]) => {
@@ -924,8 +943,8 @@ export const builtinFunctionGroup = {
 			return stringValue(value);
 		},
 		pow: async (args: RuntimeValue<ValueType>[]) => {
-			const number = numberArgument(args, 0, 'num').toGoFloat64();
-			const power = numberArgument(args, 1, 'power').toGoFloat64();
+			const number = numberArgument(args, 0).toGoFloat64();
+			const power = numberArgument(args, 1).toGoFloat64();
 			return markedLike(float64Value(goPow(number, power)), args);
 		},
 		// As go-cty's RangeFunc: without a step it counts by 1, or by -1 towards a lower limit, from zero when only the
@@ -934,13 +953,13 @@ export const builtinFunctionGroup = {
 		// passes it or equals it as go-cty's equality decides.
 		range: async (args: RuntimeValue<ValueType>[]) => {
 			if (args.length < 1 || args.length > 3) throw new Error('range must have one, two, or three arguments');
-			const numbers = args.map((_, index) => numberArgument(args, index, 'params'));
+			const numbers = args.map((_, index) => numberArgument(args, index));
 			const zero = CtyNumber.fromInt64(0);
 			const [start, limit] = numbers.length === 1 ? [zero, numbers[0]] : [numbers[0], numbers[1]];
 			const step = numbers.length === 3 ? numbers[2] : CtyNumber.fromInt64(limit.compare(start) < 0 ? -1 : 1);
 			const down = step.compare(zero) < 0;
-			if (down && limit.compare(start) > 0) throw new Error('range end must be less than start when step is negative');
-			if (!down && limit.compare(start) < 0) throw new Error('range end must be greater than start when step is positive');
+			if (down && limit.compare(start) > 0) throw new ArgumentError(1, 'end must be less than start when step is negative');
+			if (!down && limit.compare(start) < 0) throw new ArgumentError(1, 'end must be greater than start when step is positive');
 			const values: RuntimeValue<ValueType>[] = [];
 			for (let value = start; ; value = value.add(step)) {
 				const order = value.compare(limit);
@@ -959,19 +978,27 @@ export const builtinFunctionGroup = {
 		bcrypt: async (args: RuntimeValue<ValueType>[]) => {
 			if (args.length > 2) throw new Error('bcrypt() takes no more than two arguments');
 			const password = stringArgument(args, 0, 'bcrypt');
-			const cost = args[1] ? integerArgument(args, 1, 'cost') : 10;
+			const cost = args[1] ? integerArgument(args, 1) : 10;
 			if (!Number.isInteger(cost) || cost < 4 || cost > 31) throw new Error('bcrypt cost must be an integer between 4 and 31');
 			return stringValue(bcrypt.hashSync(password, cost));
 		},
 		rsadecrypt: async (args: RuntimeValue<ValueType>[]) => {
 			const ciphertext = stringArgument(args, 0, 'rsadecrypt');
 			const privateKey = stringArgument(args, 1, 'rsadecrypt');
+			const encrypted = decodeStandardBase64(ciphertext);
+			if (!encrypted) throw new ArgumentError(0, `failed to decode input ${goQuoted(ciphertext)}: cipher text must be base64-encoded`);
+			// As golang.org/x/crypto's ssh.ParseRawPrivateKey: the first PEM block, of a type it reads.
+			const block = /(?:^|\n)-----BEGIN ([^\n]*?)-----\r?\n[\s\S]*?\n-----END \1-----/u.exec(privateKey);
+			if (!block) throw new ArgumentError(1, 'invalid private key: ssh: no key found');
+			if (!['RSA PRIVATE KEY', 'PRIVATE KEY', 'EC PRIVATE KEY', 'DSA PRIVATE KEY', 'OPENSSH PRIVATE KEY'].includes(block[1])) {
+				throw new ArgumentError(1, `invalid private key: ssh: unsupported key type ${goQuoted(block[1])}`);
+			}
 			try {
 				const plaintext = privateDecrypt({
 					key: privateKey,
 					padding: constants.RSA_PKCS1_OAEP_PADDING,
 					oaepHash: 'sha1'
-				}, Buffer.from(ciphertext, 'base64'));
+				}, encrypted);
 				return stringValue(plaintext.toString('utf8'));
 			} catch (error) {
 				throw new Error(`rsadecrypt failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -982,43 +1009,37 @@ export const builtinFunctionGroup = {
 		sha256: async (args: RuntimeValue<ValueType>[]) => hash('sha256', stringArgument(args, 0, 'sha256')),
 		sha512: async (args: RuntimeValue<ValueType>[]) => hash('sha512', stringArgument(args, 0, 'sha512')),
 		// go-cty's signum reads its number into a Go int, so it refuses a fraction.
-		signum: async (args: RuntimeValue<ValueType>[]) => markedLike(integerValue(Math.sign(Number(numberArgument(args, 0, 'num').toGoInt64()))), args),
+		signum: async (args: RuntimeValue<ValueType>[]) => markedLike(integerValue(Math.sign(Number(numberArgument(args, 0).toGoInt64()))), args),
 		split: async (args: RuntimeValue<ValueType>[]) => makeListValue(ctyString, stringArgument(args, 1, 'split').split(stringArgument(args, 0, 'split')).map(stringValue)),
 		startswith: async (args: RuntimeValue<ValueType>[]) => booleanValue(stringArgument(args, 0, 'startswith').startsWith(stringArgument(args, 1, 'startswith'))),
 		strcontains: async (args: RuntimeValue<ValueType>[]) => booleanValue(stringArgument(args, 0, 'strcontains').includes(stringArgument(args, 1, 'strcontains'))),
 		strrev: async (args: RuntimeValue<ValueType>[]) => stringValue([...stringArgument(args, 0, 'strrev')].reverse().join('')),
 		substr: async (args: RuntimeValue<ValueType>[]) => {
 			const clusters = graphemeClusters(stringArgument(args, 0, 'substr'));
-			const offset = integerArgument(args, 1, 'offset');
-			const length = integerArgument(args, 2, 'length');
+			const offset = integerArgument(args, 1);
+			const length = integerArgument(args, 2);
 			if (offset >= 0 && length === 0) return stringValue('');
 			const rest = clusters.slice(Math.max(offset < 0 ? offset + clusters.length : offset, 0));
 			return stringValue((length > 0 ? rest.slice(0, length) : rest).join(''));
 		},
 		textdecodebase64: async (args: RuntimeValue<ValueType>[]) => {
-			const content = stringArgument(args, 0, 'textdecodebase64');
-			const charset = stringArgument(args, 1, 'textdecodebase64');
-			const buffer = Buffer.from(content, 'base64');
-			switch (charset.toUpperCase()) {
-				case 'UTF-8':
-					return stringValue(buffer.toString('utf8'));
-				case 'UTF-16':
-					return stringValue(buffer.toString('utf16le'));
-				default:
-					throw new Error(`textdecodebase64 does not support charset ${charset}`);
+			const name = namedEncoding(stringArgument(args, 1, 'textdecodebase64'));
+			let bytes: Buffer;
+			try {
+				bytes = decodeStdBase64(stringArgument(args, 0, 'textdecodebase64'));
+			} catch (error) {
+				if (!(error instanceof CorruptInputError)) throw error;
+				throw new ArgumentError(0, `the given value is has an invalid base64 symbol at offset ${error.offset}`);
 			}
+			const decoded = textEncoding(name).decode(bytes);
+			if (decoded.includes('\ufffd')) throw new ArgumentError(0, `the given string contains symbols that are not defined for ${name}`);
+			return stringValue(decoded);
 		},
 		textencodebase64: async (args: RuntimeValue<ValueType>[]) => {
-			const content = stringArgument(args, 0, 'textencodebase64');
-			const charset = stringArgument(args, 1, 'textencodebase64');
-			switch (charset.toUpperCase()) {
-				case 'UTF-8':
-					return stringValue(Buffer.from(content, 'utf8').toString('base64'));
-				case 'UTF-16':
-					return stringValue(Buffer.from(content, 'utf16le').toString('base64'));
-				default:
-					throw new Error(`textencodebase64 does not support charset ${charset}`);
-			}
+			const name = namedEncoding(stringArgument(args, 1, 'textencodebase64'));
+			const encoded = textEncoding(name).encode(stringArgument(args, 0, 'textencodebase64'));
+			if (!encoded) throw new ArgumentError(0, `the given string contains characters that cannot be represented in ${name}`);
+			return stringValue(encoded.toString('base64'));
 		},
 		title: async (args: RuntimeValue<ValueType>[]) => stringValue(stringArgument(args, 0, 'title').replace(/\p{L}[\p{L}\p{N}]*/gu, word => word[0].toLocaleUpperCase() + word.slice(1))),
 		trim: async (args: RuntimeValue<ValueType>[]) => {
@@ -1056,10 +1077,15 @@ export const builtinFunctionGroup = {
 			if (Number.isNaN(timestamp)) throw new Error(`Invalid time ${JSON.stringify(time)} for timeadd`);
 			return stringValue(formatUtcTimestamp(new Date(timestamp + goDurationMilliseconds(duration))));
 		},
+		// OpenTofu's timecmp: the instants two timestamps name, each read as Go's time.Parse reads RFC 3339.
 		timecmp: async (args: RuntimeValue<ValueType>[]) => {
-			const first = Date.parse(stringArgument(args, 0, 'timecmp'));
-			const second = Date.parse(stringArgument(args, 1, 'timecmp'));
-			if (Number.isNaN(first) || Number.isNaN(second)) throw new Error('timecmp requires RFC3339 timestamps');
+			const [first, second] = [0, 1].map(index => {
+				try {
+					return instant(parseTimestamp(stringArgument(args, index, 'timecmp'), false));
+				} catch (error) {
+					throw new ArgumentError(index, (error as Error).message);
+				}
+			});
 			return integerValue(first < second ? -1 : first > second ? 1 : 0);
 		}
 	}
@@ -1082,55 +1108,6 @@ function goDurationMilliseconds(duration: string): number {
 	let match: RegExpExecArray | null;
 	while ((match = parts.exec(body)) !== null) total += Number(match[1]) * units[match[2]]!;
 	return sign * total;
-}
-
-function formatDate(layout: string, timeText: string): string {
-	const date = new Date(timeText);
-	if (Number.isNaN(date.getTime())) throw new Error(`Invalid time ${JSON.stringify(timeText)} for formatdate`);
-	const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-	const weekdayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-	const pad = (value: number, width = 2): string => String(value).padStart(width, '0');
-	const renderers: Record<string, () => string> = {
-		YYYY: () => pad(date.getUTCFullYear(), 4),
-		YY: () => String(date.getUTCFullYear()).slice(-2),
-		MMMM: () => monthNames[date.getUTCMonth()],
-		MMM: () => monthNames[date.getUTCMonth()].slice(0, 3),
-		MM: () => pad(date.getUTCMonth() + 1),
-		M: () => String(date.getUTCMonth() + 1),
-		DD: () => pad(date.getUTCDate()),
-		D: () => String(date.getUTCDate()),
-		EEEE: () => weekdayNames[date.getUTCDay()],
-		EEE: () => weekdayNames[date.getUTCDay()].slice(0, 3),
-		HH: () => pad(date.getUTCHours()),
-		H: () => String(date.getUTCHours()),
-		hh: () => pad(date.getUTCHours() % 12 || 12),
-		h: () => String(date.getUTCHours() % 12 || 12),
-		AA: () => (date.getUTCHours() < 12 ? 'AM' : 'PM'),
-		aa: () => (date.getUTCHours() < 12 ? 'am' : 'pm'),
-		mm: () => pad(date.getUTCMinutes()),
-		m: () => String(date.getUTCMinutes()),
-		ss: () => pad(date.getUTCSeconds()),
-		s: () => String(date.getUTCSeconds()),
-		ZZZZZ: () => 'Z',
-		ZZZZ: () => '+00:00',
-		ZZZ: () => '+0000',
-		ZZ: () => 'Z',
-		Z: () => 'Z'
-	};
-	const names = Object.keys(renderers).sort((left, right) => right.length - left.length);
-	let output = '';
-	let index = 0;
-	while (index < layout.length) {
-		const match = names.find(name => layout.startsWith(name, index));
-		if (match) {
-			output += renderers[match]();
-			index += match.length;
-		} else {
-			output += layout[index];
-			index++;
-		}
-	}
-	return output;
 }
 
 function cryptoRandomUuid(): string {

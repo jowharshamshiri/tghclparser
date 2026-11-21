@@ -121,7 +121,9 @@ export function parseIP(s: string): IP | undefined {
 	return undefined;
 }
 
+/** Go's CIDRMask: a mask of the leading ones, or Go's nil mask, here empty, for a length the address cannot have. */
 function cidrMask(ones: number, bits: number): Uint8Array {
+	if ((bits !== 32 && bits !== 128) || ones < 0 || ones > bits) return new Uint8Array(0);
 	const mask = new Uint8Array(bits / 8);
 	let remaining = ones;
 	for (let index = 0; index < mask.length; index++) {
@@ -213,4 +215,96 @@ export function addressRange(network: IPNet): [IP, IP] {
 		rest >>= 8n;
 	}
 	return [first, out];
+}
+
+/** Go's IPMask.Size for a canonical mask: its leading ones. */
+export function maskOnes(mask: Uint8Array): number {
+	return [...mask].reduce((count, byte) => count + byte.toString(2).replace(/0/gu, '').length, 0);
+}
+
+/** Go's IP.Equal: the same address, an IPv4 one compared with its IPv6 mapping. */
+function ipEqual(a: IP, b: IP): boolean {
+	if (a.length === b.length) return a.every((byte, index) => byte === b[index]);
+	const four = to4(a.length === 4 ? b : a);
+	const other = a.length === 4 ? a : b;
+	return four !== undefined && four.length === 4 && other.length === 4 && four.every((byte, index) => byte === other[index]);
+}
+
+const isZero = (ip: IP): boolean => ipEqual(ip, ipv4(0, 0, 0, 0)) || ipEqual(ip, new Uint8Array(16));
+
+/** go-cidr's checkIPv4: an IPv4 address as its 4 bytes. */
+const checkIPv4 = (ip: IP): IP => to4(ip) ?? ip;
+
+/** go-cidr's Inc and Dec: the address one above or below, wrapping round. */
+function step(ip: IP, by: 1 | -1): IP {
+	const out = Uint8Array.from(checkIPv4(ip));
+	for (let index = out.length - 1; index >= 0; index--) {
+		out[index] = (out[index] + by) & 0xff;
+		if (by === 1 ? out[index] !== 0 : out[index] !== 0xff) break;
+	}
+	return out;
+}
+
+/** Go's IP.Mask, with Go's nil address, here empty, where the mask does not fit the address. */
+const masked = (ip: IP, mask: Uint8Array): IP => maskIP(ip, mask) ?? new Uint8Array(0);
+
+/** go-cidr's PreviousSubnet: the subnet of a prefix length just below a network's start, and whether it wrapped. */
+export function previousSubnet(network: IPNet, prefixLength: number): [IPNet, boolean] {
+	const start = checkIPv4(network.ip);
+	const mask = cidrMask(prefixLength, 8 * start.length);
+	return [{ ip: masked(step(start, -1), mask), mask }, isZero(start)];
+}
+
+/** go-cidr's NextSubnet: the subnet of a prefix length just after a network's end, and whether it wrapped. */
+export function nextSubnet(network: IPNet, prefixLength: number): [IPNet, boolean] {
+	const [, currentLast] = addressRange(network);
+	const mask = cidrMask(prefixLength, 8 * currentLast.length);
+	const [, last] = addressRange({ ip: masked(currentLast, mask), mask });
+	const following = step(last, 1);
+	return [{ ip: masked(following, mask), mask }, isZero(following)];
+}
+
+/** Go's IP.String: dotted for an IPv4 address, else IPv6 with its longest run of two or more zero groups as "::". */
+export function ipString(ip: IP): string {
+	if (ip.length === 0) return '<nil>';
+	const four = to4(ip);
+	if (four) return [...four].join('.');
+	let e0 = -1;
+	let e1 = -1;
+	for (let index = 0; index < 16; index += 2) {
+		let end = index;
+		while (end < 16 && ip[end] === 0 && ip[end + 1] === 0) end += 2;
+		if (end > index && end - index > e1 - e0) {
+			e0 = index;
+			e1 = end;
+			index = end;
+		}
+	}
+	if (e1 - e0 <= 2) {
+		e0 = -1;
+		e1 = -1;
+	}
+	let text = '';
+	for (let index = 0; index < 16; index += 2) {
+		if (index === e0) {
+			text += '::';
+			index = e1;
+			if (index >= 16) break;
+		} else if (index > 0) {
+			text += ':';
+		}
+		text += ((ip[index] << 8) | ip[index + 1]).toString(16);
+	}
+	return text;
+}
+
+/**
+ * Go's IPNet.String for a canonical mask: the address and its prefix length, or "<nil>" for an address and mask that
+ * make no network.
+ */
+export function ipNetString(network: IPNet): string {
+	const ip = to4(network.ip) ?? (network.ip.length === 16 ? network.ip : undefined);
+	const { mask } = network;
+	if (!ip || (mask.length !== 4 && mask.length !== 16) || (mask.length === 4 && ip.length !== 4)) return '<nil>';
+	return `${ipString(ip)}/${maskOnes(mask)}`;
 }

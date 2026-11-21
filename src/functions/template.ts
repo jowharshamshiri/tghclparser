@@ -2,6 +2,8 @@ import type { FunctionContext, RuntimeValue, ValueType } from '../model';
 import { CtyNumber } from '../cty-number';
 import { arithmetic, attributeValue, comparison, type ConditionalBranch, conditionalResult, conditionValue, forElements, indexValue, negation, operandBool, templatePart } from '../cty-operations';
 import { ctyDynamic } from '../cty-types';
+import { ArgumentError } from '../function-signature';
+import { graphemeClusters } from '../grapheme-clusters';
 import { isDefect } from '../unresolved';
 import type { LogicalOperand } from './utils';
 import { logicalOperation, makeBooleanValue, makeNullValue, makeNumberValue, makeStringValue, NULL_OPERAND, unwrapSensitive } from './utils';
@@ -20,30 +22,91 @@ const templateVariableName = /^[\p{ID_Start}_][\p{ID_Continue}-]*$/u;
 //
 // A template that is one interpolation and nothing else gives that interpolation's value as it is, not as a string,
 // as HCL wraps such a template: "${x}" with a number x renders the number.
+//
+// As OpenTofu's RenderTemplate: the template is parsed first, then the variables refused, as an argument error on
+// `vars`, when they are not a map or object, when one's name is not an identifier, or when the template refers to
+// one they lack, wherever it does, branches not taken included.
+/**
+ * @param template the template's source.
+ * @param vars the variables, as templatefile and templatestring are given them.
+ * @param context what the functions the template calls read.
+ * @param filename the template file's path as templatefile was given it, which a missing variable's message names
+ *   with where the template refers to it; left out for templatestring, whose message gives the name alone.
+ */
 export async function renderTemplate(
 	template: string,
 	vars: RuntimeValue<ValueType>,
-	context: FunctionContext
+	context: FunctionContext,
+	filename?: string
 ): Promise<RuntimeValue<ValueType>> {
-	if (vars.type !== 'object' && vars.type !== 'block') throw new Error('Template variables must be an object');
-	const tokens = tokenizeTemplate(template);
-	const tree = buildTemplateTree(tokens);
+	const tree = buildTemplateTree(tokenizeTemplate(template));
+	const given = unwrapSensitive(vars);
+	if (given.type !== 'object' && given.type !== 'block') throw new ArgumentError(1, 'invalid vars value: must be a map');
 	const scope = new Map<string, RuntimeValue<ValueType>>();
-	for (const [key, value] of (vars.value as Map<string, RuntimeValue<ValueType>>).entries()) {
+	for (const [key, value] of (given.value as Map<string, RuntimeValue<ValueType>>).entries()) {
 		if (!templateVariableName.test(key)) {
-			throw new Error(`Invalid value for "vars" parameter: invalid template variable name ${JSON.stringify(key)}: must start with a letter, followed by zero or more letters, digits, and underscores.`);
+			throw new ArgumentError(1, `invalid template variable name ${JSON.stringify(key)}: must start with a letter, followed by zero or more letters, digits, and underscores`);
 		}
 		scope.set(key, value);
 	}
+	const missing = templateReferences(tree, new Set()).find(reference => !scope.has(reference.name));
+	if (missing) {
+		const at = filename === undefined ? '' : `, referenced at ${filename}:${sourceRange(template, missing.offset, missing.name)}`;
+		throw new ArgumentError(1, `vars map does not contain key ${JSON.stringify(missing.name)}${at}`);
+	}
 	const [only] = tree;
-	if (tree.length === 1 && only.kind === 'interp') return evaluateTemplateExpression(only.expr, scope, context);
+	if (tree.length === 1 && only.kind === 'interp') return evaluateTemplateAst(only.expr, scope, context);
 	return makeStringValue(await renderTemplateNodes(tree, scope, context));
+}
+
+/** A variable a template refers to: its name, and where the reference starts in the template's source. */
+interface TemplateReference {
+	name: string;
+	offset: number;
+}
+
+/**
+ * The variables a template's nodes refer to, in the order of their source, as HCL's Variables finds them: a for
+ * directive's key and value are no reference within its body.
+ */
+function templateReferences(nodes: TemplateNode[], bound: ReadonlySet<string>): TemplateReference[] {
+	const free = (expression: TExpr): TemplateReference[] => expressionReferences(expression).filter(reference => !bound.has(reference.name));
+	return nodes.flatMap(node => {
+		switch (node.kind) {
+			case 'lit': return [];
+			case 'interp': return free(node.expr);
+			case 'if': return [...free(node.cond), ...templateReferences(node.then, bound), ...templateReferences(node.else ?? [], bound)];
+			case 'for': {
+				const inner = new Set([...bound, node.val, ...(node.key === null ? [] : [node.key])]);
+				return [...free(node.coll), ...templateReferences(node.body, inner)];
+			}
+		}
+	});
+}
+
+/** The variables an expression refers to, in the order of their source. */
+function expressionReferences(expression: TExpr): TemplateReference[] {
+	if (expression.kind === 'ident') return [{ name: expression.name!, offset: expression.offset! }];
+	const children = expression.kind === 'ternary'
+		? [expression.left!, expression.right!, ...expression.args!]
+		: [expression.left, expression.right, ...(expression.args ?? [])].filter((child): child is TExpr => child !== undefined);
+	return children.flatMap(expressionReferences);
+}
+
+/**
+ * Where a name starts in a template's source, as HCL's Range writes it on one line: the line, and the columns it
+ * starts and ends at, each counted from 1 in characters.
+ */
+function sourceRange(template: string, offset: number, name: string): string {
+	const before = template.slice(0, offset).split('\n');
+	const column = graphemeClusters(before.at(-1)!).length + 1;
+	return `${before.length},${column}-${column + graphemeClusters(name).length}`;
 }
 
 type TemplateToken =
 	| { kind: 'lit'; text: string }
-	| { kind: 'interp'; expr: string }
-	| { kind: 'dir'; text: string };
+	| { kind: 'interp'; expr: string; offset: number }
+	| { kind: 'dir'; text: string; offset: number };
 
 function tokenizeTemplate(template: string): TemplateToken[] {
 	const tokens: TemplateToken[] = [];
@@ -56,15 +119,23 @@ function tokenizeTemplate(template: string): TemplateToken[] {
 	let ltrimNext = false;
 	let canTrimPrev = false;
 	const length = template.length;
+	// What a marker opened at `start` and closed at `end` holds, without its strip markers and the space around it.
+	const content = (start: number, end: number): { text: string; offset: number; closerTilde: boolean } => {
+		let from = template[start] === '~' ? start + 1 : start;
+		const closerTilde = end > from && template[end - 1] === '~';
+		let to = closerTilde ? end - 1 : end;
+		while (from < to && /\s/u.test(template[from])) from++;
+		while (to > from && /\s/u.test(template[to - 1])) to--;
+		return { text: template.slice(from, to), offset: from, closerTilde };
+	};
 
 	while (index < length) {
 		if (template.startsWith('%{', index)) {
 			const openerTilde = template[index + 2] === '~';
 			if (openerTilde && canTrimPrev) trimLastLiteral();
 			const end = findClosingMarker(template, index + 2, '}');
-			const inner = template.slice(index + 2, end);
-			const closerTilde = inner.endsWith('~');
-			tokens.push({ kind: 'dir', text: (closerTilde ? inner.slice(0, -1) : inner).trim() });
+			const { text, offset, closerTilde } = content(index + 2, end);
+			tokens.push({ kind: 'dir', text, offset });
 			index = end + 1;
 			ltrimNext = closerTilde;
 			canTrimPrev = false;
@@ -72,9 +143,8 @@ function tokenizeTemplate(template: string): TemplateToken[] {
 			const openerTilde = template[index + 2] === '~';
 			if (openerTilde && canTrimPrev) trimLastLiteral();
 			const end = findClosingMarker(template, index + 2, '}');
-			const inner = template.slice(index + 2, end);
-			const closerTilde = inner.endsWith('~');
-			tokens.push({ kind: 'interp', expr: (closerTilde ? inner.slice(0, -1) : inner).trim() });
+			const { text, offset, closerTilde } = content(index + 2, end);
+			tokens.push({ kind: 'interp', expr: text, offset });
 			index = end + 1;
 			ltrimNext = closerTilde;
 			canTrimPrev = false;
@@ -111,13 +181,25 @@ function findClosingMarker(template: string, from: number, closing: string): num
 
 type TemplateNode =
 	| { kind: 'lit'; text: string }
-	| { kind: 'interp'; expr: string }
-	| { kind: 'if'; cond: string; then: TemplateNode[]; else: TemplateNode[] | null }
-	| { kind: 'for'; key: string | null; val: string; coll: string; body: TemplateNode[] };
+	| { kind: 'interp'; expr: TExpr }
+	| { kind: 'if'; cond: TExpr; then: TemplateNode[]; else: TemplateNode[] | null }
+	| { kind: 'for'; key: string | null; val: string; coll: TExpr; body: TemplateNode[] };
 
 type TemplateFrame =
-	| { kind: 'if'; nodes: TemplateNode[]; elseNodes: TemplateNode[] | null; cond: string }
-	| { kind: 'for'; nodes: TemplateNode[]; key: string | null; val: string; coll: string };
+	| { kind: 'if'; nodes: TemplateNode[]; elseNodes: TemplateNode[] | null; cond: TExpr }
+	| { kind: 'for'; nodes: TemplateNode[]; key: string | null; val: string; coll: TExpr };
+
+/** An expression of a template, parsed from its source at `offset` in the template. */
+function parseTemplateExpression(source: string, offset: number): TExpr {
+	return new TemplateExpressionParser(source, offset).parseExpression();
+}
+
+/** The part of a directive's text from `start` on, without the space before it, and where it starts in the template. */
+function directivePart(token: { text: string; offset: number }, start: number): { source: string; offset: number } {
+	const rest = token.text.slice(start);
+	const source = rest.trimStart();
+	return { source, offset: token.offset + start + rest.length - source.length };
+}
 
 function buildTemplateTree(tokens: TemplateToken[]): TemplateNode[] {
 	const root: TemplateNode[] = [];
@@ -132,14 +214,16 @@ function buildTemplateTree(tokens: TemplateToken[]): TemplateNode[] {
 		if (token.kind === 'lit') {
 			current().push({ kind: 'lit', text: token.text });
 		} else if (token.kind === 'interp') {
-			current().push({ kind: 'interp', expr: token.expr });
+			current().push({ kind: 'interp', expr: parseTemplateExpression(token.expr, token.offset) });
 		} else {
 			const directive = token.text;
 			if (directive.startsWith('if ')) {
-				stack.push({ kind: 'if', nodes: [], elseNodes: null, cond: directive.slice(3).trim() });
+				const { source, offset } = directivePart(token, 3);
+				stack.push({ kind: 'if', nodes: [], elseNodes: null, cond: parseTemplateExpression(source, offset) });
 			} else if (directive.startsWith('for ')) {
-				const parsed = parseForDirective(directive.slice(4).trim());
-				stack.push({ kind: 'for', nodes: [], key: parsed.key, val: parsed.val, coll: parsed.coll });
+				const { source, offset } = directivePart(token, 4);
+				const parsed = parseForDirective(source);
+				stack.push({ kind: 'for', nodes: [], key: parsed.key, val: parsed.val, coll: parseTemplateExpression(parsed.coll, offset + parsed.collOffset) });
 			} else if (directive === 'else' || directive.startsWith('else ')) {
 				const frame = stack[stack.length - 1];
 				if (!frame || frame.kind !== 'if') throw new Error('Template "else" without a matching "if"');
@@ -176,7 +260,8 @@ function buildTemplateTree(tokens: TemplateToken[]): TemplateNode[] {
 	return root;
 }
 
-function parseForDirective(text: string): { key: string | null; val: string; coll: string } {
+/** A for directive's key and value names, and its collection's source with where it starts in the directive. */
+function parseForDirective(text: string): { key: string | null; val: string; coll: string; collOffset: number } {
 	let index = 0;
 	const readIdentifier = (): string => {
 		const match = /^[a-zA-Z_][a-zA-Z0-9_-]*/u.exec(text.slice(index));
@@ -191,12 +276,12 @@ function parseForDirective(text: string): { key: string | null; val: string; col
 		const inMatch = /^[\s]*in\s*/u.exec(text.slice(index));
 		if (!inMatch) throw new Error(`Invalid template "for" directive: ${text}`);
 		index += inMatch[0].length;
-		return { key, val, coll: text.slice(index).trim() };
+		return { key, val, coll: text.slice(index).trim(), collOffset: index };
 	}
 	const inMatch = /^[\s]*in\s*/u.exec(text.slice(index));
 	if (!inMatch) throw new Error(`Invalid template "for" directive: ${text}`);
 	index += inMatch[0].length;
-	return { key: null, val: key, coll: text.slice(index).trim() };
+	return { key: null, val: key, coll: text.slice(index).trim(), collOffset: index };
 }
 
 async function renderTemplateNodes(
@@ -212,18 +297,18 @@ async function renderTemplateNodes(
 				break;
 			}
 			case 'interp': {
-				const value = await evaluateTemplateExpression(node.expr, scope, context);
+				const value = await evaluateTemplateAst(node.expr, scope, context);
 				output += templatePart(value).text;
 				break;
 			}
 			case 'if': {
-				const condition = await evaluateTemplateExpression(node.cond, scope, context);
+				const condition = await evaluateTemplateAst(node.cond, scope, context);
 				const branch = conditionValue(condition) ? node.then : (node.else ?? []);
 				output += await renderTemplateNodes(branch, scope, context);
 				break;
 			}
 			case 'for': {
-				const collection = await evaluateTemplateExpression(node.coll, scope, context);
+				const collection = await evaluateTemplateAst(node.coll, scope, context);
 				for (const [key, item] of forElements(unwrapSensitive(collection))) {
 					const childScope = new Map(scope);
 					if (node.key !== null) childScope.set(node.key, key);
@@ -239,16 +324,6 @@ async function renderTemplateNodes(
 
 // --- Template expression evaluator -----------------------------------------
 
-function evaluateTemplateExpression(
-	source: string,
-	scope: Map<string, RuntimeValue<ValueType>>,
-	context: FunctionContext
-): Promise<RuntimeValue<ValueType>> {
-	const parser = new TemplateExpressionParser(source);
-	const expression = parser.parseExpression();
-	return evaluateTemplateAst(expression, scope, context);
-}
-
 interface TExpr {
 	kind: string;
 	value?: unknown;
@@ -256,12 +331,18 @@ interface TExpr {
 	right?: TExpr;
 	name?: string;
 	args?: TExpr[];
+	/** Where an identifier starts in the template's source. */
+	offset?: number;
 }
 
 class TemplateExpressionParser {
 	private index = 0;
 
-	constructor(private readonly source: string) {}
+	/**
+	 * @param source the expression's source.
+	 * @param base where the expression starts in the template's source.
+	 */
+	constructor(private readonly source: string, private readonly base: number) {}
 
 	parseExpression(): TExpr {
 		const expression = this.parseTernary();
@@ -436,6 +517,7 @@ class TemplateExpressionParser {
 			this.index += 4;
 			return { kind: 'null' };
 		}
+		const start = this.index;
 		const name = this.matchIdentifier();
 		if (!name) throw new Error(`Unexpected template expression character: ${this.source[this.index]}`);
 		this.skipWhitespace();
@@ -461,7 +543,7 @@ class TemplateExpressionParser {
 			}
 			return { kind: 'call', name, args };
 		}
-		return { kind: 'ident', name };
+		return { kind: 'ident', name, offset: this.base + start };
 	}
 
 	private parseQuotedString(): string {

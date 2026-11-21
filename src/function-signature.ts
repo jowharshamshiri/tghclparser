@@ -168,7 +168,7 @@ export interface PreparedArguments {
  * @returns the arguments, and whether the result is sensitive.
  * @throws Error in HCL's words for the first argument that does not convert, else the first null it refuses.
  */
-export function prepareArguments(signature: FunctionSignature, args: RuntimeValue<ValueType>[]): PreparedArguments {
+function prepareArguments(signature: FunctionSignature, args: RuntimeValue<ValueType>[]): PreparedArguments {
 	const converted = args.map((argument, index) => {
 		const parameter = parameterAt(signature, index);
 		if (parameter.type === EXPRESSION_CLOSURE) throw new TypeError(`parameter "${parameter.name}" takes an expression, not a value`);
@@ -176,14 +176,14 @@ export function prepareArguments(signature: FunctionSignature, args: RuntimeValu
 			return convert(argument, parameter.type);
 		} catch (error) {
 			if (!(error instanceof ConversionError)) throw error;
-			throw argumentError(parameter, error.message);
+			throw invalidArgument(parameter, error.message);
 		}
 	});
 	let marked = false;
 	const prepared = converted.map((argument, index) => {
 		const parameter = parameterAt(signature, index);
 		const plain = isSensitive(argument) ? (argument.value as RuntimeValue<ValueType>) : argument;
-		if (plain.type === 'null' && !parameter.allowNull) throw argumentError(parameter, 'argument must not be null');
+		if (plain.type === 'null' && !parameter.allowNull) throw invalidArgument(parameter, 'argument must not be null');
 		if (parameter.allowMarked) return argument;
 		const unmarked = unmarkDeep(argument);
 		marked ||= unmarked.marked;
@@ -193,16 +193,76 @@ export function prepareArguments(signature: FunctionSignature, args: RuntimeValu
 }
 
 /**
- * An argument a function refuses, as HCL reports it: the parameter it was passed to, and why.
- *
- * @param parameter the parameter.
- * @param detail why, in go-cty's words, without a final full stop.
+ * An argument a function refuses, as go-cty's function.ArgError reports one: by the argument's position, which HCL
+ * names by the parameter that takes it. A function raises it; the call words it (callFunction).
  */
-export function argumentError(parameter: Pick<CtyParameter, 'name'>, detail: string): Error {
+export class ArgumentError extends Error {
+	/**
+	 * @param index the argument's position, as go-cty's NewArgErrorf gives it.
+	 * @param detail why, in go-cty's words, without a final full stop.
+	 */
+	constructor(readonly index: number, readonly detail: string) {
+		super(detail);
+		this.name = 'ArgumentError';
+	}
+}
+
+/** An argument refused, in HCL's words: the parameter it was passed to, and why. */
+function invalidArgument(parameter: CtyParameter, detail: string): Error {
 	return new Error(`Invalid function argument; Invalid value for "${parameter.name}" parameter: ${detail}.`);
 }
 
+/**
+ * Refuses a call whose argument count go-cty's parameters do not allow, as HCL does before it evaluates any argument.
+ *
+ * @param name the function.
+ * @param signature its go-cty parameters.
+ * @param count the call's arguments, an expanded final argument counted as its elements.
+ * @throws when there are fewer arguments than parameters, or more and no variadic parameter takes them.
+ */
+export function checkArgumentCount(name: string, signature: FunctionSignature, count: number): void {
+	const { params, varParam } = signature;
+	if (count < params.length) {
+		throw new Error(
+			`Not enough function arguments; Function "${name}" expects${varParam ? ' at least' : ''} ${params.length} argument(s). `
+			+ `Missing value for "${params[count].name}".`
+		);
+	}
+	if (!varParam && count > params.length) {
+		throw new Error(`Too many function arguments; Function "${name}" expects only ${params.length} argument(s).`);
+	}
+}
+
+/**
+ * Calls a function as HCL's FunctionCallExpr calls a go-cty function, its arguments counted already: the arguments
+ * prepared (prepareArguments), the function called with them, its result marked sensitive when an argument it
+ * unmarked was, and an argument it refuses worded as HCL words it, by the parameter at the position the function
+ * gives. A position no parameter takes leaves the failure as a failed call, as HCL leaves it.
+ *
+ * @param signature the function's parameters.
+ * @param args the evaluated arguments.
+ * @param call the function itself.
+ * @returns its result.
+ * @throws Error in HCL's words for an argument refused, before the call or by it; any other failure as it is.
+ */
+export async function callFunction(
+	signature: FunctionSignature,
+	args: RuntimeValue<ValueType>[],
+	call: (args: RuntimeValue<ValueType>[]) => Promise<RuntimeValue<ValueType>>
+): Promise<RuntimeValue<ValueType>> {
+	const prepared = prepareArguments(signature, args);
+	let result: RuntimeValue<ValueType>;
+	try {
+		result = await call(prepared.args);
+	} catch (error) {
+		if (!(error instanceof ArgumentError)) throw error;
+		const parameter = signature.params[error.index] ?? signature.varParam;
+		throw parameter ? invalidArgument(parameter, error.detail) : new Error(error.detail);
+	}
+	return markResult(result, prepared.marked);
+}
+
 /** A function's result marked sensitive when an argument it unmarked was. */
-export function markResult(result: RuntimeValue<ValueType>, marked: boolean): RuntimeValue<ValueType> {
+function markResult(result: RuntimeValue<ValueType>, marked: boolean): RuntimeValue<ValueType> {
 	return marked && !isSensitive(result) ? makeSensitiveValue(result) : result;
 }

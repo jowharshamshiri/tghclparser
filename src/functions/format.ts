@@ -1,3 +1,4 @@
+import { ArgumentError } from '../function-signature';
 import type { CtyNumber, FormatSpec } from '../cty-number';
 import { graphemeClusters } from '../grapheme-clusters';
 import type { RuntimeValue, ValueType } from '../model';
@@ -104,7 +105,8 @@ export function formatFunction(format: string, args: RuntimeValue<ValueType>[]):
 	}
 	output += data.subarray(literalStart).toString('utf8');
 	if (highestArg < args.length) {
-		throw new Error(highestArg === 0
+		// Reported at the first argument no verb uses, counting the format string as go-cty's caller does.
+		throw new ArgumentError(highestArg + 1, highestArg === 0
 			? 'too many arguments; no verbs in format string'
 			: `too many arguments; only ${highestArg} used by format string`);
 	}
@@ -131,7 +133,7 @@ export function formatListFunction(format: string, args: RuntimeValue<ValueType>
 			length = thisLength;
 			lengthFrom = index;
 		} else if (thisLength !== length) {
-			throw new Error(`argument ${index + 1} has length ${thisLength}, which is inconsistent with argument ${lengthFrom + 1} of length ${length}`);
+			throw new ArgumentError(index + 1, `argument ${index + 1} has length ${thisLength}, which is inconsistent with argument ${lengthFrom + 1} of length ${length}`);
 		}
 	});
 	const results: string[] = [];

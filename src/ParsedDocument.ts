@@ -646,7 +646,7 @@ export class ParsedDocument {
 					}
 				};
 
-				return await this.schema.getFunctionRegistry().evaluateFunction(funcName, args, context);
+				return await this.schema.callFunction(funcName, args, context);
 			}
 			case 'interpolated_string': {
 				// Handle interpolated strings by evaluating each child and concatenating. A part with no value here,
@@ -906,7 +906,7 @@ export class ParsedDocument {
 					};
 
 					const args = parts.slice(1).map(makeStringValue);
-					const result = await registry.evaluateFunction(parts[0], args, context);
+					const result = await this.schema.callFunction(parts[0], args, context);
 					if (result) {
 						return { value: result, source: this.uri, found: true };
 					}

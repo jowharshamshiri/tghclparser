@@ -5,9 +5,9 @@ import { awsFunctionGroup } from './functions/aws_functions';
 import { builtinFunctionGroup } from './functions/builtin_functions';
 import { coreFunctionGroup } from './functions/core_functions';
 import { fileFunctionGroup } from './functions/file_functions';
-import { readSignature } from './function-signature';
+import { callFunction, checkArgumentCount, readSignature } from './function-signature';
 import { FunctionRegistry } from './FunctionsRegistry';
-import type { AttributeDefinition, BlockDefinition, BuiltinFunctionDefinition, FunctionDefinition, TerragruntFileKind, ValueType } from './model';
+import type { AttributeDefinition, BlockDefinition, BuiltinFunctionDefinition, FunctionContext, FunctionDefinition, RuntimeValue, TerragruntFileKind, ValueType } from './model';
 
 const functionDefinitions = functionsDefinitionsJson as { functions: FunctionDefinition[] };
 const schemaDefinitions = blocks as unknown as { blocks: BlockDefinition[]; globalAttributes: AttributeDefinition[] };
@@ -152,6 +152,23 @@ export class Schema {
 
 	getFunctionDefinition(name: string): BuiltinFunctionDefinition | undefined {
 		return currentFunctionDefinitions.find(f => f.name === name);
+	}
+
+	/**
+	 * Calls a function Terragrunt defines as HCL calls it: its arguments counted against its go-cty parameters and
+	 * converted to their types, and an argument it refuses worded as HCL words it (callFunction).
+	 *
+	 * @param name the function.
+	 * @param args its evaluated arguments.
+	 * @param context what the function reads from the configuration it is called in.
+	 * @returns its result, sensitive when an argument it does not take marked was.
+	 * @throws Error for a function Terragrunt does not define, and for any failed call, in HCL's words.
+	 */
+	async callFunction(name: string, args: RuntimeValue<ValueType>[], context: FunctionContext): Promise<RuntimeValue<ValueType>> {
+		const definition = this.getFunctionDefinition(name);
+		if (!definition) throw new Error(`Unknown function "${name}"`);
+		checkArgumentCount(name, definition.signature, args.length);
+		return callFunction(definition.signature, args, prepared => this.functionRegistry.evaluateFunction(name, prepared, context));
 	}
 
 	getFunctionSignature(func: FunctionDefinition): string {

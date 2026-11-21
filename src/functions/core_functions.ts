@@ -7,7 +7,7 @@ import { base64GzipCompat } from '../gzip-compat';
 import type { FunctionContext, RuntimeValue, ValueType } from '../model';
 import { goRepoRoot } from './git_repo_root';
 import { ctyString, friendlyName } from '../cty-types';
-import { convertToRuntimeValue, expectParams, makeArrayValue, makeBooleanValue, makeListValue, makeObjectValue, makeSensitiveValue, makeStringValue, runtimeToPlain, unwrapSensitive, valueType } from './utils';
+import { convertToRuntimeValue, expectParams, makeArrayValue, makeBooleanValue, makeListValue, makeObjectValue, makeStringValue, runtimeToPlain, valueType } from './utils';
 
 const defaultRetryableErrors = [
 	'(?s).*Failed to load state.*tcp.*timeout.*',
@@ -367,19 +367,12 @@ export const coreFunctionGroup = {
             args: RuntimeValue<ValueType>[],
             context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
-            const [argument] = args;
-            const sensitive = (argument.type as string) === 'sensitive';
-            const value = unwrapSensitive(argument);
-            if (value.type === 'null') throw new Error('Invalid value for "str" parameter: argument must not be null.');
-            if (value.type !== 'string' && value.type !== 'number' && value.type !== 'boolean') {
-                throw new Error('Invalid value for "str" parameter: string required.');
-            }
             if (!context.experiments?.includes('base64gzip-compat')) {
                 const configPath = URI.parse(context.document.uri).fsPath;
                 throw new Error(`base64gzip_compat in ${configPath} requires the 'base64gzip-compat' experiment; enable it with --experiment base64gzip-compat`);
             }
-            const encoded = makeStringValue(base64GzipCompat(String(value.value)));
-            return sensitive ? makeSensitiveValue(encoded) : encoded;
+            // HCL has converted the argument to a string, and the call marks the result when the argument was sensitive.
+            return makeStringValue(base64GzipCompat(String(args[0].value)));
         }
     }
 };

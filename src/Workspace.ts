@@ -1268,7 +1268,7 @@ export class Workspace {
 				value: await this.evaluateReadPath(argument, sourceDir, sourceUri, seen)
 			})));
 
-		const result = await this.schema.getFunctionRegistry().evaluateFunction(funcName, args, context);
+		const result = await this.schema.callFunction(funcName, args, context);
 		// A read path may be sensitive: Terragrunt still reads the file, and records it read.
 		const value = reveal ? unwrapSensitive(result) : result;
 		if (value.type !== 'string' || typeof value.value !== 'string') {

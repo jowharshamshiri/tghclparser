@@ -2,7 +2,7 @@ import { CtyNumber } from '../cty-number';
 import { consistentWithPrefix } from '../cty-strings';
 import type { RuntimeValue, ValueType } from '../model';
 import { ConversionError, convert } from '../cty-convert';
-import { ctyBool, ctyNumber, ctyString } from '../cty-types';
+import { ArgumentError } from '../function-signature';
 import { ctyEquals, friendlyTypeName, makeBooleanValue, makeSensitiveValue, unwrapSensitive, valueType } from './utils';
 
 /*
@@ -11,29 +11,11 @@ import { ctyEquals, friendlyTypeName, makeBooleanValue, makeSensitiveValue, unwr
  * refinement checks applied to the known values a Terragrunt configuration holds.
  */
 
-type Primitive = 'string' | 'number' | 'boolean';
-
 const isSensitive = (value: RuntimeValue<ValueType>): boolean => (value.type as string) === 'sensitive';
 
 /** A result marked as go-cty marks it when a parameter does not take marked values: sensitive when an argument is. */
 export function markedLike(result: RuntimeValue<ValueType>, args: RuntimeValue<ValueType>[]): RuntimeValue<ValueType> {
 	return args.some(isSensitive) ? makeSensitiveValue(result) : result;
-}
-
-const isPrimitive = (value: RuntimeValue<ValueType>): boolean => value.type === 'string' || value.type === 'number' || value.type === 'boolean';
-
-/**
- * Converts a value to a primitive type as go-cty does, or answers undefined when go-cty refuses. A null stays null,
- * of the type converted to.
- */
-function convertPrimitive(value: RuntimeValue<ValueType>, target: Primitive): RuntimeValue<ValueType> | undefined {
-	if (value.type !== 'null' && !isPrimitive(value)) return undefined;
-	try {
-		return convert(value, target === 'string' ? ctyString : target === 'number' ? ctyNumber : ctyBool);
-	} catch (error) {
-		if (error instanceof ConversionError) return undefined;
-		throw error;
-	}
 }
 
 /** go-cty's conversion of a value to the type of another, or undefined when it refuses. */
@@ -55,17 +37,17 @@ const valuesEqual = ctyEquals;
 const maxInt = 2n ** 63n - 1n;
 
 /**
- * A length bound, refused unless go-cty reads it as a whole number below the largest int. OpenTofu names the
- * parameter by the index it reports, which for the one-bound functions is that of the value.
+ * A length bound HCL has converted to a number, refused unless go-cty reads it as a whole number below the largest
+ * int. OpenTofu reports the refusal at the position it gives, which for the one-bound functions is that of the value.
+ *
+ * @param args the call's arguments.
+ * @param index the bound's position.
+ * @param reported the position OpenTofu reports a refused bound at.
  */
-function lengthBound(argument: RuntimeValue<ValueType>, parameter: string): number {
-	const value = unwrapSensitive(argument);
-	if (value.type === 'null') throw new Error(`Invalid value for "${parameter}" parameter: argument must not be null.`);
-	const bound = convertPrimitive(value, 'number');
-	if (bound === undefined) throw new Error(`Invalid value for "${parameter}" parameter: number required.`);
-	const { integer, accuracy } = (bound.value as CtyNumber).truncate();
+function lengthBound(args: RuntimeValue<ValueType>[], index: number, reported: number): number {
+	const { integer, accuracy } = (unwrapSensitive(args[index]).value as CtyNumber).truncate();
 	if (accuracy !== 'exact' || integer === undefined || integer >= maxInt) {
-		throw new Error(`Invalid value for "${parameter}" parameter: must be a whole number between 0 and ${maxInt}.`);
+		throw new ArgumentError(reported, `must be a whole number between 0 and ${maxInt}`);
 	}
 	return Number(integer);
 }
@@ -78,7 +60,7 @@ function convertCollection(argument: RuntimeValue<ValueType>): RuntimeValue<Valu
 	return unwrapSensitive(argument);
 }
 
-const notUpheld = (): Error => new Error('Invalid value for "value" parameter: assumption was not upheld.');
+const notUpheld = (): Error => new ArgumentError(0, 'assumption was not upheld');
 
 function lengthOf(collection: RuntimeValue<ValueType>): number {
 	if (collection.type === 'null') throw notUpheld();
@@ -91,8 +73,8 @@ function lengthOf(collection: RuntimeValue<ValueType>): number {
 function assumeLengthBetween() {
 	return async (args: RuntimeValue<ValueType>[]) => {
 		const collection = convertCollection(args[0]);
-		const min = lengthBound(args[1], 'min_length');
-		const max = lengthBound(args[2], 'max_length');
+		const min = lengthBound(args, 1, 1);
+		const max = lengthBound(args, 2, 2);
 		const length = lengthOf(collection);
 		if (min > length || max < length) throw notUpheld();
 		return markedLike(collection, args);
@@ -103,7 +85,7 @@ function assumeLengthBetween() {
 function assumeLengthBound(bound: 'min' | 'max') {
 	return async (args: RuntimeValue<ValueType>[]) => {
 		const collection = convertCollection(args[0]);
-		const limit = lengthBound(args[1], 'value');
+		const limit = lengthBound(args, 1, 0);
 		const length = lengthOf(collection);
 		if (bound === 'min' ? limit > length : limit < length) throw notUpheld();
 		return markedLike(collection, args);
@@ -119,30 +101,26 @@ export const assumeFunctions = {
 		const [actual, assumed] = args;
 		const converted = convertLike(actual, assumed);
 		if (converted === undefined) {
-			throw new Error(`Invalid value for "actual_value" parameter: actual value type ${friendlyTypeName(actual)} does not match assumed value type ${friendlyTypeName(assumed)}.`);
+			throw new ArgumentError(0, `actual value type ${friendlyTypeName(actual)} does not match assumed value type ${friendlyTypeName(assumed)}`);
 		}
 		if (!valuesEqual(converted, unwrapSensitive(assumed))) {
-			throw new Error('Invalid value for "actual_value" parameter: the actual value does not match the assumed value.');
+			throw new ArgumentError(0, 'the actual value does not match the assumed value');
 		}
 		return assumed;
 	},
 	assumenotnull: async (args: RuntimeValue<ValueType>[]) => {
 		// HCL's null keyword, and every null a configuration can hold here, has no type, which go-cty refuses first.
 		if (unwrapSensitive(args[0]).type === 'null') {
-			throw new Error('Invalid value for "value" parameter: given value must have a known type; consider using the \\"convert\\" function to specify a type to assume.');
+			throw new ArgumentError(0, 'given value must have a known type; consider using the \\"convert\\" function to specify a type to assume');
 		}
 		return args[0];
 	},
+	// HCL has converted the value to a string, or a null, and the prefix to a string.
 	assumestringprefix: async (args: RuntimeValue<ValueType>[]) => {
 		const value = unwrapSensitive(args[0]);
-		const prefixArgument = unwrapSensitive(args[1]);
-		if (prefixArgument.type === 'null') throw new Error('Invalid value for "prefix" parameter: argument must not be null.');
-		const prefix = convertPrimitive(prefixArgument, 'string');
-		if (prefix === undefined) throw new Error('Invalid value for "prefix" parameter: string required.');
-		const converted = convertPrimitive(value, 'string');
-		if (converted === undefined) throw new Error('Invalid value for "value" parameter: string required.');
-		if (converted.type !== 'null' && !consistentWithPrefix(String(converted.value), String(prefix.value))) throw notUpheld();
-		return markedLike(converted, args);
+		const prefix = String(unwrapSensitive(args[1]).value);
+		if (value.type !== 'null' && !consistentWithPrefix(String(value.value), prefix)) throw notUpheld();
+		return markedLike(value, args);
 	},
 	assumelistlength: assumeLengthBetween(),
 	assumelistlengthmin: assumeLengthBound('min'),

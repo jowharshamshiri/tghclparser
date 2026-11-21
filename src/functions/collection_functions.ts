@@ -16,7 +16,7 @@ import {
 	tupleOf,
 	typeEquals
 } from '../cty-types';
-import { argumentError } from '../function-signature';
+import { ArgumentError } from '../function-signature';
 import { goQuoted } from '../go-quote';
 import { graphemeCount } from '../grapheme-clusters';
 import type { RuntimeValue, ValueType } from '../model';
@@ -76,7 +76,7 @@ function makeToFunction(want: CtyType) {
 		const argument = args[0];
 		const given = valueType(argument);
 		if (!typeEquals(given, want) && !getConversionUnsafe(given, want)) {
-			throw argumentError({ name: 'v' }, `cannot convert ${friendlyName(given)} to ${friendlyNameForConstraint(want)}`);
+			throw new ArgumentError(0, `cannot convert ${friendlyName(given)} to ${friendlyNameForConstraint(want)}`);
 		}
 		try {
 			return convert(argument, want);
@@ -84,15 +84,15 @@ function makeToFunction(want: CtyType) {
 			if (!(error instanceof ConversionError)) throw error;
 			const plain = unwrapSensitive(argument);
 			if (holdsSensitive(argument)) {
-				throw argumentError({ name: 'v' }, `cannot convert this sensitive ${friendlyName(given)} to ${friendlyNameForConstraint(want)}`);
+				throw new ArgumentError(0, `cannot convert this sensitive ${friendlyName(given)} to ${friendlyNameForConstraint(want)}`);
 			}
 			if (given.kind === 'string' && want.kind === 'bool') {
-				throw argumentError({ name: 'v' }, `cannot convert ${goQuoted(String(plain.value))} to bool; only the strings "true" or "false" are allowed`);
+				throw new ArgumentError(0, `cannot convert ${goQuoted(String(plain.value))} to bool; only the strings "true" or "false" are allowed`);
 			}
 			if (given.kind === 'string' && want.kind === 'number') {
-				throw argumentError({ name: 'v' }, `cannot convert ${goQuoted(String(plain.value))} to number; given string must be a decimal representation of a number`);
+				throw new ArgumentError(0, `cannot convert ${goQuoted(String(plain.value))} to number; given string must be a decimal representation of a number`);
 			}
-			throw argumentError({ name: 'v' }, `cannot convert ${friendlyName(given)} to ${friendlyNameForConstraint(want)}`);
+			throw new ArgumentError(0, `cannot convert ${friendlyName(given)} to ${friendlyNameForConstraint(want)}`);
 		}
 	};
 }
@@ -106,7 +106,7 @@ function sequence(argument: Value): { elements: Value[]; type: CtyType; sensitiv
  * go-cty's set operations: every argument converted to a set of the element types unified, then combined. Known empty
  * sets of the dynamic pseudo-type take no part in the unification.
  */
-function setOperation(names: string[], combine: (sets: Value[][]) => Value[]) {
+function setOperation(combine: (sets: Value[][]) => Value[]) {
 	return async (args: Value[]): Promise<Value> => {
 		const types = args
 			.filter(argument => !(elementsOf(argument).length === 0 && (valueType(argument) as CollectionType).element.kind === 'dynamic'))
@@ -119,7 +119,7 @@ function setOperation(names: string[], combine: (sets: Value[][]) => Value[]) {
 				return elementsOf(convert(argument, target));
 			} catch (error) {
 				if (!(error instanceof ConversionError)) throw error;
-				throw argumentError({ name: names[Math.min(index, names.length - 1)] }, error.message);
+				throw new ArgumentError(index, error.message);
 			}
 		});
 		return makeSetValue(element, combine(sets));
@@ -194,12 +194,12 @@ export const collectionFunctions = {
 		if (types.every(type => type.kind === 'list')) {
 			const unified = unify(types, true)?.type;
 			if (unified) {
-				const elements = args.flatMap(argument => {
+				const elements = args.flatMap((argument, index) => {
 					try {
 						return elementsOf(convert(unwrapSensitive(argument), unified));
 					} catch (error) {
 						if (!(error instanceof ConversionError)) throw error;
-						throw argumentError({ name: 'seqs' }, error.message);
+						throw new ArgumentError(index, error.message);
 					}
 				});
 				return marked(makeListValue((unified as CollectionType).element, elements), sensitive);
@@ -208,7 +208,7 @@ export const collectionFunctions = {
 		const elements: Value[] = [];
 		for (const [index, type] of types.entries()) {
 			if (type.kind !== 'tuple' && type.kind !== 'list') {
-				throw argumentError({ name: 'seqs' }, `all arguments must be lists or tuples; got ${friendlyName(type)}`);
+				throw new ArgumentError(index, `all arguments must be lists or tuples; got ${friendlyName(type)}`);
 			}
 			elements.push(...elementsOf(args[index]));
 		}
@@ -269,7 +269,7 @@ export const collectionFunctions = {
 	keys: async (args: Value[]) => {
 		const type = valueType(args[0]);
 		const sensitive = isSensitive(args[0]);
-		if (type.kind !== 'map' && type.kind !== 'object') throw argumentError({ name: 'inputMap' }, 'must have map or object type');
+		if (type.kind !== 'map' && type.kind !== 'object') throw new ArgumentError(0, 'must have map or object type');
 		const keys = [...entriesOf(args[0]).keys()].sort(compareStrings).map(makeStringValue);
 		return marked(type.kind === 'map' ? makeListValue(ctyString, keys) : makeArrayValue(keys), sensitive);
 	},
@@ -300,20 +300,20 @@ export const collectionFunctions = {
 		const type = valueType(args[0]);
 		const sensitive = isSensitive(args[0]) || isSensitive(args[1]);
 		const key = String(unwrapSensitive(args[1]).value);
+		if (type.kind !== 'map' && type.kind !== 'object') throw new ArgumentError(0, 'lookup() requires a map as the first argument');
 		const found = entriesOf(args[0]).get(key);
 		if (type.kind === 'object') {
 			if (found !== undefined) return marked(found, sensitive);
 			if (args.length === 3) return marked(args[2], sensitive);
-			throw argumentError({ name: 'inputMap' }, `the given object has no attribute ${goQuoted(key)}`);
+			throw new ArgumentError(0, `the given object has no attribute ${goQuoted(key)}`);
 		}
-		if (type.kind !== 'map') throw argumentError({ name: 'inputMap' }, 'lookup() requires a map as the first argument');
 		let fallback: Value | undefined;
 		if (args.length === 3) {
 			try {
 				fallback = convert(args[2], type.element);
 			} catch (error) {
 				if (!(error instanceof ConversionError)) throw error;
-				throw argumentError({ name: 'default' }, 'the default value must have the same type as the map elements');
+				throw new ArgumentError(2, 'the default value must have the same type as the map elements');
 			}
 		}
 		if (found !== undefined) return marked(found, sensitive);
@@ -373,16 +373,18 @@ export const collectionFunctions = {
 
 	// go-cty's reverse: a tuple reversed, and a list or set as a list in reverse order.
 	reverse: async (args: Value[]) => {
-		const { elements, type, sensitive } = sequence(args[0]);
+		const type = valueType(args[0]);
+		if (type.kind !== 'tuple' && type.kind !== 'list' && type.kind !== 'set') {
+			throw new ArgumentError(0, `can only reverse list or tuple values, not ${friendlyName(type)}`);
+		}
+		const { elements, sensitive } = sequence(args[0]);
 		const reversed = [...elements].reverse();
-		if (type.kind === 'tuple') return marked(makeArrayValue(reversed), sensitive);
-		if (type.kind === 'list' || type.kind === 'set') return marked(makeListValue(type.element, reversed), sensitive);
-		throw argumentError({ name: 'list' }, `can only reverse list or tuple values, not ${friendlyName(type)}`);
+		return marked(type.kind === 'tuple' ? makeArrayValue(reversed) : makeListValue(type.element, reversed), sensitive);
 	},
 
-	setintersection: setOperation(['first_set', 'other_sets'], sets => sets[0].filter(element => sets.slice(1).every(set => isMember(element, set)))),
-	setsubtract: setOperation(['a', 'b'], ([a, b]) => a.filter(element => !isMember(element, b))),
-	setunion: setOperation(['first_set', 'other_sets'], sets => sets.flat()),
+	setintersection: setOperation(sets => sets[0].filter(element => sets.slice(1).every(set => isMember(element, set)))),
+	setsubtract: setOperation(([a, b]) => a.filter(element => !isMember(element, b))),
+	setunion: setOperation(sets => sets.flat()),
 
 	// go-cty's setproduct: every combination of one element of each argument, a list of tuples when every argument is
 	// a list or tuple and a set of them when any is a set.
@@ -390,7 +392,7 @@ export const collectionFunctions = {
 		if (args.length < 2) throw new Error('at least two arguments are required');
 		const sensitive = args.some(isSensitive);
 		let lists = 0;
-		const elementTypes = args.map(argument => {
+		const elementTypes = args.map((argument, index) => {
 			const type = valueType(argument);
 			switch (type.kind) {
 				case 'set':
@@ -402,11 +404,11 @@ export const collectionFunctions = {
 					lists++;
 					if (type.elements.length === 0) return ctyDynamic;
 					const unified = unify([...type.elements], true)?.type;
-					if (!unified) throw argumentError({ name: 'sets' }, 'all elements must be of the same type');
+					if (!unified) throw new ArgumentError(index, 'all elements must be of the same type');
 					return unified;
 				}
 				default:
-					throw argumentError({ name: 'sets' }, 'a set or a list is required');
+					throw new ArgumentError(index, 'a set or a list is required');
 			}
 		});
 		let combinations: Value[][] = [[]];
@@ -423,23 +425,23 @@ export const collectionFunctions = {
 	slice: async (args: Value[]) => {
 		const { elements, type, sensitive } = sequence(args[0]);
 		if (type.kind === 'set') {
-			throw argumentError({ name: 'list' }, 'cannot slice a set, because its elements do not have indices; explicitly convert to a list if the ordering of the result is not important');
+			throw new ArgumentError(0, 'cannot slice a set, because its elements do not have indices; explicitly convert to a list if the ordering of the result is not important');
 		}
-		if (type.kind !== 'list' && type.kind !== 'tuple') throw argumentError({ name: 'list' }, 'must be a list or tuple value');
-		const index = (argument: Value, name: string, what: string): number => {
+		if (type.kind !== 'list' && type.kind !== 'tuple') throw new ArgumentError(0, 'must be a list or tuple value');
+		const index = (position: 1 | 2, what: string): number => {
 			try {
-				return Number((argument.value as CtyNumber).toGoInt64());
+				return Number((args[position].value as CtyNumber).toGoInt64());
 			} catch (error) {
-				throw argumentError({ name }, `invalid ${what} index: ${(error as Error).message}`);
+				throw new ArgumentError(position, `invalid ${what} index: ${(error as Error).message}`);
 			}
 		};
-		const start = index(args[1], 'start_index', 'start');
-		if (start < 0) throw argumentError({ name: 'start_index' }, 'start index must not be less than zero');
-		if (start > elements.length) throw argumentError({ name: 'start_index' }, 'start index must not be greater than the length of the list');
-		const end = index(args[2], 'end_index', 'end');
-		if (end < 0) throw argumentError({ name: 'end_index' }, 'end index must not be less than zero');
-		if (end > elements.length) throw argumentError({ name: 'end_index' }, 'end index must not be greater than the length of the list');
-		if (start > end) throw argumentError({ name: 'start_index' }, 'start index must not be greater than end index');
+		const start = index(1, 'start');
+		if (start < 0) throw new ArgumentError(1, 'start index must not be less than zero');
+		if (start > elements.length) throw new ArgumentError(1, 'start index must not be greater than the length of the list');
+		const end = index(2, 'end');
+		if (end < 0) throw new ArgumentError(2, 'end index must not be less than zero');
+		if (end > elements.length) throw new ArgumentError(2, 'end index must not be greater than the length of the list');
+		if (start > end) throw new ArgumentError(1, 'start index must not be greater than end index');
 		const sliced = elements.slice(start, end);
 		return marked(type.kind === 'list' ? makeListValue(type.element, sliced) : makeArrayValue(sliced), sensitive);
 	},
@@ -456,13 +458,13 @@ export const collectionFunctions = {
 	sum: async (args: Value[]) => {
 		const type = valueType(args[0]);
 		const plain = unwrapSensitive(args[0]);
-		if (type.kind === 'string' || type.kind === 'number' || type.kind === 'bool') throw argumentError({ name: 'list' }, 'cannot sum noniterable');
+		if (type.kind === 'string' || type.kind === 'number' || type.kind === 'bool') throw new ArgumentError(0, 'cannot sum noniterable');
 		const size = plain.type === 'array' ? (plain.value as Value[]).length : (plain.value as Map<string, Value>).size;
-		if (size === 0) throw argumentError({ name: 'list' }, 'cannot sum an empty list');
+		if (size === 0) throw new ArgumentError(0, 'cannot sum an empty list');
 		if (type.kind !== 'list' && type.kind !== 'set' && type.kind !== 'tuple') {
-			throw argumentError({ name: 'list' }, `argument must be list, set, or tuple. Received ${friendlyName(type)}`);
+			throw new ArgumentError(0, `argument must be list, set, or tuple. Received ${friendlyName(type)}`);
 		}
-		const notNumbers = (): Error => argumentError({ name: 'list' }, 'argument must be list, set, or tuple of number values');
+		const notNumbers = (): Error => new ArgumentError(0, 'argument must be list, set, or tuple of number values');
 		const number = (element: Value): CtyNumber => {
 			if (unwrapSensitive(element).type === 'null') throw notNumbers();
 			try {
@@ -488,9 +490,9 @@ export const collectionFunctions = {
 		const entries = entriesOf(args[0]);
 		for (const key of [...entries.keys()].sort(compareStrings)) {
 			const list = entries.get(key)!;
-			if (list.type === 'null') throw argumentError({ name: 'values' }, `cannot use null list for [${goQuoted(key)}]`);
+			if (list.type === 'null') throw new ArgumentError(0, `cannot use null list for [${goQuoted(key)}]`);
 			for (const [index, element] of (list.value as Value[]).entries()) {
-				if (element.type === 'null') throw argumentError({ name: 'values' }, `cannot use null string for [${goQuoted(key)}][${index}]`);
+				if (element.type === 'null') throw new ArgumentError(0, `cannot use null string for [${goQuoted(key)}][${index}]`);
 				const swapped = String(element.value);
 				result.set(swapped, [...(result.get(swapped) ?? []), makeStringValue(key)]);
 			}
@@ -526,7 +528,7 @@ export const collectionFunctions = {
 	// go-cty's one: a list's, set's or tuple's only element, or a null of its element type when it has none.
 	one: async (args: Value[]) => {
 		const type = valueType(args[0]);
-		const refused = argumentError({ name: 'list' }, 'must be a list, set, or tuple value with either zero or one elements');
+		const refused = new ArgumentError(0, 'must be a list, set, or tuple value with either zero or one elements');
 		if (type.kind !== 'list' && type.kind !== 'set' && type.kind !== 'tuple') throw refused;
 		const elements = elementsOf(args[0]);
 		if (elements.length > 1) throw refused;

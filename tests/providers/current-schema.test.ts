@@ -130,9 +130,9 @@ generate "provider" {
 			expect(result.error).to.equal(undefined);
 			expect(plainValue(result.inputs!)).to.deep.equal({ negative: [0, -1, -2], down: [4, 3, 2], half: [0, 0.5, 1, 1.5], empty: [] });
 			const failures: Array<[string, string]> = [
-				['range(1, 4, -1)', 'range end must be less than start when step is negative'],
-				['range(4, 1, 1)', 'range end must be greater than start when step is positive'],
-				['range(4, 1, 0)', 'range end must be greater than start when step is positive'],
+				['range(1, 4, -1)', 'Invalid function argument; Invalid value for "params" parameter: end must be less than start when step is negative.'],
+				['range(4, 1, 1)', 'Invalid function argument; Invalid value for "params" parameter: end must be greater than start when step is positive.'],
+				['range(4, 1, 0)', 'Invalid function argument; Invalid value for "params" parameter: end must be greater than start when step is positive.'],
 				['range(1, 4, 0)', 'more than 1024 values were generated; either decrease the difference between start and end or use a smaller step'],
 				['range(1025)', 'more than 1024 values were generated; either decrease the difference between start and end or use a smaller step']
 			];

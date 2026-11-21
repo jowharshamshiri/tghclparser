@@ -25,14 +25,14 @@ import {
 } from './cty-operations';
 import { ctyDynamic } from './cty-types';
 import { FunctionOperation, invokeFunctionOperation, readArgs, FUNCTION_CONTEXT_KEY } from './function-ops';
-import { type FunctionSignature, markResult, prepareArguments } from './function-signature';
+import { checkArgumentCount } from './function-signature';
 import type { InlineFunctionDefinition } from './inline-functions';
 import { checkTypeConstraint, readInlineFunction, readTypeConstraint, synthesizeDefinition } from './inline-functions';
 import { parseHclSyntax } from './syntax';
 import { Schema } from './Schema';
 import { encryptedSopsDocument } from './sops';
 import { goRepoRoot, RepoRootError } from './functions/git_repo_root';
-import type { BuiltinFunctionDefinition, FunctionContext, FunctionDefinition, RuntimeValue, ValueType } from './model';
+import type { FunctionContext, FunctionDefinition, RuntimeValue, ValueType } from './model';
 import {
 	compareStrings,
 	type LogicalOperand,
@@ -1493,8 +1493,7 @@ export class ConfigEvaluator {
 			evaluateFunction: async (name: string, args: RuntimeValue<ValueType>[]) => {
 				const definition = this.schema.getFunctionDefinition(name);
 				if (!definition) throw new Error(`Unknown function ${name}`);
-				checkArgumentCount(name, definition.signature, args.length);
-				return this.callBuiltin(name, definition, args, scope);
+				return this.callBuiltin(name, args, scope);
 			}
 		};
 	}
@@ -2438,6 +2437,7 @@ export class ConfigEvaluator {
 		const definition = this.schema.getFunctionDefinition(name);
 		if (!definition) throw new Error(`Unknown function "${name}"`);
 		const args = await this.callArguments(node, scope);
+		// HCL counts the arguments before it evaluates any; callFunction counts them again for every other caller.
 		checkArgumentCount(name, definition.signature, args.length);
 
 		if (name === 'can') {
@@ -2467,26 +2467,20 @@ export class ConfigEvaluator {
 		if (name === 'deep_merge' && !this.options.experiments?.includes('deep-merge')) {
 			throw new Error('deep_merge requires the deep-merge experiment to be enabled');
 		}
-		return this.callBuiltin(name, definition, functionArguments(name, await this.evalCallArguments(args, scope)), scope);
+		return this.callBuiltin(name, functionArguments(name, await this.evalCallArguments(args, scope)), scope);
 	}
 
 	/**
-	 * Calls a function Terragrunt defines, its arguments counted already: each converted to its parameter's type, a
-	 * null or sensitive argument handled as go-cty handles one for that parameter, as HCL and go-cty call a function.
+	 * Calls a function Terragrunt defines as HCL calls it (Schema.callFunction), in the context of the file the call is
+	 * written in.
 	 *
 	 * @param name the function.
-	 * @param definition its definition, with its go-cty parameters.
 	 * @param args its evaluated arguments.
 	 * @param scope the scope of the file the call is written in.
 	 * @returns the function's result, sensitive when an argument it does not take marked was.
 	 */
-	private async callBuiltin(name: string, definition: BuiltinFunctionDefinition, args: RuntimeValue<ValueType>[], scope: Scope): Promise<RuntimeValue<ValueType>> {
-		if (!this.schema.getFunctionRegistry().hasFunction(name)) {
-			throw new Error(`Function "${name}" has no evaluator`);
-		}
-		const prepared = prepareArguments(definition.signature, args);
-		const context = await this.makeContext(scope);
-		return markResult(await this.schema.getFunctionRegistry().evaluateFunction(name, prepared.args, context), prepared.marked);
+	private async callBuiltin(name: string, args: RuntimeValue<ValueType>[], scope: Scope): Promise<RuntimeValue<ValueType>> {
+		return this.schema.callFunction(name, args, await this.makeContext(scope));
 	}
 
 	/**
@@ -3056,27 +3050,6 @@ function computable(value: RuntimeValue<ValueType>): RuntimeValue<ValueType> {
  */
 /** An argument of a function call: an expression written in it, or an element of its expanded final argument. */
 type CallArgument = { expression: TNode } | { value: RuntimeValue<ValueType> };
-
-/**
- * Refuses a call whose argument count go-cty's parameters do not allow, as HCL does before it evaluates any argument.
- *
- * @param name the function.
- * @param signature its go-cty parameters.
- * @param count the call's arguments, an expanded final argument counted as its elements.
- * @throws when there are fewer arguments than parameters, or more and no variadic parameter takes them.
- */
-function checkArgumentCount(name: string, signature: FunctionSignature, count: number): void {
-	const { params, varParam } = signature;
-	if (count < params.length) {
-		throw new Error(
-			`Not enough function arguments; Function "${name}" expects${varParam ? ' at least' : ''} ${params.length} argument(s). `
-			+ `Missing value for "${params[count].name}".`
-		);
-	}
-	if (!varParam && count > params.length) {
-		throw new Error(`Too many function arguments; Function "${name}" expects only ${params.length} argument(s).`);
-	}
-}
 
 function functionArguments(name: string, args: RuntimeValue<ValueType>[]): RuntimeValue<ValueType>[] {
 	if (ENCRYPTED_DOCUMENT_DECODERS.has(name)) return args;
