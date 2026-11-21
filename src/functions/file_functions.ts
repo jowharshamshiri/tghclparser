@@ -2,12 +2,10 @@ import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 
-import yaml from 'js-yaml';
-
 import type { FunctionContext, RuntimeValue, ValueType } from '../model';
+import { yamlDecode } from '../yaml-decode';
 import { renderTemplate } from './template';
 import {
-	convertToRuntimeValue,
 	expectParams,
 	makeBooleanValue,
 	makeStringValue,
@@ -148,15 +146,14 @@ export const fileFunctionGroup = {
                 throw new Error('yamldecode() requires a string argument');
             }
 
-            const yamlContent = args[0].value as string;
-
+            let decoded: RuntimeValue<ValueType>;
             try {
-                const parsed = yaml.load(yamlContent);
-                const decoded = convertToRuntimeValue(parsed);
-                return args[0].encrypted ? markEncrypted(decoded) : decoded;
-			} catch (error) {
-                throw new Error(`Error parsing YAML: ${error instanceof Error ? error.message : error}`);
+                decoded = yamlDecode(args[0].value as string);
+            } catch (error) {
+                // Terragrunt states a failed call as go-cty-yaml's message and a full stop.
+                throw new Error(`${(error as Error).message}.`);
             }
+            return args[0].encrypted ? markEncrypted(decoded) : decoded;
         },
 	}
 };
