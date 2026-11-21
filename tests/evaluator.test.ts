@@ -586,8 +586,8 @@ describe('semantic configuration evaluation', () => {
 				['"abc %", 1', 'invalid format string starting at offset 5'],
 				['"%[2]s %s %[1]s", "a", "b"', 'not enough arguments for "%s" at 6: need index 3 but have 2 total'],
 				['"%d %d", 1', 'not enough arguments for "%d" at 3: need index 2 but have 1 total'],
-				['"%d", 1, 2', 'too many arguments; only 1 used by format string'],
-				['"no verbs", 1', 'too many arguments; no verbs in format string']
+				['"%d", 1, 2', 'Invalid function argument; Invalid value for "args" parameter: too many arguments; only 1 used by format string.'],
+				['"no verbs", 1', 'Invalid function argument; Invalid value for "args" parameter: too many arguments; no verbs in format string.']
 			];
 			for (const [args, message] of cases) assert.equal(await failure(`format(${args})`), message, args);
 		});
@@ -604,9 +604,9 @@ describe('semantic configuration evaluation', () => {
 			assert.deepEqual(await render('formatlist("%v", { a = 1 })'), ['{"a":1}']);
 			assert.deepEqual(await render('formatlist("plain")'), ['plain']);
 			const failures: Array<[string, string]> = [
-				['"%s-%s", ["a", "b"], ["c"]', 'argument 2 has length 1, which is inconsistent with argument 1 of length 2'],
-				['"%s-%s", ["a"], ["c", "d"]', 'argument 2 has length 2, which is inconsistent with argument 1 of length 1'],
-				['"%s %s", [], ["a"]', 'argument 2 has length 1, which is inconsistent with argument 1 of length 0'],
+				['"%s-%s", ["a", "b"], ["c"]', 'Invalid function argument; Invalid value for "args" parameter: argument 2 has length 1, which is inconsistent with argument 1 of length 2.'],
+				['"%s-%s", ["a"], ["c", "d"]', 'Invalid function argument; Invalid value for "args" parameter: argument 2 has length 2, which is inconsistent with argument 1 of length 1.'],
+				['"%s %s", [], ["a"]', 'Invalid function argument; Invalid value for "args" parameter: argument 2 has length 1, which is inconsistent with argument 1 of length 0.'],
 				['"%s", null', 'error on format iteration 0: unsupported value for "%s" at 0: null value cannot be formatted'],
 				['"%d", [1, 1.5]', 'error on format iteration 1: unsupported value for "%d" at 0: an integer is required'],
 				['"%s", [["a"]]', 'error on format iteration 0: unsupported value for "%s" at 0: string required, but have tuple'],
