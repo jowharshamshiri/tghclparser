@@ -162,6 +162,46 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(root, {recursive: true, force: true});
 	});
 
+	it('renders sensitive values, in collections or decided on, as their values, as Terragrunt v1.2.2 does', async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-render-sensitive-'));
+		await fs.writeFile(path.join(root, 'terragrunt.hcl'), [
+			'locals {',
+			'  list   = sensitive(["a"])',
+			'  nested = [sensitive("b")]',
+			'}',
+			'inputs = {',
+			'  secret = sensitive("x")',
+			'  deep   = { b = [sensitive(1)] }',
+			'  chosen = "%{ if sensitive(true) }yes%{ endif }"',
+			'}',
+			''
+		].join('\n'));
+		const cli = path.resolve('dist/cli.cjs');
+		// What Terragrunt v1.2.2 prints for the same file.
+		const json = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', root], {encoding: 'utf8'});
+		expect(json.status).to.equal(0, json.stderr);
+		expect(json.stdout).to.equal('{"dependencies":null,"dependency":{},"download_dir":"","feature":{},"generate":{},"iam_assume_role_duration":null,'
+			+ '"iam_assume_role_session_name":"","iam_role":"","iam_web_identity_token":"","inputs":{"chosen":"yes","deep":{"b":[1]},"secret":"x"},'
+			+ '"locals":{"list":["a"],"nested":["b"]},"terraform_binary":"","terraform_version_constraint":"","terragrunt_version_constraint":""}\n');
+		const hcl = spawnSync(process.execPath, [cli, 'render', '--working-dir', root], {encoding: 'utf8'});
+		expect(hcl.status).to.equal(0, hcl.stderr);
+		expect(hcl.stdout).to.equal([
+			'locals {',
+			'  list   = ["a"]',
+			'  nested = ["b"]',
+			'}',
+			'inputs = {',
+			'  chosen = "yes"',
+			'  deep = {',
+			'    b = [1]',
+			'  }',
+			'  secret = "x"',
+			'}',
+			''
+		].join('\n'));
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
 	it('escapes JSON strings as Go does when rendering JSON', async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-render-escape-'));
 		await fs.writeFile(path.join(root, 'terragrunt.hcl'), 'inputs = {\n  "<k>" = "<a> & b\\u2028c\\u2029"\n}\n');

@@ -2236,18 +2236,36 @@ export class ConfigEvaluator {
 	}
 
 	/**
-	 * Evaluates a template's `%{ if }` as HCL evaluates the conditional it lowers one to: the condition converts to a
-	 * bool as any condition does, and the template of the branch it takes is rendered.
+	 * Evaluates a template's `%{ if }` as HCL evaluates the conditional it lowers one to, by {@link conditionalResult}:
+	 * both branches' templates rendered, then the condition converted to a bool as any condition is, a fault of the
+	 * branch it does not take dropped.
 	 *
 	 * @param node the if_directive: its condition, and the template of each branch.
 	 * @param scope the scope of the file it is written in.
-	 * @returns the rendered branch.
+	 * @returns the rendered branch, sensitive when the condition or either branch is.
 	 */
 	private async evalTemplateIf(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
-		const [condition, whenTrue, whenFalse] = node.children ?? [];
-		const value = computable(await this.evalNode(condition, scope));
-		const truth = this.atNode(condition, scope, () => conditionValue(value));
-		return this.renderTemplate(truth ? whenTrue : whenFalse, scope);
+		const [conditionNode, whenTrue, whenFalse] = node.children ?? [];
+		const trueBranch = await this.settleBranch(() => this.renderTemplate(whenTrue, scope));
+		const falseBranch = await this.settleBranch(() => this.renderTemplate(whenFalse, scope));
+		const condition = await this.settleBranch(async () => computable(await this.evalNode(conditionNode, scope)));
+		return conditionalResult(trueBranch, falseBranch, () => {
+			if ('error' in condition) throw condition.error;
+			return { truth: this.atNode(conditionNode, scope, () => conditionValue(condition.value)), value: condition.value };
+		});
+	}
+
+	/**
+	 * Evaluates one operand of a conditional, keeping what a fault in it threw to report only if the conditional chooses
+	 * it. A defect is thrown at once.
+	 */
+	private async settleBranch(evaluate: () => Promise<RuntimeValue<ValueType>>): Promise<ConditionalBranch> {
+		try {
+			return { value: await evaluate() };
+		} catch (error) {
+			if (error instanceof Error && isDefect(error)) throw error;
+			return { error };
+		}
 	}
 
 	/**
@@ -2297,17 +2315,9 @@ export class ConfigEvaluator {
 	 */
 	private async evalConditional(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
 		const [conditionNode, whenTrue, whenFalse] = node.children ?? [];
-		const settle = async (evaluate: () => Promise<RuntimeValue<ValueType>>): Promise<ConditionalBranch> => {
-			try {
-				return { value: await evaluate() };
-			} catch (error) {
-				if (error instanceof Error && isDefect(error)) throw error;
-				return { error };
-			}
-		};
-		const trueBranch = await settle(() => this.evalNode(whenTrue, scope));
-		const falseBranch = await settle(() => this.evalNode(whenFalse, scope));
-		const condition = await settle(async () => computable(await this.evalNode(conditionNode, scope)));
+		const trueBranch = await this.settleBranch(() => this.evalNode(whenTrue, scope));
+		const falseBranch = await this.settleBranch(() => this.evalNode(whenFalse, scope));
+		const condition = await this.settleBranch(async () => computable(await this.evalNode(conditionNode, scope)));
 		return conditionalResult(trueBranch, falseBranch, () => {
 			if ('error' in condition) throw condition.error;
 			return { truth: this.atNode(conditionNode, scope, () => conditionValue(condition.value)), value: condition.value };
@@ -2333,14 +2343,15 @@ export class ConfigEvaluator {
 	 *
 	 * @param node the list_comprehension node.
 	 * @param scope the scope the comprehension is written in.
-	 * @returns the body's value for each element that passes the condition, in order.
+	 * @returns the body's value for each element that passes the condition, in order, sensitive when the collection or
+	 *   a condition evaluated is.
 	 */
 	private async evalListComprehension(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
 		const results: RuntimeValue<ValueType>[] = [];
-		await this.forEachComprehensionElement(node, 1, scope, async ([expr]) => {
+		const sensitive = await this.forEachComprehensionElement(node, 1, scope, async ([expr]) => {
 			results.push(await this.evalNode(expr, scope));
 		});
-		return makeArrayValue(results);
+		return sensitive ? makeSensitiveValue(makeArrayValue(results)) : makeArrayValue(results);
 	}
 
 	/**
@@ -2348,15 +2359,18 @@ export class ConfigEvaluator {
 	 *
 	 * @param node the map_comprehension node, whose value is `...` when it groups.
 	 * @param scope the scope the comprehension is written in.
-	 * @returns an object of the produced keys; with grouping, each key holds a list of its values in order.
+	 * @returns an object of the produced keys; with grouping, each key holds a list of its values in order. It is
+	 *   sensitive when the collection, a key or a condition evaluated is.
 	 * @throws Error when two elements produce the same key and the comprehension does not group.
 	 */
 	private async evalMapComprehension(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
 		const grouping = node.value === '...';
 		const map = new Map<string, RuntimeValue<ValueType>>();
 		const groups = new Map<string, RuntimeValue<ValueType>[]>();
-		await this.forEachComprehensionElement(node, 2, scope, async ([keyNode, valueNode]) => {
+		let sensitiveKey = false;
+		const sensitive = await this.forEachComprehensionElement(node, 2, scope, async ([keyNode, valueNode]) => {
 			const keyValue = computable(await this.evalNode(keyNode, scope));
+			sensitiveKey ||= unwrapSensitive(keyValue) !== keyValue;
 			const key = this.atNode(keyNode, scope, () => forKey(keyValue));
 			const value = await this.evalNode(valueNode, scope);
 			if (grouping) {
@@ -2371,7 +2385,7 @@ export class ConfigEvaluator {
 			}
 		});
 		if (grouping) for (const [key, group] of groups) map.set(key, makeArrayValue(group));
-		return makeObjectValue(map);
+		return sensitive || sensitiveKey ? makeSensitiveValue(makeObjectValue(map)) : makeObjectValue(map);
 	}
 
 	/**
@@ -2384,20 +2398,23 @@ export class ConfigEvaluator {
 	 * @param bodyLength how many body expressions follow the collection: 1 for a list, 2 for a map's key and value.
 	 * @param scope the scope the comprehension is written in.
 	 * @param each called with the body expressions while the element's variables are in scope.
+	 * @returns whether the collection, or a condition evaluated, is sensitive: HCL marks the result with either.
 	 */
 	private async forEachComprehensionElement(
 		node: TNode,
 		bodyLength: number,
 		scope: Scope,
 		each: (body: TNode[]) => Promise<void>
-	): Promise<void> {
+	): Promise<boolean> {
 		const children = node.children ?? [];
 		const variables = children[1]?.type === 'identifier' ? children.slice(0, 2) : children.slice(0, 1);
 		const [collection, ...rest] = children.slice(variables.length);
 		const body = rest.slice(0, bodyLength);
 		const condition = rest[bodyLength];
-		const collectionValue = await this.evalNode(collection, scope);
-		for (const [key, item] of this.atNode(collection, scope, () => forElements(unwrapSensitive(collectionValue)))) {
+		const marked = await this.evalNode(collection, scope);
+		const collectionValue = unwrapSensitive(marked);
+		let sensitive = collectionValue !== marked;
+		for (const [key, item] of this.atNode(collection, scope, () => forElements(collectionValue))) {
 			const frame = new Map<string, RuntimeValue<ValueType>>();
 			if (variables.length === 2) frame.set(String(variables[0].value ?? ''), key);
 			frame.set(String(variables[variables.length - 1].value ?? ''), item);
@@ -2405,6 +2422,7 @@ export class ConfigEvaluator {
 			try {
 				if (condition) {
 					const conditionValue = computable(await this.evalNode(condition, scope));
+					sensitive ||= unwrapSensitive(conditionValue) !== conditionValue;
 					if (!this.atNode(condition, scope, () => forCondition(conditionValue))) continue;
 				}
 				await each(body);
@@ -2412,6 +2430,7 @@ export class ConfigEvaluator {
 				scope.comprehension.pop();
 			}
 		}
+		return sensitive;
 	}
 
 	private async evalSplat(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {

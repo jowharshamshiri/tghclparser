@@ -4,7 +4,7 @@ import { arithmetic, attributeValue, comparison, type ConditionalBranch, conditi
 import { ctyDynamic } from '../cty-types';
 import { isDefect } from '../unresolved';
 import type { LogicalOperand } from './utils';
-import { logicalOperation, makeBooleanValue, makeNullValue, makeNumberValue, makeStringValue, NULL_OPERAND, unwrapSensitive } from './utils';
+import { logicalOperation, makeBooleanValue, makeNullValue, makeNumberValue, makeSensitiveValue, makeStringValue, NULL_OPERAND, unwrapSensitive } from './utils';
 
 /** An HCL identifier, as the scanner reads one: the names a template's variables may have. */
 const templateVariableName = /^[\p{ID_Start}_][\p{ID_Continue}-]*$/u;
@@ -37,7 +37,7 @@ export async function renderTemplate(
 	}
 	const [only] = tree;
 	if (tree.length === 1 && only.kind === 'interp') return evaluateTemplateExpression(only.expr, scope, context);
-	return makeStringValue(await renderTemplateNodes(tree, scope, context));
+	return renderTemplateNodes(tree, scope, context);
 }
 
 type TemplateToken =
@@ -199,12 +199,24 @@ function parseForDirective(text: string): { key: string | null; val: string; col
 	return { key: null, val: key, coll: text.slice(index).trim() };
 }
 
+/**
+ * Renders a template's parts to a string as HCL's TemplateExpr does: an `if` as the conditional HCL lowers it to, both
+ * branches rendered and the fault of the one not taken dropped, and a `for` once for each element of its collection.
+ *
+ * @returns the rendered string, sensitive when a value it includes, an `if`'s condition or a `for`'s collection is.
+ */
 async function renderTemplateNodes(
 	nodes: TemplateNode[],
 	scope: Map<string, RuntimeValue<ValueType>>,
 	context: FunctionContext
-): Promise<string> {
+): Promise<RuntimeValue<ValueType>> {
 	let output = '';
+	let sensitive = false;
+	const include = (value: RuntimeValue<ValueType>): void => {
+		const part = templatePart(value);
+		output += part.text;
+		sensitive ||= part.sensitive;
+	};
 	for (const node of nodes) {
 		switch (node.kind) {
 			case 'lit': {
@@ -212,29 +224,47 @@ async function renderTemplateNodes(
 				break;
 			}
 			case 'interp': {
-				const value = await evaluateTemplateExpression(node.expr, scope, context);
-				output += templatePart(value).text;
+				include(await evaluateTemplateExpression(node.expr, scope, context));
 				break;
 			}
 			case 'if': {
-				const condition = await evaluateTemplateExpression(node.cond, scope, context);
-				const branch = conditionValue(condition) ? node.then : (node.else ?? []);
-				output += await renderTemplateNodes(branch, scope, context);
+				const whenTrue = await settle(() => renderTemplateNodes(node.then, scope, context));
+				const whenFalse = await settle(() => renderTemplateNodes(node.else ?? [], scope, context));
+				const condition = await settle(() => evaluateTemplateExpression(node.cond, scope, context));
+				include(conditionalResult(whenTrue, whenFalse, () => {
+					if ('error' in condition) throw condition.error;
+					return { truth: conditionValue(condition.value), value: condition.value };
+				}));
 				break;
 			}
 			case 'for': {
-				const collection = await evaluateTemplateExpression(node.coll, scope, context);
-				for (const [key, item] of forElements(unwrapSensitive(collection))) {
+				const marked = await evaluateTemplateExpression(node.coll, scope, context);
+				const collection = unwrapSensitive(marked);
+				sensitive ||= collection !== marked;
+				for (const [key, item] of forElements(collection)) {
 					const childScope = new Map(scope);
 					if (node.key !== null) childScope.set(node.key, key);
 					childScope.set(node.val, item);
-					output += await renderTemplateNodes(node.body, childScope, context);
+					include(await renderTemplateNodes(node.body, childScope, context));
 				}
 				break;
 			}
 		}
 	}
-	return output;
+	return sensitive ? makeSensitiveValue(makeStringValue(output)) : makeStringValue(output);
+}
+
+/**
+ * Evaluates one operand of a conditional, keeping what a fault in it threw to report only if the conditional chooses
+ * it. A defect is thrown at once.
+ */
+async function settle(evaluate: () => Promise<RuntimeValue<ValueType>>): Promise<ConditionalBranch> {
+	try {
+		return { value: await evaluate() };
+	} catch (error) {
+		if (error instanceof Error && isDefect(error)) throw error;
+		return { error };
+	}
 }
 
 // --- Template expression evaluator -----------------------------------------
@@ -583,17 +613,9 @@ async function evaluateTemplateAst(
 		}
 		case 'ternary': {
 			// As HCL does: both branches first, their types unified, then the condition picks one.
-			const settle = async (expression: TExpr): Promise<ConditionalBranch> => {
-				try {
-					return { value: await evaluateTemplateAst(expression, scope, context) };
-				} catch (error) {
-					if (error instanceof Error && isDefect(error)) throw error;
-					return { error };
-				}
-			};
-			const whenTrue = await settle(node.right!);
-			const whenFalse = await settle(node.args![0]);
-			const condition = await settle(node.left!);
+			const whenTrue = await settle(() => evaluateTemplateAst(node.right!, scope, context));
+			const whenFalse = await settle(() => evaluateTemplateAst(node.args![0], scope, context));
+			const condition = await settle(() => evaluateTemplateAst(node.left!, scope, context));
 			return conditionalResult(whenTrue, whenFalse, () => {
 				if ('error' in condition) throw condition.error;
 				return { truth: conditionValue(condition.value), value: condition.value };

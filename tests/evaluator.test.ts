@@ -439,6 +439,108 @@ describe('semantic configuration evaluation', () => {
 		});
 	});
 
+	// Each case is what Terragrunt v1.2.2 gives for the same source. HCL unmarks a condition to decide on it and marks
+	// what it decides with the condition's sensitivity: a template's `if` with the sensitivity of its condition and of
+	// both its branches, the one not taken included; a for expression with that of its collection, of each key and of
+	// each `if` clause it evaluates. issensitive() shows the mark, which render does not.
+	describe('sensitive conditions', () => {
+		const evaluate = (content: string, dir = process.cwd()) => evaluator.evaluateUnit(path.join(dir, 'terragrunt.hcl'), content, dir);
+		const rendered = async (content: string, dir?: string): Promise<unknown> => {
+			const result = await evaluate(content, dir);
+			assert.equal(result.error, undefined, content);
+			return (plainValue(result.inputs!) as Record<string, unknown>).x;
+		};
+		const value = (expression: string, dir?: string) => rendered(`inputs = {\n  x = ${expression}\n}\n`, dir);
+		const refused = async (expression: string) => {
+			const result = await evaluate(`inputs = {\n  x = ${expression}\n}\n`);
+			assert.equal(result.valid, false, expression);
+			return result.problems?.map(problem => problem.message);
+		};
+
+		it('takes a sensitive condition of a template\'s if as the bool it holds', async () => {
+			assert.equal(await value('"%{ if sensitive(true) }yes%{ else }no%{ endif }"'), 'yes');
+			assert.equal(await value('"x%{ if sensitive(false) }yes%{ else }no%{ endif }y"'), 'xnoy');
+			assert.equal(await value('"%{ if sensitive("true") }y%{ endif }"'), 'y');
+			assert.equal(await rendered([
+				'locals {',
+				'  c = sensitive(true)',
+				'}',
+				'inputs = { x = "%{ if local.c }yes%{ else }no%{ endif }" }'
+			].join('\n')), 'yes');
+			assert.deepEqual(await refused('"%{ if sensitive(null) }y%{ endif }"'), ['The condition value is null. Conditions must either be true or false.']);
+			assert.deepEqual(await refused('"%{ if sensitive("x") }y%{ endif }"'), ['The condition expression must be of type bool.']);
+		});
+
+		it('marks a template sensitive when an if\'s condition or either of its branches is', async () => {
+			assert.equal(await value('issensitive("%{ if sensitive(true) }yes%{ else }no%{ endif }")'), true);
+			assert.equal(await value('issensitive("x%{ if sensitive(false) }yes%{ endif }y")'), true);
+			assert.equal(await value('issensitive("%{ if sensitive(true) }%{ endif }")'), true);
+			assert.equal(await value('issensitive("%{ if true }a%{ else }${sensitive("b")}%{ endif }")'), true);
+			assert.equal(await value('issensitive("%{ for x in [1] }%{ if sensitive(true) }y%{ endif }%{ endfor }")'), true);
+			assert.equal(await value('issensitive("%{ if true }yes%{ else }no%{ endif }")'), false);
+			assert.equal(await value('nonsensitive("x%{ if sensitive(false) }yes%{ endif }y")'), 'xy');
+		});
+
+		it('drops a fault of the branch an if does not take', async () => {
+			assert.equal(await value('"%{ if true }a%{ else }${1 + "x"}%{ endif }"'), 'a');
+		});
+
+		it('marks a for expression sensitive when its collection, a key or an if clause it evaluates is', async () => {
+			assert.equal(await value('issensitive([for x in sensitive([1]) : x])'), true);
+			assert.equal(await value('issensitive({for x in sensitive(["k"]) : x => 1})'), true);
+			assert.equal(await value('issensitive({for x in ["k"] : x => 1 if sensitive(true)})'), true);
+			assert.equal(await value('issensitive({for x in ["k"] : sensitive(x) => 1})'), true);
+			assert.equal(await value('issensitive([for x in [1] : x if sensitive(false)])'), true);
+			assert.equal(await value('issensitive([for x in [] : x if sensitive(true)])'), false);
+			assert.deepEqual(await value('nonsensitive([for x in [1, 2] : x if sensitive(x == 2)])'), [2]);
+			assert.deepEqual(await value('nonsensitive({for x in ["k"] : sensitive(x) => 1})'), { k: 1 });
+		});
+
+		describe('in a template file', () => {
+			let dir: string;
+			before(async () => {
+				const os = await import('node:os');
+				const fs = await import('node:fs/promises');
+				dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-template-sensitive-')));
+			});
+			after(async () => {
+				const fs = await import('node:fs/promises');
+				await fs.rm(dir, { recursive: true, force: true });
+			});
+			const templated = async (template: string, expression: string) => {
+				const fs = await import('node:fs/promises');
+				await fs.writeFile(path.join(dir, 't.tpl'), template);
+				return value(expression, dir);
+			};
+
+			it('takes a sensitive condition of an if as the bool it holds', async () => {
+				assert.equal(await templated('x%{ if c }yes%{ else }no%{ endif }', 'templatefile("t.tpl", { c = sensitive(false) })'), 'xno');
+				assert.equal(await templated('%{ if sensitive(true) }y%{ endif }', 'templatefile("t.tpl", {})'), 'y');
+				assert.equal(await templated('%{ if true }a%{ else }${1 + "x"}%{ endif }', 'templatefile("t.tpl", {})'), 'a');
+			});
+
+			it('marks the rendering sensitive when a value it holds or decides on is', async () => {
+				const sensitive = (template: string, vars = '{}') => templated(template, `issensitive(templatefile("t.tpl", ${vars}))`);
+				assert.equal(await sensitive('%{ if sensitive(true) }y%{ endif }'), true);
+				assert.equal(await sensitive('%{ if c }yes%{ else }${sensitive("no")}%{ endif }', '{ c = true }'), true);
+				assert.equal(await sensitive('%{ if c }yes%{ else }no%{ endif }', '{ c = sensitive(true) }'), true);
+				assert.equal(await sensitive('%{ for x in sensitive(c) }${x}%{ endfor }', '{ c = ["a"] }'), true);
+				assert.equal(await sensitive('a${sensitive("b")}'), true);
+				assert.equal(await sensitive('${sensitive("b")}'), true);
+				assert.equal(await sensitive('hello', '{ c = sensitive("x") }'), true);
+				assert.equal(await sensitive('%{ if true }a%{ endif }'), false);
+				assert.equal(await sensitive('%{ if true }a%{ else }${1 + "x"}%{ endif }'), false);
+			});
+		});
+
+		it('does the same in a template string', async () => {
+			assert.equal(await value('templatestring("%%{ if sensitive(true) }y%%{ endif }", {})'), 'y');
+			assert.equal(await value('templatestring("x%%{ if c }y%%{ endif }", { c = sensitive(false) })'), 'x');
+			assert.equal(await value('issensitive(templatestring("%%{ if sensitive(true) }y%%{ endif }", {}))'), true);
+			assert.equal(await value('issensitive(templatestring("%%{ if c }y%%{ else }$${sensitive(1)}%%{ endif }", { c = true }))'), true);
+		});
+	});
+
 	describe('substr', () => {
 		const substr = async (args: string): Promise<unknown> => {
 			const result = await evaluator.evaluateUnit(configPath, `inputs = {\n  x = substr(${args})\n}\n`, process.cwd());
