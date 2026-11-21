@@ -3,11 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { URI } from 'vscode-uri';
-
 import { ConfigEvaluator } from '../src/Evaluator';
-import { ParsedDocument } from '../src/ParsedDocument';
-import { Workspace } from '../src/Workspace';
 import { plainValue } from './plain-values';
 import { conversions, faults, templateFiles, templates, values } from './fixtures/argument-errors-reference';
 
@@ -82,21 +78,5 @@ describe('function arguments refused as Terragrunt v1.2.2 refuses them', functio
 			const result = await evaluate(expression);
 			assert.match(result.error ?? '', /^Invalid function argument; Invalid value for "pattern" parameter: invalid regexp pattern: .+\.$/u, expression);
 		}
-	});
-});
-
-// The editor's own reading of a document calls the functions as the evaluator does, so an argument is refused there
-// in the same words.
-describe('function arguments refused alike on every path that calls a function', () => {
-	const localsOf = async (content: string) => {
-		const workspace = new Workspace();
-		const document = new ParsedDocument(workspace, URI.file(path.join(os.tmpdir(), 'terragrunt.hcl')).toString(), content);
-		return document.getAllLocals();
-	};
-
-	it('converts and counts the arguments of a call in a document\'s locals as HCL does', async () => {
-		await assert.rejects(localsOf('locals {\n  a = abs("x")\n}\n'), { message: conversions.find(([expression]) => expression === 'abs("x")')![1] });
-		await assert.rejects(localsOf('locals {\n  a = abs()\n}\n'), { message: 'Not enough function arguments; Function "abs" expects 1 argument(s). Missing value for "num".' });
-		await assert.rejects(localsOf('locals {\n  a = parseint("x", 10)\n}\n'), { message: faults.find(([expression]) => expression === 'parseint("x", 10)')![1] });
 	});
 });

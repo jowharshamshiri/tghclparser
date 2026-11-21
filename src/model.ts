@@ -354,13 +354,6 @@ export interface BuiltinFunctionDefinition extends FunctionDefinition {
 	signature: FunctionSignature;
 }
 
-
-export interface ResolvedReference {
-	value: RuntimeValue<ValueType>;
-	source: string;
-	found: boolean;
-}
-
 export interface RuntimeValue<T extends ValueType> {
 	type: T;
 	value: RuntimeValueType<T>;

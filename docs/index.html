@@ -485,7 +485,7 @@ tghclp run --tf-path terraform --working-dir ./app -- apply</code></pre></div>
         <p class="lede">Public exports from the <code>tghclparser</code> package root. The package provides ESM, CommonJS, and TypeScript declarations.</p>
 
         <h2>Core classes</h2>
-        <div class="signature"><h3>new ParsedDocument(workspace, uri, content)</h3><p>Parses one document immediately and exposes syntax, token, evaluation, and language-service queries.</p></div>
+        <div class="signature"><h3>new ParsedDocument(workspace, uri, content)</h3><p>Parses one document immediately and exposes syntax, token, and language-service queries. It evaluates nothing itself: values come from <code>ConfigEvaluator</code>.</p></div>
         <table class="reference-table"><thead><tr><th>Method</th><th>Returns / effect</th></tr></thead><tbody>
           <tr><td>getUri()</td><td>The document URI.</td></tr>
           <tr><td>getContent()</td><td>The current source text.</td></tr>
@@ -498,9 +498,7 @@ tghclp run --tf-path terraform --working-dir ./app -- apply</code></pre></div>
           <tr><td>getLinks()</td><td>A promise of LSP <code>DocumentLink[]</code>.</td></tr>
           <tr><td>getDefinition(position)</td><td>A promise of LSP <code>LocationLink[]</code>: where <code>local.*</code>, <code>include.&lt;label&gt;.*</code> or <code>dependency.&lt;name&gt;.*</code> is set, a dependency looked for in the configurations Terragrunt merges into the unit. Empty when there is no such reference at the position, or what it names is not set.</td></tr>
           <tr><td>findTokenAtPosition(position)</td><td>The narrowest token at an LSP position, or <code>null</code>.</td></tr>
-          <tr><td>getAllLocals()</td><td>A map of evaluated local values.</td></tr>
           <tr><td>getAllOutputs()</td><td>A map of outputs discovered from Terraform state.</td></tr>
-          <tr><td>evaluateValue(token, targetName?)</td><td>The evaluated runtime value, when resolvable.</td></tr>
         </tbody></table>
 
         <div class="signature"><h3>new Workspace()</h3><p>Owns documents and configuration relationships for a workspace root.</p></div>
