@@ -448,7 +448,7 @@ export const collectionFunctions = {
 	sort: async (args: Value[]) => {
 		const elements = elementsOf(args[0]);
 		const nullIndex = elements.findIndex(element => element.type === 'null');
-		if (nullIndex !== -1) throw new Error(`given list element ${nullIndex} is null; a null string cannot be sorted.`);
+		if (nullIndex !== -1) throw new Error(`given list element ${nullIndex} is null; a null string cannot be sorted`);
 		return makeListValue(ctyString, elements.map(element => String(element.value)).sort(compareStrings).map(makeStringValue));
 	},
 

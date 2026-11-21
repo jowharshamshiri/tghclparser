@@ -4,7 +4,8 @@ import type { MarkupContent } from 'vscode-languageserver-types';
 import { MarkupKind } from 'vscode-languageserver-types';
 import { URI } from 'vscode-uri';
 
-import type { AttributeDefinition, BlockDefinition, FunctionDefinition, TokenType, ValueType } from '../model';
+import { describeParameterType, parameterAt } from '../function-signature';
+import type { AttributeDefinition, BlockDefinition, BuiltinFunctionDefinition, FunctionDefinition, TokenType, ValueType } from '../model';
 import { plainStringMember, Token } from '../model';
 import { escapeMarkdownText, markdownCode, markdownFence } from '../markdown';
 import type { ModuleType } from '../module-variables';
@@ -56,7 +57,11 @@ export class HoverProvider {
 		return contents;
 	}
 
-	private getFunctionDocumentation(funcDef: FunctionDefinition): string[] {
+	/**
+	 * Documents a function Terragrunt defines. Each parameter's type is the go-cty type it is passed at, with what HCL
+	 * converts to it, which is all a call is held to before the function runs.
+	 */
+	private getFunctionDocumentation(funcDef: BuiltinFunctionDefinition): string[] {
 		const contents: string[] = [
 			`## ${funcDef.name}()`,
 			''
@@ -76,20 +81,13 @@ export class HoverProvider {
 
 		if (funcDef.parameters.length > 0) {
 			contents.push('### Parameters', '');
-			funcDef.parameters.forEach(param => {
-				const typeStr = param.types.map(t => `\`${this.formatValueType(t)}\``).join(' | ');
+			funcDef.parameters.forEach((param, index) => {
 				contents.push(
 					`**${param.name}** ${param.required ? '(required)' : '(optional)'}`,
-					`- *Type:* ${typeStr}${param.variadic ? ' (variadic)' : ''}`
+					`- *Type:* ${describeParameterType(parameterAt(funcDef.signature, index))}${param.variadic ? ' (variadic)' : ''}`
 				);
 				if (param.description) {
 					contents.push(`- *Description:* ${param.description}`);
-				}
-				if (param.validation?.pattern) {
-					contents.push(`- *Pattern:* \`${param.validation.pattern}\``);
-				}
-				if (param.validation?.allowedValues?.length) {
-					contents.push(`- *Allowed values:* ${param.validation.allowedValues.map(v => `\`${v}\``).join(', ')}`);
 				}
 				contents.push('');
 			});

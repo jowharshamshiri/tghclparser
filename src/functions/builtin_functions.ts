@@ -847,8 +847,12 @@ export const builtinFunctionGroup = {
 		join: async (args: RuntimeValue<ValueType>[]) => {
 			const separator = stringArgument(args, 0, 'join');
 			if (args.length < 2) throw new Error('at least one list is required');
+			const lists = args.length - 1;
+			// HCL has converted each list to a list of strings, so an element that is not a string is a null.
 			return stringValue(args.slice(1).flatMap((_, list) => arrayArgument(args, list + 1, 'join').map((value, index) => {
-				if (value.type !== 'string') throw new Error(`join list element ${index + 1} must be a string`);
+				if (value.type === 'null') {
+					throw argumentError({ name: 'lists' }, `element ${index}${lists > 1 ? ` of list ${list + 1}` : ''} is null; cannot concatenate null values`);
+				}
 				return String(value.value);
 			})).join(separator));
 		},

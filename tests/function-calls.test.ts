@@ -178,9 +178,9 @@ describe('function calls as Terragrunt evaluates them', () => {
 		});
 
 		it('refuses a null element', async () => {
-			assert.equal(await failure('sort(["b", null])'), 'given list element 1 is null; a null string cannot be sorted.');
-			assert.equal(await failure('sort([1, null, 2])'), 'given list element 1 is null; a null string cannot be sorted.');
-			assert.equal(await failure('sort([null])'), 'given list element 0 is null; a null string cannot be sorted.');
+			assert.equal(await failure('sort(["b", null])'), 'given list element 1 is null; a null string cannot be sorted');
+			assert.equal(await failure('sort([1, null, 2])'), 'given list element 1 is null; a null string cannot be sorted');
+			assert.equal(await failure('sort([null])'), 'given list element 0 is null; a null string cannot be sorted');
 		});
 	});
 

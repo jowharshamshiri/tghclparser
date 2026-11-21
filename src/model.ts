@@ -332,23 +332,11 @@ export interface FunctionParameter {
 	description?: string;
 	variadic?: boolean;
 	defaultValue?: any;
-	validation?: {
-		pattern?: string;
-		min?: number;
-		max?: number;
-		allowedValues?: any[];
-	};
 }
 
 export interface FunctionReturnType {
 	types: ValueType[];
 	description?: string;
-	validation?: {
-		pattern?: string;
-		min?: number;
-		max?: number;
-		allowedValues?: any[];
-	};
 }
 
 export interface FunctionDefinition {

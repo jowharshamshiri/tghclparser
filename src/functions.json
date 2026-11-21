@@ -10,10 +10,7 @@
 				"types": [
 					"string"
 				],
-				"description": "Absolute path to the Terragrunt configuration directory",
-				"validation": {
-					"pattern": "^[/\\\\].*"
-				}
+				"description": "Absolute path to the Terragrunt configuration directory"
 			},
 			"examples": [
 				"locals {\n  config_path = \"${get_terragrunt_dir()}/config.yaml\"\n}"
@@ -29,17 +26,7 @@
 				"types": [
 					"array"
 				],
-				"description": "List of Terraform commands that accept variables",
-				"validation": {
-					"allowedValues": [
-						"plan",
-						"apply",
-						"destroy",
-						"refresh",
-						"import",
-						"console"
-					]
-				}
+				"description": "List of Terraform commands that accept variables"
 			},
 			"examples": [
 				"terraform {\n  extra_arguments \"common_vars\" {\n    commands = get_terraform_commands_that_need_vars()\n    arguments = [\"-var-file=common.tfvars\"]\n  }\n}"
@@ -55,17 +42,7 @@
 				"types": [
 					"array"
 				],
-				"description": "List of Terraform commands that use state locking",
-				"validation": {
-					"allowedValues": [
-						"plan",
-						"apply",
-						"destroy",
-						"init",
-						"refresh",
-						"import"
-					]
-				}
+				"description": "List of Terraform commands that use state locking"
 			},
 			"examples": [
 				"terraform {\n  extra_arguments \"disable_locking\" {\n    commands = get_terraform_commands_that_need_locking()\n    arguments = [\"-lock=false\"]\n  }\n}"
@@ -83,10 +60,7 @@
 					],
 					"required": true,
 					"description": "Command to execute",
-					"variadic": true,
-					"validation": {
-						"pattern": "^[^;&|]+$"
-					}
+					"variadic": true
 				}
 			],
 			"signature": { "params": [], "varParam": { "name": "", "type": "string" } },
@@ -111,10 +85,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Path to the encrypted file",
-					"validation": {
-						"pattern": ".*\\.(ya?ml|json|env|ini)$"
-					}
+					"description": "Path to the encrypted file"
 				}
 			],
 			"signature": { "params": [], "varParam": { "name": "", "type": "string" } },
@@ -139,10 +110,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Path to the Terragrunt configuration file",
-					"validation": {
-						"pattern": ".*\\.hcl$"
-					}
+					"description": "Path to the Terragrunt configuration file"
 				},
 				{
 					"name": "default_value",
@@ -179,21 +147,7 @@
 				"types": [
 					"string"
 				],
-				"description": "Current Terraform command",
-				"validation": {
-					"allowedValues": [
-						"plan",
-						"apply",
-						"destroy",
-						"init",
-						"refresh",
-						"import",
-						"output",
-						"console",
-						"fmt",
-						"validate"
-					]
-				}
+				"description": "Current Terraform command"
 			},
 			"examples": [
 				"skip = get_terraform_command() == \"destroy\""
@@ -258,14 +212,7 @@
 				"types": [
 					"string"
 				],
-				"description": "Current operating system platform",
-				"validation": {
-					"allowedValues": [
-						"windows",
-						"darwin",
-						"linux"
-					]
-				}
+				"description": "Current operating system platform"
 			},
 			"examples": [
 				"locals {\n  is_windows = get_platform() == \"windows\"\n}"
@@ -281,10 +228,7 @@
 				"types": [
 					"string"
 				],
-				"description": "Absolute path to Git repository root",
-				"validation": {
-					"pattern": "^[/\\\\].*"
-				}
+				"description": "Absolute path to Git repository root"
 			},
 			"examples": [
 				"locals {\n  repo_root = get_repo_root()\n}"
@@ -421,10 +365,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Path to the .tfvars file",
-					"validation": {
-						"pattern": ".*\\.tfvars$"
-					}
+					"description": "Path to the .tfvars file"
 				}
 			],
 			"signature": { "params": [], "varParam": { "name": "", "type": "string" } },
@@ -656,10 +597,7 @@
 				"types": [
 					"string"
 				],
-				"description": "Absolute path to the parent Terragrunt configuration directory",
-				"validation": {
-					"pattern": "^[/\\\\].*"
-				}
+				"description": "Absolute path to the parent Terragrunt configuration directory"
 			},
 			"examples": [
 				"include {\n  path = \"${get_parent_terragrunt_dir()}/common.hcl\"\n}"
@@ -675,10 +613,7 @@
 				"types": [
 					"string"
 				],
-				"description": "Absolute path to original Terragrunt configuration directory",
-				"validation": {
-					"pattern": "^[/\\\\].*"
-				}
+				"description": "Absolute path to original Terragrunt configuration directory"
 			},
 			"examples": [],
 			"deprecated": false
@@ -692,16 +627,7 @@
 				"types": [
 					"array"
 				],
-				"description": "List of Terraform commands that accept -input parameter",
-				"validation": {
-					"allowedValues": [
-						"plan",
-						"apply",
-						"refresh",
-						"import",
-						"init"
-					]
-				}
+				"description": "List of Terraform commands that accept -input parameter"
 			},
 			"examples": [],
 			"deprecated": false
@@ -715,14 +641,7 @@
 				"types": [
 					"array"
 				],
-				"description": "List of Terraform commands that accept -parallelism parameter",
-				"validation": {
-					"allowedValues": [
-						"plan",
-						"apply",
-						"destroy"
-					]
-				}
+				"description": "List of Terraform commands that accept -parallelism parameter"
 			},
 			"examples": [],
 			"deprecated": false
@@ -750,10 +669,7 @@
 				"types": [
 					"string"
 				],
-				"description": "AWS account ID",
-				"validation": {
-					"pattern": "^\\d{12}$"
-				}
+				"description": "AWS account ID"
 			},
 			"examples": [],
 			"deprecated": false
@@ -767,10 +683,7 @@
 				"types": [
 					"string"
 				],
-				"description": "AWS caller identity ARN",
-				"validation": {
-					"pattern": "^arn:aws:iam::\\d{12}:.+$"
-				}
+				"description": "AWS caller identity ARN"
 			},
 			"examples": [],
 			"deprecated": false
@@ -798,10 +711,7 @@
 				"types": [
 					"string"
 				],
-				"description": "Absolute path to working directory",
-				"validation": {
-					"pattern": "^[/\\\\].*"
-				}
+				"description": "Absolute path to working directory"
 			},
 			"examples": [],
 			"deprecated": false
@@ -898,10 +808,7 @@
 				"types": [
 					"number"
 				],
-				"description": "Absolute value of the input number",
-				"validation": {
-					"min": 0
-				}
+				"description": "Absolute value of the input number"
 			},
 			"examples": [
 				"locals { absolute = abs(-42) }"
@@ -926,10 +833,7 @@
 				"types": [
 					"string"
 				],
-				"description": "Absolute path",
-				"validation": {
-					"pattern": "^[/\\\\].*"
-				}
+				"description": "Absolute path"
 			},
 			"examples": [
 				"locals { full_path = abspath(\"../config\") }"
@@ -946,15 +850,7 @@
 						"array"
 					],
 					"required": true,
-					"description": "List of boolean values to check",
-					"validation": {
-						"allowedValues": [
-							true,
-							false,
-							"true",
-							"false"
-						]
-					}
+					"description": "List of boolean values to check"
 				}
 			],
 			"signature": { "params": [ { "name": "list", "type": "list(bool)" } ], "varParam": null },
@@ -979,15 +875,7 @@
 						"array"
 					],
 					"required": true,
-					"description": "List of boolean values to check",
-					"validation": {
-						"allowedValues": [
-							true,
-							false,
-							"true",
-							"false"
-						]
-					}
+					"description": "List of boolean values to check"
 				}
 			],
 			"signature": { "params": [ { "name": "list", "type": "list(bool)" } ], "varParam": null },
@@ -1012,10 +900,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Base64-encoded string to decode",
-					"validation": {
-						"pattern": "^[A-Za-z0-9+/]*={0,2}$"
-					}
+					"description": "Base64-encoded string to decode"
 				}
 			],
 			"signature": { "params": [ { "name": "str", "type": "string", "allowMarked": true } ], "varParam": null },
@@ -1048,10 +933,7 @@
 				"types": [
 					"string"
 				],
-				"description": "Base64-encoded string",
-				"validation": {
-					"pattern": "^[A-Za-z0-9+/]*={0,2}$"
-				}
+				"description": "Base64-encoded string"
 			},
 			"examples": [
 				"locals { encoded = base64encode(\"Hello\") }"
@@ -1068,10 +950,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Base64-encoded gzipped string to decode",
-					"validation": {
-						"pattern": "^[A-Za-z0-9+/]*={0,2}$"
-					}
+					"description": "Base64-encoded gzipped string to decode"
 				}
 			],
 			"signature": { "params": [ { "name": "str", "type": "string", "allowMarked": true } ], "varParam": null },
@@ -1104,10 +983,7 @@
 				"types": [
 					"string"
 				],
-				"description": "Base64-encoded gzipped string",
-				"validation": {
-					"pattern": "^[A-Za-z0-9+/]*={0,2}$"
-				}
+				"description": "Base64-encoded gzipped string"
 			},
 			"examples": [
 				"locals { compressed = base64gzip(\"Hello World\") }"
@@ -1157,10 +1033,7 @@
 				"types": [
 					"string"
 				],
-				"description": "Base64-encoded SHA256 hash",
-				"validation": {
-					"pattern": "^[A-Za-z0-9+/]{43}=$"
-				}
+				"description": "Base64-encoded SHA256 hash"
 			},
 			"examples": [
 				"locals { hash = base64sha256(\"Hello World\") }"
@@ -1185,10 +1058,7 @@
 				"types": [
 					"string"
 				],
-				"description": "Base64-encoded SHA512 hash",
-				"validation": {
-					"pattern": "^[A-Za-z0-9+/]{86}=$"
-				}
+				"description": "Base64-encoded SHA512 hash"
 			},
 			"examples": [
 				"locals { hash = base64sha512(\"Hello World\") }"
@@ -1214,11 +1084,7 @@
 					],
 					"required": false,
 					"description": "Cost parameter for bcrypt (default: 10)",
-					"defaultValue": 10,
-					"validation": {
-						"min": 4,
-						"max": 31
-					}
+					"defaultValue": 10
 				}
 			],
 			"signature": { "params": [ { "name": "str", "type": "string" } ], "varParam": { "name": "cost", "type": "number" } },
@@ -1226,10 +1092,7 @@
 				"types": [
 					"string"
 				],
-				"description": "Bcrypt hash of the input string",
-				"validation": {
-					"pattern": "^\\$2[ayb]\\$[0-9]{2}\\$[A-Za-z0-9./]{53}$"
-				}
+				"description": "Bcrypt hash of the input string"
 			},
 			"examples": [
 				"locals { password_hash = bcrypt(\"mypassword\", 12) }"
@@ -1334,10 +1197,7 @@
 						"number"
 					],
 					"required": true,
-					"description": "Size of each chunk, a whole number",
-					"validation": {
-						"min": 1
-					}
+					"description": "Size of each chunk, a whole number"
 				}
 			],
 			"signature": { "params": [ { "name": "list", "type": "list(any)", "allowMarked": true }, { "name": "size", "type": "number", "allowMarked": true } ], "varParam": null },
@@ -1362,10 +1222,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "CIDR range to check against",
-					"validation": {
-						"pattern": "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"
-					}
+					"description": "CIDR range to check against"
 				},
 				{
 					"name": "ip",
@@ -1373,10 +1230,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "IP address to check",
-					"validation": {
-						"pattern": "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}$"
-					}
+					"description": "IP address to check"
 				}
 			],
 			"signature": { "params": [ { "name": "containing_prefix", "type": "string" }, { "name": "contained_ip_or_prefix", "type": "string" } ], "varParam": null },
@@ -1401,10 +1255,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "CIDR range",
-					"validation": {
-						"pattern": "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"
-					}
+					"description": "CIDR range"
 				},
 				{
 					"name": "hostnum",
@@ -1412,10 +1263,7 @@
 						"number"
 					],
 					"required": true,
-					"description": "Host number within the CIDR range",
-					"validation": {
-						"min": 0
-					}
+					"description": "Host number within the CIDR range"
 				}
 			],
 			"signature": { "params": [ { "name": "prefix", "type": "string" }, { "name": "hostnum", "type": "number" } ], "varParam": null },
@@ -1423,10 +1271,7 @@
 				"types": [
 					"string"
 				],
-				"description": "IP address for the specified host",
-				"validation": {
-					"pattern": "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}$"
-				}
+				"description": "IP address for the specified host"
 			},
 			"examples": [
 				"locals { ip = cidrhost(\"10.0.0.0/8\", 2) }"
@@ -1443,10 +1288,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "CIDR prefix",
-					"validation": {
-						"pattern": "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"
-					}
+					"description": "CIDR prefix"
 				}
 			],
 			"signature": { "params": [ { "name": "prefix", "type": "string" } ], "varParam": null },
@@ -1454,10 +1296,7 @@
 				"types": [
 					"string"
 				],
-				"description": "Subnet mask address",
-				"validation": {
-					"pattern": "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}$"
-				}
+				"description": "Subnet mask address"
 			},
 			"examples": [
 				"locals { netmask = cidrnetmask(\"10.0.0.0/24\") } # Returns 255.255.255.0"
@@ -1474,10 +1313,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "CIDR range",
-					"validation": {
-						"pattern": "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"
-					}
+					"description": "CIDR range"
 				},
 				{
 					"name": "newbits",
@@ -1485,11 +1321,7 @@
 						"number"
 					],
 					"required": true,
-					"description": "Number of additional bits for the subnet prefix",
-					"validation": {
-						"min": 1,
-						"max": 32
-					}
+					"description": "Number of additional bits for the subnet prefix"
 				},
 				{
 					"name": "netnum",
@@ -1497,10 +1329,7 @@
 						"number"
 					],
 					"required": true,
-					"description": "Subnet number within the prefix",
-					"validation": {
-						"min": 0
-					}
+					"description": "Subnet number within the prefix"
 				}
 			],
 			"signature": { "params": [ { "name": "prefix", "type": "string" }, { "name": "newbits", "type": "number" }, { "name": "netnum", "type": "number" } ], "varParam": null },
@@ -1508,10 +1337,7 @@
 				"types": [
 					"string"
 				],
-				"description": "Subnet CIDR range",
-				"validation": {
-					"pattern": "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"
-				}
+				"description": "Subnet CIDR range"
 			},
 			"examples": [
 				"locals { subnet = cidrsubnet(\"10.0.0.0/16\", 8, 2) }"
@@ -1528,10 +1354,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "CIDR range",
-					"validation": {
-						"pattern": "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"
-					}
+					"description": "CIDR range"
 				},
 				{
 					"name": "newbits",
@@ -1540,11 +1363,7 @@
 					],
 					"required": false,
 					"description": "List of numbers of new bits for each subnet",
-					"variadic": true,
-					"validation": {
-						"min": 1,
-						"max": 32
-					}
+					"variadic": true
 				}
 			],
 			"signature": { "params": [ { "name": "prefix", "type": "string" } ], "varParam": { "name": "newbits", "type": "number" } },
@@ -1716,10 +1535,7 @@
 						"number"
 					],
 					"required": true,
-					"description": "Index to retrieve, a whole number",
-					"validation": {
-						"min": 0
-					}
+					"description": "Index to retrieve, a whole number"
 				}
 			],
 			"signature": { "params": [ { "name": "list", "type": "any", "allowMarked": true }, { "name": "index", "type": "number" } ], "varParam": null },
@@ -1782,10 +1598,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Path to the file to read",
-					"validation": {
-						"pattern": "^[^<>:;,?\"*|]+$"
-					}
+					"description": "Path to the file to read"
 				}
 			],
 			"signature": { "params": [ { "name": "path", "type": "string", "allowMarked": true } ], "varParam": null },
@@ -1810,10 +1623,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Path to the file to read",
-					"validation": {
-						"pattern": "^[^<>:;,?\"*|]+$"
-					}
+					"description": "Path to the file to read"
 				}
 			],
 			"signature": { "params": [ { "name": "path", "type": "string", "allowMarked": true } ], "varParam": null },
@@ -1821,10 +1631,7 @@
 				"types": [
 					"string"
 				],
-				"description": "Base64-encoded contents of the file",
-				"validation": {
-					"pattern": "^[A-Za-z0-9+/]*={0,2}$"
-				}
+				"description": "Base64-encoded contents of the file"
 			},
 			"examples": [
 				"locals { encoded = filebase64(\"${path.module}/cert.pem\") }"
@@ -1841,10 +1648,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Path to the file to hash",
-					"validation": {
-						"pattern": "^[^<>:;,?\"*|]+$"
-					}
+					"description": "Path to the file to hash"
 				}
 			],
 			"signature": { "params": [ { "name": "path", "type": "string" } ], "varParam": null },
@@ -1852,10 +1656,7 @@
 				"types": [
 					"string"
 				],
-				"description": "Base64-encoded SHA256 hash of the file",
-				"validation": {
-					"pattern": "^[A-Za-z0-9+/]{43}=$"
-				}
+				"description": "Base64-encoded SHA256 hash of the file"
 			},
 			"examples": [
 				"locals { hash = filebase64sha256(\"${path.module}/data.bin\") }"
@@ -1872,10 +1673,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Path to the file to hash",
-					"validation": {
-						"pattern": "^[^<>:;,?\"*|]+$"
-					}
+					"description": "Path to the file to hash"
 				}
 			],
 			"signature": { "params": [ { "name": "path", "type": "string" } ], "varParam": null },
@@ -1883,10 +1681,7 @@
 				"types": [
 					"string"
 				],
-				"description": "Base64-encoded SHA512 hash of the file",
-				"validation": {
-					"pattern": "^[A-Za-z0-9+/]{86}=$"
-				}
+				"description": "Base64-encoded SHA512 hash of the file"
 			},
 			"examples": [
 				"locals { hash = filebase64sha512(\"${path.module}/data.bin\") }"
@@ -1903,10 +1698,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Path to check for file existence",
-					"validation": {
-						"pattern": "^[^<>:;,?\"*|]+$"
-					}
+					"description": "Path to check for file existence"
 				}
 			],
 			"signature": { "params": [ { "name": "path", "type": "string", "allowMarked": true } ], "varParam": null },
@@ -1931,10 +1723,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Path to the file to hash",
-					"validation": {
-						"pattern": "^[^<>:;,?\"*|]+$"
-					}
+					"description": "Path to the file to hash"
 				}
 			],
 			"signature": { "params": [ { "name": "path", "type": "string" } ], "varParam": null },
@@ -1942,10 +1731,7 @@
 				"types": [
 					"string"
 				],
-				"description": "MD5 hash of the file",
-				"validation": {
-					"pattern": "^[a-f0-9]{32}$"
-				}
+				"description": "MD5 hash of the file"
 			},
 			"examples": [
 				"locals { hash = filemd5(\"${path.module}/data.txt\") }"
@@ -1995,10 +1781,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Path to the file to hash",
-					"validation": {
-						"pattern": "^[^<>:;,?\"*|]+$"
-					}
+					"description": "Path to the file to hash"
 				}
 			],
 			"signature": { "params": [ { "name": "path", "type": "string" } ], "varParam": null },
@@ -2006,10 +1789,7 @@
 				"types": [
 					"string"
 				],
-				"description": "SHA1 hash of the file",
-				"validation": {
-					"pattern": "^[a-f0-9]{40}$"
-				}
+				"description": "SHA1 hash of the file"
 			},
 			"examples": [
 				"locals { hash = filesha1(\"${path.module}/data.bin\") }"
@@ -2026,10 +1806,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Path to the file to hash",
-					"validation": {
-						"pattern": "^[^<>:;,?\"*|]+$"
-					}
+					"description": "Path to the file to hash"
 				}
 			],
 			"signature": { "params": [ { "name": "path", "type": "string" } ], "varParam": null },
@@ -2037,10 +1814,7 @@
 				"types": [
 					"string"
 				],
-				"description": "SHA256 hash of the file",
-				"validation": {
-					"pattern": "^[a-f0-9]{64}$"
-				}
+				"description": "SHA256 hash of the file"
 			},
 			"examples": [
 				"locals { hash = filesha256(\"${path.module}/data.bin\") }"
@@ -2057,10 +1831,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Path to the file to hash",
-					"validation": {
-						"pattern": "^[^<>:;,?\"*|]+$"
-					}
+					"description": "Path to the file to hash"
 				}
 			],
 			"signature": { "params": [ { "name": "path", "type": "string" } ], "varParam": null },
@@ -2068,10 +1839,7 @@
 				"types": [
 					"string"
 				],
-				"description": "SHA512 hash of the file",
-				"validation": {
-					"pattern": "^[a-f0-9]{128}$"
-				}
+				"description": "SHA512 hash of the file"
 			},
 			"examples": [
 				"locals { hash = filesha512(\"${path.module}/data.bin\") }"
@@ -2138,10 +1906,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Format string",
-					"validation": {
-						"pattern": ".*%[sdfgGbBoOxXeEv].*"
-					}
+					"description": "Format string"
 				},
 				{
 					"name": "args",
@@ -2180,10 +1945,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Format specification",
-					"validation": {
-						"pattern": "%[YymdHMSjUwWcxX]"
-					}
+					"description": "Format specification"
 				},
 				{
 					"name": "timestamp",
@@ -2191,10 +1953,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Timestamp to format",
-					"validation": {
-						"pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
-					}
+					"description": "Timestamp to format"
 				}
 			],
 			"signature": { "params": [ { "name": "format", "type": "string" }, { "name": "time", "type": "string" } ], "varParam": null },
@@ -2219,10 +1978,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Format string",
-					"validation": {
-						"pattern": ".*%[sdfgGbBoOxXeEv].*"
-					}
+					"description": "Format string"
 				},
 				{
 					"name": "args",
@@ -2256,11 +2012,7 @@
 						"number"
 					],
 					"required": true,
-					"description": "Number of spaces to indent",
-					"validation": {
-						"min": 0,
-						"max": 100
-					}
+					"description": "Number of spaces to indent"
 				},
 				{
 					"name": "str",
@@ -2314,10 +2066,7 @@
 				"types": [
 					"number"
 				],
-				"description": "Index of the value in the list",
-				"validation": {
-					"min": 0
-				}
+				"description": "Index of the value in the list"
 			},
 			"examples": [
 				"locals { pos = index([\"a\", \"b\", \"c\"], \"b\") }"
@@ -2334,10 +2083,7 @@
 						"number"
 					],
 					"required": true,
-					"description": "Number to calculate logarithm of",
-					"validation": {
-						"min": 0.000001
-					}
+					"description": "Number to calculate logarithm of"
 				},
 				{
 					"name": "base",
@@ -2345,10 +2091,7 @@
 						"number"
 					],
 					"required": true,
-					"description": "Base of the logarithm",
-					"validation": {
-						"min": 0.000001
-					}
+					"description": "Base of the logarithm"
 				}
 			],
 			"signature": { "params": [ { "name": "num", "type": "number" }, { "name": "base", "type": "number" } ], "varParam": null },
@@ -2580,11 +2323,7 @@
 						"number"
 					],
 					"required": true,
-					"description": "Base to parse in",
-					"validation": {
-						"min": 2,
-						"max": 62
-					}
+					"description": "Base to parse in"
 				}
 			],
 			"signature": { "params": [ { "name": "number", "type": "any" }, { "name": "base", "type": "number" } ], "varParam": null },
@@ -2683,10 +2422,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Regular expression pattern",
-					"validation": {
-						"pattern": "^[^()]*$"
-					}
+					"description": "Regular expression pattern"
 				},
 				{
 					"name": "string",
@@ -2719,10 +2455,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Regular expression pattern",
-					"validation": {
-						"pattern": "^[^()]*$"
-					}
+					"description": "Regular expression pattern"
 				},
 				{
 					"name": "string",
@@ -2821,10 +2554,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Base64-encoded encrypted message",
-					"validation": {
-						"pattern": "^[A-Za-z0-9+/]*={0,2}$"
-					}
+					"description": "Base64-encoded encrypted message"
 				},
 				{
 					"name": "privatekey",
@@ -2832,10 +2562,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "RSA private key in PEM format",
-					"validation": {
-						"pattern": "^-----BEGIN RSA PRIVATE KEY-----[\\s\\S]*-----END RSA PRIVATE KEY-----$"
-					}
+					"description": "RSA private key in PEM format"
 				}
 			],
 			"signature": { "params": [ { "name": "ciphertext", "type": "string" }, { "name": "privatekey", "type": "string" } ], "varParam": null },
@@ -3020,12 +2747,7 @@
 						"array"
 					],
 					"required": true,
-					"description": "List of strings to sort",
-					"validation": {
-						"allowedTypes": [
-							"string"
-						]
-					}
+					"description": "List of strings to sort"
 				}
 			],
 			"signature": { "params": [ { "name": "list", "type": "list(string)" } ], "varParam": null },
@@ -3184,19 +2906,7 @@
 						"boolean"
 					],
 					"required": true,
-					"description": "Value to convert",
-					"validation": {
-						"allowedValues": [
-							"true",
-							"false",
-							"1",
-							"0",
-							true,
-							false,
-							1,
-							0
-						]
-					}
+					"description": "Value to convert"
 				}
 			],
 			"signature": { "params": [ { "name": "v", "type": "any", "allowNull": true, "allowMarked": true } ], "varParam": null },
@@ -3277,10 +2987,7 @@
 						"number"
 					],
 					"required": true,
-					"description": "Value to convert",
-					"validation": {
-						"pattern": "^-?\\d*\\.?\\d+$"
-					}
+					"description": "Value to convert"
 				}
 			],
 			"signature": { "params": [ { "name": "v", "type": "any", "allowNull": true, "allowMarked": true } ], "varParam": null },
@@ -3357,10 +3064,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Base64-encoded string to decode",
-					"validation": {
-						"pattern": "^[A-Za-z0-9+/]*={0,2}$"
-					}
+					"description": "Base64-encoded string to decode"
 				},
 				{
 					"name": "encoding",
@@ -3405,10 +3109,7 @@
 				"types": [
 					"string"
 				],
-				"description": "Base64-encoded string",
-				"validation": {
-					"pattern": "^[A-Za-z0-9+/]*={0,2}$"
-				}
+				"description": "Base64-encoded string"
 			},
 			"examples": [
 				"locals { encoded = textencodebase64(\"Hello, World!\", \"UTF-16\") }"
@@ -3425,10 +3126,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Timestamp string to add to",
-					"validation": {
-						"pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
-					}
+					"description": "Timestamp string to add to"
 				},
 				{
 					"name": "duration",
@@ -3436,10 +3134,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Duration to add (e.g., \"30m\", \"24h\")",
-					"validation": {
-						"pattern": "^\\d+[smh]$"
-					}
+					"description": "Duration to add (e.g., \"30m\", \"24h\")"
 				}
 			],
 			"signature": { "params": [ { "name": "timestamp", "type": "string" }, { "name": "duration", "type": "string" } ], "varParam": null },
@@ -3447,10 +3142,7 @@
 				"types": [
 					"string"
 				],
-				"description": "New timestamp",
-				"validation": {
-					"pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
-				}
+				"description": "New timestamp"
 			},
 			"examples": [
 				"locals { future = timeadd(timestamp(), \"24h\") }"
@@ -3467,10 +3159,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "First timestamp to compare",
-					"validation": {
-						"pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
-					}
+					"description": "First timestamp to compare"
 				},
 				{
 					"name": "timestamp_b",
@@ -3478,10 +3167,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Second timestamp to compare",
-					"validation": {
-						"pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
-					}
+					"description": "Second timestamp to compare"
 				}
 			],
 			"signature": { "params": [ { "name": "timestamp_a", "type": "string" }, { "name": "timestamp_b", "type": "string" } ], "varParam": null },
@@ -3489,14 +3175,7 @@
 				"types": [
 					"number"
 				],
-				"description": "Comparison result (-1, 0, or 1)",
-				"validation": {
-					"allowedValues": [
-						-1,
-						0,
-						1
-					]
-				}
+				"description": "Comparison result (-1, 0, or 1)"
 			},
 			"examples": [
 				"locals { is_later = timecmp(timestamp(), timeadd(timestamp(), \"1h\")) }"
@@ -3512,10 +3191,7 @@
 				"types": [
 					"string"
 				],
-				"description": "Current timestamp",
-				"validation": {
-					"pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
-				}
+				"description": "Current timestamp"
 			},
 			"examples": [
 				"locals { now = timestamp() }"
@@ -3656,12 +3332,7 @@
 						"object"
 					],
 					"required": true,
-					"description": "Map of lists to transpose",
-					"validation": {
-						"allowedTypes": [
-							"array"
-						]
-					}
+					"description": "Map of lists to transpose"
 				}
 			],
 			"signature": { "params": [ { "name": "values", "type": "map(list(string))" } ], "varParam": null },
@@ -3768,10 +3439,7 @@
 				"types": [
 					"string"
 				],
-				"description": "URL-encoded string",
-				"validation": {
-					"pattern": "^[A-Za-z0-9_.~\\-%]*$"
-				}
+				"description": "URL-encoded string"
 			},
 			"examples": [
 				"locals { encoded = urlencode(\"Hello World\") }"
@@ -3788,10 +3456,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "URL-encoded string to decode",
-					"validation": {
-						"pattern": "^[A-Za-z0-9_.~\\-%]*$"
-					}
+					"description": "URL-encoded string to decode"
 				}
 			],
 			"signature": { "params": [ { "name": "str", "type": "string" } ], "varParam": null },
@@ -3815,10 +3480,7 @@
 				"types": [
 					"string"
 				],
-				"description": "Random UUID",
-				"validation": {
-					"pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-				}
+				"description": "Random UUID"
 			},
 			"examples": [
 				"locals { id = uuid() }"
@@ -3835,10 +3497,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "UUID defining the namespace",
-					"validation": {
-						"pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-					}
+					"description": "UUID defining the namespace"
 				},
 				{
 					"name": "name",
@@ -3854,10 +3513,7 @@
 				"types": [
 					"string"
 				],
-				"description": "Generated UUID",
-				"validation": {
-					"pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-				}
+				"description": "Generated UUID"
 			},
 			"examples": [
 				"locals { id = uuidv5(\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", \"example\") }"
@@ -3899,12 +3555,7 @@
 						"array"
 					],
 					"required": true,
-					"description": "List of keys",
-					"validation": {
-						"allowedTypes": [
-							"string"
-						]
-					}
+					"description": "List of keys"
 				},
 				{
 					"name": "values",
@@ -3937,10 +3588,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Path potentially starting with ~",
-					"validation": {
-						"pattern": "^~?[/\\\\].*$"
-					}
+					"description": "Path potentially starting with ~"
 				}
 			],
 			"signature": { "params": [ { "name": "path", "type": "string" } ], "varParam": null },
@@ -3948,10 +3596,7 @@
 				"types": [
 					"string"
 				],
-				"description": "Expanded absolute path",
-				"validation": {
-					"pattern": "^[/\\\\].*$"
-				}
+				"description": "Expanded absolute path"
 			},
 			"examples": [
 				"locals { full_path = pathexpand(\"~/config/file.txt\") }"
@@ -4637,10 +4282,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Path to template file",
-					"validation": {
-						"pattern": "^[^<>:;,?\"*|]+$"
-					}
+					"description": "Path to template file"
 				},
 				{
 					"name": "vars",
@@ -4673,10 +4315,7 @@
 						"string"
 					],
 					"required": true,
-					"description": "Template string to render",
-					"validation": {
-						"pattern": ".*\\$\\{.*\\}.*"
-					}
+					"description": "Template string to render"
 				},
 				{
 					"name": "vars",

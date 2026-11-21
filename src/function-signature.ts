@@ -1,5 +1,5 @@
 import { ConversionError, convert } from './cty-convert';
-import { type CtyType, ctyBool, ctyDynamic, ctyNumber, ctyString, listOf, mapOf, setOf } from './cty-types';
+import { type CtyType, ctyBool, ctyDynamic, ctyNumber, ctyString, friendlyName, friendlyNameForConstraint, listOf, mapOf, setOf } from './cty-types';
 import { makeArrayValue, makeObjectValue, makeSensitiveValue } from './functions/utils';
 import type { RuntimeValue, ValueType } from './model';
 
@@ -87,6 +87,38 @@ export function parseTypeConstraint(text: string): CtyType {
 	if (!collection) throw new Error(`"${text}" is not a type constraint`);
 	const element = parseTypeConstraint(collection[2]);
 	return collection[1] === 'list' ? listOf(element) : collection[1] === 'set' ? setOf(element) : mapOf(element);
+}
+
+/**
+ * A parameter's type as hover shows it: go-cty's name for the constraint, and what HCL converts to it.
+ *
+ * @param parameter the parameter.
+ * @returns the type, such as `` `string` (a number or bool is converted to a string) ``.
+ */
+export function describeParameterType(parameter: CtyParameter): string {
+	if (parameter.type === EXPRESSION_CLOSURE) return `\`${EXPRESSION_CLOSURE}\` (the expression itself, which the function evaluates)`;
+	const conversion = conversionTo(parameter.type);
+	const type = `\`${friendlyNameForConstraint(parameter.type)}\``;
+	return conversion ? `${type} (${conversion})` : type;
+}
+
+/** What go-cty's Convert turns into a type, which HCL applies to every argument, in words. */
+function conversionTo(type: CtyType): string | undefined {
+	switch (type.kind) {
+		case 'string': return 'a number or bool is converted to a string';
+		case 'number': return 'a string that holds a number is converted to it';
+		case 'bool': return 'the string "true", "false", "1" or "0" is converted to a bool';
+		case 'list': return `a tuple or set is converted to a list${elementConversion(type.element)}`;
+		case 'set': return `a tuple or list is converted to a set${elementConversion(type.element)}`;
+		case 'map': return `an object is converted to a map${elementConversion(type.element)}`;
+		case 'dynamic':
+		case 'tuple':
+		case 'object': return undefined;
+	}
+}
+
+function elementConversion(element: CtyType): string {
+	return element.kind === 'dynamic' ? ', its elements to one type' : `, each element to ${friendlyName(element)}`;
 }
 
 /** The parameter an argument is passed to: its own, or the variadic parameter. */
