@@ -9,7 +9,7 @@ import { compileGlob } from '../src/glob';
 import { graphemeCount } from '../src/grapheme-clusters';
 import { formatHclTokens } from '../src/hcl-format';
 import { scanHclTokens } from '../src/hcl-scanner';
-import { findHclSyntaxProblem } from '../src/hcl-syntax';
+import { findHclSyntaxProblems } from '../src/hcl-syntax';
 
 // Holds this package to what the software it replaces was recorded doing. Nothing in tests/fixtures/format-reference
 // is expected output written by hand or produced by this package: the files are recorded from the HCL library's
@@ -64,9 +64,6 @@ const fixtures = path.resolve('tests/fixtures/format-reference');
 /** The name the reference parsed the sources under, which a few of its messages repeat. */
 const filename = 'terragrunt.hcl';
 
-/** The complaints a one-line block makes of itself, which the reference lists ahead of the failure inside it. */
-const blockComplaints = ['Invalid single-argument block definition', 'Unclosed configuration block'];
-
 function readLines<T>(name: string): T[] {
 	return fs.readFileSync(path.join(fixtures, name), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line) as T);
 }
@@ -75,9 +72,9 @@ function sha256(data: string | Buffer): string {
 	return createHash('sha256').update(data).digest('hex');
 }
 
-function reported(source: string): Problem | undefined {
-	const problem = findHclSyntaxProblem(source, filename);
-	return problem && { summary: problem.summary, detail: problem.detail, range: [problem.start.line, problem.start.column, problem.end.line, problem.end.column] };
+function reported(source: string): Problem[] {
+	return findHclSyntaxProblems(source, filename)
+		.map(problem => ({ summary: problem.summary, detail: problem.detail, range: [problem.start.line, problem.start.column, problem.end.line, problem.end.column] }));
 }
 
 function expectNone(failures: string[]): void {
@@ -95,37 +92,32 @@ describe('formatting, held to the recorded reference', function () {
 			const refused = vectors.syntax.filter(({ problems }) => problems.length > 0);
 			expect(accepted.length).to.be.greaterThan(5);
 			expect(refused.length).to.be.greaterThan(80);
-			for (const { source } of accepted) expect(reported(source), JSON.stringify(source)).to.equal(undefined);
-			for (const { source } of refused) expect(reported(source), JSON.stringify(source)).to.not.equal(undefined);
+			for (const { source } of accepted) expect(reported(source), JSON.stringify(source)).to.deep.equal([]);
+			for (const { source } of refused) expect(reported(source), JSON.stringify(source)).to.not.deep.equal([]);
 		});
 
-		it('reports the first error the HCL parser reports, in its words and at its range', () => {
-			const plain = vectors.syntax.filter(({ problems }) => problems.length > 0 && !(problems.length > 1 && blockComplaints.includes(problems[0].summary)));
-			expect(plain.length).to.be.greaterThan(80);
-			for (const { source, problems } of plain) expect(reported(source), JSON.stringify(source)).to.deep.equal(problems[0]);
+		it('reports every error the HCL parser reports, in its words, at its ranges and in its order', () => {
+			const refused = vectors.syntax.filter(({ problems }) => problems.length > 0);
+			expect(refused.filter(({ problems }) => problems.length > 1).length).to.be.greaterThan(20);
+			for (const { source, problems } of refused) expect(reported(source), JSON.stringify(source)).to.deep.equal(problems);
 		});
 
-		it('reports the failure inside a one-line block, which the HCL parser lists after that block\'s own complaint', () => {
+		it('lists a one-line block\'s complaints about how it ends ahead of what failed inside it, as the HCL parser does', () => {
+			const blockComplaints = ['Invalid single-argument block definition', 'Unclosed configuration block'];
 			const inside = vectors.syntax.filter(({ problems }) => problems.length > 1 && blockComplaints.includes(problems[0].summary));
 			expect(inside.length).to.be.greaterThan(2);
-			for (const { source, problems } of inside) expect(reported(source), JSON.stringify(source)).to.deep.equal(problems[1]);
-		});
-
-		it('reports a one-line block\'s own complaint when nothing inside it failed', () => {
-			const alone = vectors.syntax.filter(({ problems }) => problems.length === 1 && blockComplaints.includes(problems[0].summary));
-			expect(alone.length).to.be.greaterThan(1);
-			for (const { source, problems } of alone) expect(reported(source), JSON.stringify(source)).to.deep.equal(problems[0]);
+			for (const { source, problems } of inside) expect(reported(source), JSON.stringify(source)).to.deep.equal(problems);
 		});
 
 		it('counts columns as the HCL scanner does: by grapheme cluster, token by token, not counting a byte order mark', () => {
 			const byColumn = (source: string) => vectors.syntax.find(vector => vector.source === source)!;
 			// The mark is not a column, so the invalid character after "a = " is in column 5.
 			expect(byColumn('\u{FEFF}a = @\n').problems[0].range).to.deep.equal([1, 5, 1, 6]);
-			expect(reported('\u{FEFF}a = @\n')!.range).to.deep.equal([1, 5, 1, 6]);
+			expect(reported('\u{FEFF}a = @\n')[0].range).to.deep.equal([1, 5, 1, 6]);
 			// A family emoji of five code points is one column.
 			const family = byColumn('a = "\u{1F468}‍\u{1F469}‍\u{1F467}\\u12"\n');
 			expect(family.problems[0].range).to.deep.equal([1, 7, 1, 11]);
-			expect(reported(family.source)!.range).to.deep.equal([1, 7, 1, 11]);
+			expect(reported(family.source)[0].range).to.deep.equal([1, 7, 1, 11]);
 		});
 	});
 
@@ -167,15 +159,15 @@ describe('formatting, held to the recorded reference', function () {
 			const tokens = scanHclTokens(source).map(token => `${token.type}\0${token.text}\0`).join('');
 			if (sha256(tokens) !== want.tokens_sha256) failures.push(`tokens differ: ${JSON.stringify(source)}`);
 			if (sha256(formatHclTokens(source)) !== want.format_sha256) failures.push(`layout differs: ${JSON.stringify(source)}`);
-			const problem = reported(source);
-			if ((problem === undefined) === want.parses) {
-				if (!problem) return;
-				const digest = sha256(`${problem.summary}\0${problem.detail}\0${problem.range[0]}:${problem.range[1]}-${problem.range[2]}:${problem.range[3]}`);
-				const [first, second] = want.problems;
-				const expected = second && blockComplaints.includes(first[0]) && problem.summary !== first[0] ? second : first;
-				if (digest !== expected[1]) failures.push(`reported ${problem.summary} at ${problem.range.join(',')}, reference ${expected[0]}: ${JSON.stringify(source)}`);
-			} else {
+			// The reference holds the first two errors the parser reports, as a summary and a digest of each.
+			const problems = reported(source);
+			if ((problems.length === 0) !== want.parses) {
 				failures.push(`${want.parses ? 'refused valid' : 'accepted invalid'} source: ${JSON.stringify(source)}`);
+				return;
+			}
+			const first = problems.slice(0, 2).map(({ summary, detail, range }) => [summary, sha256(`${summary}\0${detail}\0${range[0]}:${range[1]}-${range[2]}:${range[3]}`)]);
+			if (JSON.stringify(first) !== JSON.stringify(want.problems)) {
+				failures.push(`reported ${JSON.stringify(first.map(([summary]) => summary))}, reference ${JSON.stringify(want.problems.map(([summary]) => summary))}: ${JSON.stringify(source)}`);
 			}
 		});
 		expectNone(failures);

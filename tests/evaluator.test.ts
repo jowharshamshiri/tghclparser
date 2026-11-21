@@ -530,9 +530,9 @@ describe('semantic configuration evaluation', () => {
 				['"a\\uD800b"', cannot('d800', 9)],
 				['"\\uDFFF"', cannot('dfff', 8)],
 				['"\\U0000DC00"', cannot('dc00', 8)],
-				// A surrogate pair is two surrogates, each refused: the first is reported.
-				['"\\uD83D\\uDE00"', cannot('d83d', 8)],
-				['"\\U0000D83D\\U0000DE00"', cannot('d83d', 8)],
+				// A surrogate pair is two surrogates, each refused and each reported.
+				['"\\uD83D\\uDE00"', `${cannot('d83d', 8)}\n${cannot('de00', 14)}`],
+				['"\\U0000D83D\\U0000DE00"', `${cannot('d83d', 8)}\n${cannot('de00', 18)}`],
 				['"\\U00110000"', cannot('110000', 8)],
 				['"\\UFFFFFFFF"', cannot('ffffffff', 8)],
 				['"\\u12"', four],

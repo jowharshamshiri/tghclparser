@@ -15,8 +15,8 @@ import { TextChange } from './text-change';
 import { mergeObjectTypes, ValueTypeReader } from './value-types';
 import type { EvaluatedSpan } from './Evaluator';
 import { SyntaxError } from './parser';
-import { HclSyntaxError } from './hcl-syntax';
-import { parseHclSyntax } from './syntax';
+import { HclSyntaxError, shownRange } from './hcl-syntax';
+import { parseHclSyntax, parseTerragruntSyntax } from './syntax';
 import type { RemoteSourceErrorCode } from './remote-errors';
 import type { ParserTracerEvent } from './parser';
 import { CompletionsProvider } from './providers/CompletionsProvider';
@@ -1114,7 +1114,9 @@ export class ParsedDocument {
 				this.parsed = true;
 				return;
 			}
-			const ast = parseHclSyntax(this.content, this.uri, filePath, this.parserTracer());
+			// An OpenTofu file is parsed as OpenTofu parses it, with HCL alone; anything else is Terragrunt's.
+			const parseSyntax = /\.(tf|tfvars)$/.test(filePath) ? parseHclSyntax : parseTerragruntSyntax;
+			const ast = parseSyntax(this.content, this.uri, filePath, this.parserTracer());
 			const tokens = [this.parseNode(ast)];
 			this.ast = ast;
 			this.tokens = tokens;
@@ -1124,8 +1126,9 @@ export class ParsedDocument {
 		} catch (error) {
 			this.parsed = false;
 			if (error instanceof HclSyntaxError) {
-				// The problem's own line and column are the HCL library's, counted its way. An editor counts from the
-				// offsets; the problem itself goes with the diagnostic, for what reports it as Terragrunt does.
+				// Every problem is shown, once for each range, as Terragrunt's hcl validate shows them. A problem's own
+				// line and column are the HCL library's, counted its way. An editor counts from the offsets; the problem
+				// itself goes with the diagnostic, for what reports it as Terragrunt does.
 				const content = this.content;
 				const editorPosition = (offset: number) => {
 					const lineStart = content.lastIndexOf('\n', offset - 1) + 1;
@@ -1133,13 +1136,19 @@ export class ParsedDocument {
 					for (let index = content.indexOf('\n'); index >= 0 && index < lineStart; index = content.indexOf('\n', index + 1)) line++;
 					return { line, character: offset - lineStart };
 				};
-				this.diagnostics.push({
-					severity: 1,
-					range: { start: editorPosition(error.problem.start.offset), end: editorPosition(error.problem.end.offset) },
-					message: `${error.problem.summary}: ${error.problem.detail}`,
-					source: 'terragrunt',
-					data: { hcl: error.problem }
-				});
+				const shown = new Set<string>();
+				for (const problem of error.problems) {
+					const range = JSON.stringify(shownRange(content, problem));
+					if (shown.has(range)) continue;
+					shown.add(range);
+					this.diagnostics.push({
+						severity: 1,
+						range: { start: editorPosition(problem.start.offset), end: editorPosition(problem.end.offset) },
+						message: `${problem.summary}: ${problem.detail}`,
+						source: 'terragrunt',
+						data: { hcl: problem }
+					});
+				}
 			} else if (error instanceof SyntaxError && error.location) {
 				// Convert the parser's location format to VSCode's format
 				this.diagnostics.push({

@@ -20,15 +20,15 @@ import { ambientCredentials } from './credentials';
 import { isArchiveSource } from './module-source';
 import { isLocalSource, splitModuleSource } from './module-variables';
 import { formatHcl } from './hcl-format';
-import { HclSyntaxError } from './hcl-syntax';
-import type { HclPosition, HclSyntaxProblem } from './hcl-syntax';
+import { HclSyntaxError, shownRange } from './hcl-syntax';
+import type { HclSyntaxProblem } from './hcl-syntax';
 import { ParsedDocument } from './ParsedDocument';
 import { filterFiles, FilterSyntaxError, parseFilter } from './terragrunt-filter';
 import type { Filter } from './terragrunt-filter';
 import { unifiedDiff } from './unified-diff';
 import { createRegistryResolver } from './registry';
 import { RemoteModuleStore } from './remote-modules';
-import { parseHclSyntax } from './syntax';
+import { parseHclSyntax, parseTerragruntSyntax } from './syntax';
 import { LocatedWorkspaceError, Workspace } from './Workspace';
 
 export interface CLIOptions {
@@ -2367,12 +2367,11 @@ function offsetAt(content: string, line: number, character: number): number {
 }
 
 function diagnostic(filename: string, content: string, item: any): DiagnosticOutput {
-	// Source that is not valid HCL is reported as Terragrunt reports it: the HCL library's own problem, in its words
-	// and at its range, its lines and columns counted its way.
+	// Source Terragrunt refuses to parse is reported as Terragrunt reports it: the problem in its own words, at the
+	// range Terragrunt shows, its lines and columns counted the HCL library's way.
 	const problem = (item.data as { hcl?: HclSyntaxProblem } | undefined)?.hcl;
 	if (problem) {
-		const position = (at: HclPosition) => ({ line: at.line, column: at.column, byte: Buffer.byteLength(content.slice(0, at.offset), 'utf8') });
-		return { range: { filename, start: position(problem.start), end: position(problem.end) }, summary: problem.summary, detail: problem.detail, severity: 'error' };
+		return { range: { filename, ...shownRange(content, problem) }, summary: problem.summary, detail: problem.detail, severity: 'error' };
 	}
 	const start = item.range?.start ?? { line: 0, character: 0 };
 	const end = item.range?.end ?? start;
@@ -2495,7 +2494,7 @@ async function dependencyOrderedFiles(files: string[]): Promise<string[]> {
 			continue;
 		}
 		const content = await fs.readFile(file, 'utf8');
-		const ast: any = parseHclSyntax(content, file, file);
+		const ast: any = parseTerragruntSyntax(content, file, file);
 		const refs: string[] = [];
 		const visit = async (node: any): Promise<void> => {
 			if (node.type === 'block' && node.value === 'dependency') {

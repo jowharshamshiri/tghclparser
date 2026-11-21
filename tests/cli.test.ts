@@ -1496,6 +1496,59 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(root, {recursive: true, force: true});
 	});
 
+	it('reports every syntax error in a file as Terragrunt 1.2.2 does, once for each range it shows', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-syntax-diagnostics-')));
+		const file = path.join(root, 'terragrunt.hcl');
+		const validate = async (body: string) => {
+			await fs.writeFile(file, body);
+			const result = spawnSync(process.execPath, [cli, 'hcl', 'validate', '--json', '--working-dir', root], {cwd: root, encoding: 'utf8'});
+			expect(result.status).to.equal(1, result.stderr);
+			return (JSON.parse(result.stdout) as {range: {filename: string; start: {line: number; column: number; byte: number}; end: {line: number; column: number; byte: number}}; summary: string; detail: string}[])
+				.map(({range, summary, detail}) => [summary, detail, range.filename === file, range.start.line, range.start.column, range.start.byte, range.end.line, range.end.column, range.end.byte]);
+		};
+		const outOfRange = 'number is outside the supported range of 1e-4096 to 1e4096';
+		const badQ = 'The symbol "q" is not a valid escape sequence selector.';
+
+		// Each half of a surrogate pair is refused at its own escape.
+		expect(await validate('inputs = {\n  smile = "\\uD83D\\uDE00"\n}\n')).to.deep.equal([
+			['Invalid escape sequence', 'Cannot encode character U+d83d in UTF-8.', true, 2, 12, 22, 2, 18, 28],
+			['Invalid escape sequence', 'Cannot encode character U+de00 in UTF-8.', true, 2, 18, 28, 2, 24, 34]
+		]);
+		// After the first error the parser holds back what follows from it, but escapes and a redefined argument are
+		// still reported, and Terragrunt refuses the placeholder left where ")" could not be read. The placeholder left
+		// at the first error is at that error's range, so it is not shown again.
+		expect(await validate('locals {\n  a = "bad \\q"\n  b = 1 +\n  a = "again"\n  c = )\n  d = "\\x"\n}\n\ninputs = {\n  y = [1 2]\n}\n')).to.deep.equal([
+			['Invalid escape sequence', badQ, true, 2, 12, 20, 2, 14, 22],
+			['Invalid expression', 'Expected the start of an expression, but found an invalid expression token.', true, 3, 10, 33, 4, 1, 34],
+			['Attribute redefined', `The argument "a" was already set at ${file}:2,3-4. Each argument may be set only once.`, true, 4, 3, 36, 4, 4, 37],
+			['Invalid escape sequence', 'The symbol "x" is not a valid escape sequence selector.', true, 6, 8, 63, 6, 10, 65],
+			['Number out of range', outOfRange, true, 5, 7, 54, 5, 8, 55]
+		]);
+		// An error inside a block leaves the blocks after it to be read.
+		expect(await validate('locals {\n  a = 1 +\n}\n\nterraform {\n  source = "../modules/app"\n}\n\ninputs = {\n  z = "\\q"\n}\n')).to.deep.equal([
+			['Invalid expression', 'Expected the start of an expression, but found an invalid expression token.', true, 2, 10, 18, 3, 1, 19],
+			['Invalid escape sequence', badQ, true, 10, 8, 83, 10, 10, 85]
+		]);
+		// A `for` expression that cannot be read leaves a placeholder over all of it.
+		expect(await validate('locals {\n  b = "\\q"\n  a = [for]\n  c = "caf\\u00e9 \\U00110000"\n}\n')).to.deep.equal([
+			['Invalid escape sequence', badQ, true, 2, 8, 16, 2, 10, 18],
+			['Invalid \'for\' expression', 'For expression requires variable name after \'for\'.', true, 3, 11, 30, 3, 12, 31],
+			['Invalid escape sequence', 'Cannot encode character U+110000 in UTF-8.', true, 4, 18, 49, 4, 28, 59],
+			['Number out of range', outOfRange, true, 3, 7, 26, 3, 12, 31]
+		]);
+		// The end of the file is an empty range, which Terragrunt shows a column and a byte wide.
+		expect(await validate('locals {\n  b = "\\q"\n  c = ')).to.deep.equal([
+			['Invalid escape sequence', badQ, true, 2, 8, 16, 2, 10, 18],
+			['Missing expression', 'Expected the start of an expression, but found the end of the file.', true, 3, 7, 26, 3, 8, 27]
+		]);
+		// A number too far from zero is refused where it is written, though it is valid HCL.
+		expect(await validate('locals {\n  big = 1e5000\n}\ninputs = { a = local.big }\n')).to.deep.equal([
+			['Number out of range', outOfRange, true, 2, 9, 17, 2, 15, 23]
+		]);
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
 	it('does not borrow validate mocks or misreport the render command', async () => {
 		const cli = path.resolve('dist/cli.cjs');
 		const body = dependencyBlock(['  mock_outputs = {', '    answer = "invented"', '  }'], '["validate"]');

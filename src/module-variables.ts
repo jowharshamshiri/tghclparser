@@ -3,6 +3,7 @@ import * as path from 'node:path';
 
 import type { Position } from 'vscode-languageserver-types';
 
+import { describeHclSyntaxProblem, HclSyntaxError } from './hcl-syntax';
 import { SyntaxError } from './parser';
 import { parseHclSyntax } from './syntax';
 import { ValueTypeReader } from './value-types';
@@ -278,10 +279,12 @@ function blockAttributeValue(block: any, key: string): any {
 
 /**
  * @param error what parsing threw.
- * @returns for the grammar's syntax error, where it stopped and what it found there -- its own message lists every
- *   token it would have accepted, which buries both; for any other rejection, its message.
+ * @returns for source that is not valid HCL, every problem, on the one line the message is shown on; for the
+ *   grammar's syntax error, where it stopped and what it found there -- its own message lists every token it would
+ *   have accepted, which buries both; for any other rejection, its message.
  */
 function parseFailureMessage(error: Error): string {
+	if (error instanceof HclSyntaxError) return error.problems.map(describeHclSyntaxProblem).join(' ');
 	if (!(error instanceof SyntaxError) || !error.location) return error.message;
 	const found = error.found === null || error.found === undefined ? 'end of input' : JSON.stringify(error.found);
 	return `line ${error.location.start.line}, column ${error.location.start.column}: unexpected ${found}`;

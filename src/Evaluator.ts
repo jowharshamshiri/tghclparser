@@ -8,7 +8,7 @@ import { arithmetic, comparison, negation, sequencePosition } from './cty-operat
 import { FunctionOperation, invokeFunctionOperation, readArgs, FUNCTION_CONTEXT_KEY } from './function-ops';
 import type { InlineFunctionDefinition } from './inline-functions';
 import { checkTypeConstraint, readInlineFunction, readTypeConstraint, synthesizeDefinition } from './inline-functions';
-import { parseHclSyntax } from './syntax';
+import { parseTerragruntSyntax } from './syntax';
 import { Schema } from './Schema';
 import { encryptedSopsDocument } from './sops';
 import { goRepoRoot, RepoRootError } from './functions/git_repo_root';
@@ -741,7 +741,7 @@ export class ConfigEvaluator {
 		const unitDir = path.dirname(configPath);
 
 		const own = new Set<string>();
-		for (const node of declaredInlineFunctions(parseHclSyntax(content, configPath, configPath))) {
+		for (const node of declaredInlineFunctions(parseTerragruntSyntax(content, configPath, configPath))) {
 			own.add(String(node.value ?? ''));
 		}
 
@@ -768,7 +768,7 @@ export class ConfigEvaluator {
 
 			let ast: TNode;
 			try {
-				ast = parseHclSyntax(includedContent, resolved, resolved);
+				ast = parseTerragruntSyntax(includedContent, resolved, resolved);
 			} catch {
 				continue;
 			}
@@ -805,7 +805,7 @@ export class ConfigEvaluator {
 		const targets: string[] = [];
 		let ast: TNode;
 		try {
-			ast = parseHclSyntax(content, filePath, filePath);
+			ast = parseTerragruntSyntax(content, filePath, filePath);
 		} catch {
 			return targets;
 		}
@@ -1106,7 +1106,7 @@ export class ConfigEvaluator {
 	}
 
 	private async evaluateFileUnguarded(filePath: string, content: string, workDir: string, unitDir?: string, skipInputs = false): Promise<FileResult> {
-		const ast = parseHclSyntax(content, filePath, filePath);
+		const ast = parseTerragruntSyntax(content, filePath, filePath);
 		const dir = path.dirname(filePath);
 		const baseName = path.basename(filePath);
 
@@ -1645,7 +1645,7 @@ export class ConfigEvaluator {
 		if (target.endsWith('.tfvars.json')) {
 			return makeStringValue(content);
 		}
-		const ast = parseHclSyntax(content, target, target);
+		const ast = parseTerragruntSyntax(content, target, target);
 		const values = new Map<string, RuntimeValue<ValueType>>();
 		for (const child of ast.children ?? []) {
 			if (child.type === 'assignment') {
@@ -1882,7 +1882,7 @@ export class ConfigEvaluator {
 		if (cached) return cached;
 		await this.assertPathAllowed(resolved, unitScope.workspaceRoot);
 		const content = await fs.readFile(resolved, 'utf8');
-		const scope = structuralScope(resolved, content, parseHclSyntax(content, resolved, resolved), unitScope.workspaceRoot, unit.unitDir);
+		const scope = structuralScope(resolved, content, parseTerragruntSyntax(content, resolved, resolved), unitScope.workspaceRoot, unit.unitDir);
 		scope.unit = unit;
 		unit.structuralScopes.set(resolved, scope);
 		return scope;
@@ -2839,7 +2839,7 @@ export class ConfigEvaluator {
 }
 
 function makeRootScope(filePath: string, content: string, workspaceRoot = path.dirname(filePath)): Scope {
-	const ast = parseHclSyntax(content, filePath, filePath);
+	const ast = parseTerragruntSyntax(content, filePath, filePath);
 	return {
 		filePath,
 		content,

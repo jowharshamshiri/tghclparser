@@ -322,7 +322,7 @@ ${unit('"../../modules/app"', '  region = "eu-west-2"')}`);
 		it('names the file and stops calling inputs undeclared, since it may declare them', async () => {
 			const document = await openUnit(unit('"../../modules/app"', '  name = "api"\n  tier = "gold"'));
 			expect(moduleMessages(document)).to.deep.equal([
-				'Module file ../../modules/app/extra.tf does not parse (line 3, column 12: Invalid character; This character is not used within the language.); the variables it declares are unknown, so undeclared inputs are not reported'
+				'Module file ../../modules/app/extra.tf does not parse (line 3, column 12: Invalid character; This character is not used within the language. line 3, column 12: Invalid expression; Expected the start of an expression, but found an invalid expression token.); the variables it declares are unknown, so undeclared inputs are not reported'
 			]);
 		});
 
@@ -342,7 +342,7 @@ ${unit('"../../modules/app"', '  region = "eu-west-2"')}`);
 		it('says on the inputs hover that the module list may be incomplete', async () => {
 			const document = await openUnit(unit('"../../modules/app"', '  name = "api"'));
 			const inputs = await document.getHoverInfo({ line: 4, character: 2 });
-			expect(inputs?.value).to.include('*`modules/app/extra.tf` does not parse, so this list may be incomplete: line 3, column 12: Invalid character; This character is not used within the language\\.*');
+			expect(inputs?.value).to.include('*`modules/app/extra.tf` does not parse, so this list may be incomplete: line 3, column 12: Invalid character; This character is not used within the language\\. line 3, column 12: Invalid expression; Expected the start of an expression, but found an invalid expression token\\.*');
 		});
 	});
 

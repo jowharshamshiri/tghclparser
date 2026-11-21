@@ -6,14 +6,13 @@
  * distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
  *
  * Terragrunt refuses a file exactly when this parser reports an error in it, so saying the same of a file means
- * following the same rules, one for one. The original recovers after an error to find more; this stops at the
- * first, which is enough to know the source is refused and to say why. What it reports is one of the original's
- * errors, word for word and at the same range: the first the original lists, except that the original lists a
- * one-line block's complaint about how it ends ahead of a failure inside that block, and the failure inside is
- * what is reported here.
+ * following the same rules, one for one. Like the original, it carries on after an error, recovering where the
+ * original recovers and keeping quiet where the original keeps quiet, so the errors it lists are the original's, word
+ * for word, at the same ranges and in the same order. It keeps as much of the tree as decides what Terragrunt reports
+ * after the parser: the extent of each expression, and the literals the original's partial tree holds.
  */
 
-import { CtyNumber } from './cty-number';
+import { CtyNumber, NUMBER_OUT_OF_RANGE } from './cty-number';
 import { goQuoted } from './go-quote';
 import { graphemeClusters } from './grapheme-clusters';
 import { scanHclTokens } from './hcl-scanner';
@@ -23,7 +22,7 @@ import type { HclToken, HclTokenType } from './hcl-scanner';
 export interface HclPosition {
 	/** Counted from zero. */
 	offset: number;
-	/** Counted from one. */
+	/** Counted from one; zero only in the empty range the HCL library gives a function call it found no end for. */
 	line: number;
 	/**
 	 * Counted from one, as the HCL library counts columns: in grapheme clusters, each token's counted on their own.
@@ -42,96 +41,165 @@ export interface HclSyntaxProblem {
 	end: HclPosition;
 }
 
-/** Source that is not valid HCL. The message says where and why; {@link HclSyntaxError.problem} has the parts. */
+/**
+ * Says where a problem is and what it is, in a line.
+ *
+ * @param problem the problem.
+ * @returns the line, such as `line 2, column 7: Invalid expression; Expected the start of an expression, ...`.
+ */
+export function describeHclSyntaxProblem(problem: HclSyntaxProblem): string {
+	return `line ${problem.start.line}, column ${problem.start.column}: ${problem.summary}; ${problem.detail}`;
+}
+
+/**
+ * Source that is not valid HCL. The message says where and why for each problem, one to a line;
+ * {@link HclSyntaxError.problems} has the parts.
+ */
 export class HclSyntaxError extends Error {
 	/**
 	 * Creates the error.
 	 *
-	 * @param problem what is wrong and where.
+	 * @param problems what is wrong and where, in the order the parser reports it; never empty.
 	 */
-	constructor(public readonly problem: HclSyntaxProblem) {
-		super(`line ${problem.start.line}, column ${problem.start.column}: ${problem.summary}; ${problem.detail}`);
+	constructor(public readonly problems: HclSyntaxProblem[]) {
+		super(problems.map(describeHclSyntaxProblem).join('\n'));
 		this.name = 'HclSyntaxError';
 	}
 }
 
-/** A problem found while checking, before its offsets are turned into positions. */
-class Problem extends Error {
-	/**
-	 * Creates the problem.
-	 *
-	 * @param summary what kind of problem it is.
-	 * @param detail what is wrong; a function when the sentence names where something earlier in the source is.
-	 * @param token where the problem is.
-	 * @param earlier the part of the source the detail names, when it names one.
-	 * @param within when the problem is with a piece of the token, the pieces before it and the piece itself.
-	 */
-	constructor(
-		public readonly summary: string,
-		public readonly detail: string | ((earlier: string) => string),
-		public readonly token: HclToken,
-		public readonly earlier?: { start: number; end: number },
-		public readonly within?: { before: string[]; piece: string }
-	) {
-		super(summary);
-	}
+/** A part of the source, from where it starts to where it ends. */
+interface Range {
+	start: HclPosition;
+	end: HclPosition;
+}
+
+/** A token, with the part of the source it covers counted as the HCL library counts it. */
+interface PlacedToken extends HclToken {
+	range: Range;
+}
+
+/** An error the parser reports. */
+interface Diagnostic {
+	summary: string;
+	detail: string;
+	subject: Range;
 }
 
 /**
- * Makes the extent from the start of one token to the end of another.
- *
- * @param first the token it starts with.
- * @param last the token it ends with.
- * @returns a token standing for the extent.
+ * A literal value of the tree the parser builds: a number, or the placeholder that stands for an expression the
+ * parser could not read. Literals of other kinds are never refused after parsing, so they are not kept.
  */
-function between(first: HclToken, last: HclToken): HclToken {
-	return { ...first, end: last.end };
+interface Literal {
+	range: Range;
+	/** The number; undefined when the value is unknown, as a placeholder's and an unreadable number's are. */
+	value: CtyNumber | undefined;
 }
+
+/** What the parser makes of an expression, as far as anything reported depends on it. */
+interface Expression {
+	/** Its extent, as the HCL library works it out for the kind of expression it is. */
+	range: Range;
+	/** The literals its tree holds, in the order the HCL library visits them. */
+	literals: Literal[];
+	/** Whether it is a literal value itself, which an index folds into a traversal step rather than keeping. */
+	literal: boolean;
+}
+
+/** What the parser makes of an argument or a block of a body. */
+type BodyItem = { kind: 'attribute'; name: PlacedToken; literals: Literal[] } | { kind: 'block'; literals: Literal[] };
+
+/** One piece of a template, as the template parser reads it after the expressions in it have been parsed. */
+type TemplatePart =
+	| { kind: 'literal'; range: Range }
+	| { kind: 'interp'; expression: Expression; range: Range }
+	| { kind: 'if'; condition: Expression; range: Range }
+	| { kind: 'for'; collection: Expression; range: Range }
+	| { kind: 'else' | 'endif' | 'endfor'; range: Range }
+	| { kind: 'end'; range: Range };
+
+/** The position of the empty range the HCL library gives a token it never found. */
+const nowhere: HclPosition = { offset: 0, line: 0, column: 0 };
 
 /** How deeply expressions and blocks may nest before the check stops rather than exhaust the stack. */
 const maximumNesting = 1000;
 
-const binaryOperators = new Set<HclTokenType>([
-	'Or', 'And', 'EqualOp', 'NotEqual', 'GreaterThan', 'GreaterThanEq', 'LessThan', 'LessThanEq',
-	'Plus', 'Minus', 'Star', 'Slash', 'Percent'
-]);
-
-/** Tokens that are never valid, with what the parser says of each. */
-const invalidTokens: Partial<Record<HclTokenType, [string, string]>> = {
-	BitwiseAnd: ['Unsupported operator', 'Bitwise operators are not supported. Did you mean boolean AND ("&&")?'],
-	BitwiseOr: ['Unsupported operator', 'Bitwise operators are not supported. Did you mean boolean OR ("||")?'],
-	BitwiseNot: ['Unsupported operator', 'Bitwise operators are not supported. Did you mean boolean NOT ("!")?'],
-	BitwiseXor: ['Unsupported operator', 'Bitwise operators are not supported.'],
-	Backtick: ['Invalid character', 'The "`" character is not valid. To create a multi-line string, use the "heredoc" syntax, like "<<EOT".'],
-	Apostrophe: ['Invalid character', 'Single quotes are not valid. Use double quotes (") to enclose strings.'],
-	Semicolon: ['Invalid character', 'The ";" character is not valid. Use newlines to separate arguments and blocks, and commas to separate items in collection values.'],
-	QuotedNewline: ['Invalid multi-line string', 'Quoted strings may not be split over multiple lines. To produce a multi-line string, either use the \\n escape to represent a newline character or use the "heredoc" multi-line template syntax.'],
-	Invalid: ['Invalid character', 'This character is not used within the language.']
-};
-
-/** What a template is made of, once its expressions have been checked: only the directives' structure is left. */
-type TemplatePart = 'content' | 'if' | 'else' | 'endif' | 'for' | 'endfor';
-
-/** One part of a template; for a directive the token spans it from its opening marker to its closing brace. */
-interface DirectivePart {
-	part: TemplatePart;
-	token: HclToken;
+/** Checking stops when source nests more deeply than {@link maximumNesting}; this carries the error out. */
+class TooDeep extends Error {
+	constructor(public readonly diagnostic: Diagnostic) {
+		super(diagnostic.summary);
+	}
 }
 
 /**
- * Checks tokens against the HCL grammar, throwing at the first thing the parser would report as an error.
+ * Makes the range from the start of one range to the end of another, as the HCL library's RangeBetween does.
+ *
+ * @param first the range it starts with.
+ * @param last the range it ends with.
+ * @returns the range.
+ */
+function between(first: Range, last: Range): Range {
+	return { start: first.start, end: last.end };
+}
+
+/** The binary operators, by precedence from the loosest: precedence decides which operands the parser keeps. */
+const binaryOperators: Set<HclTokenType>[] = [
+	new Set(['Or']),
+	new Set(['And']),
+	new Set(['EqualOp', 'NotEqual']),
+	new Set(['GreaterThan', 'GreaterThanEq', 'LessThan', 'LessThanEq']),
+	new Set(['Plus', 'Minus']),
+	new Set(['Star', 'Slash', 'Percent'])
+];
+
+/** The bracket that opens or closes against each one, for recovering to the end of a bracketed part. */
+const oppositeBrackets: Partial<Record<HclTokenType, HclTokenType>> = {
+	OBrace: 'CBrace', OBrack: 'CBrack', OParen: 'CParen', OQuote: 'CQuote', OHeredoc: 'CHeredoc',
+	CBrace: 'OBrace', CBrack: 'OBrack', CParen: 'OParen', CQuote: 'OQuote', CHeredoc: 'OHeredoc',
+	TemplateControl: 'TemplateSeqEnd', TemplateInterp: 'TemplateSeqEnd', TemplateSeqEnd: 'TemplateInterp'
+};
+
+/**
+ * Finds the bracket that opposes another.
+ *
+ * @param type the bracket.
+ * @returns its opposite, or `Nil` for a token that is not a bracket.
+ */
+function oppositeBracket(type: HclTokenType): HclTokenType {
+	return oppositeBrackets[type] ?? 'Nil';
+}
+
+/**
+ * Parses tokens as the HCL parser does, collecting every error it reports and the literals of the tree it builds.
  */
 class SyntaxChecker {
 	private index = 0;
 	private depth = 0;
+	/** Set once the parser has tried to recover from an error, after which it holds back the errors that follow from it. */
+	private recovery = false;
 	/** Whether newlines are tokens or skipped, innermost last: they end arguments but not bracketed expressions. */
 	private readonly includeNewlines = [true];
 
-	constructor(private readonly tokens: HclToken[]) {}
+	/**
+	 * Creates the checker.
+	 *
+	 * @param tokens the source's tokens, placed.
+	 * @param filename the name of the source, which messages that point back at an earlier part of it use.
+	 */
+	constructor(private readonly tokens: PlacedToken[], private readonly filename: string) {}
 
-	/** Checks a whole configuration file. */
-	checkFile(): void {
-		this.parseBody('EOF', this.tokens[0]);
+	/**
+	 * Parses a whole configuration file.
+	 *
+	 * @returns the errors, in the order the parser reports them, and the literals of the tree it builds.
+	 */
+	checkFile(): { diagnostics: Diagnostic[]; literals: Literal[] } {
+		try {
+			const [literals, diagnostics] = this.parseBody('EOF');
+			return { diagnostics, literals };
+		} catch (error) {
+			if (!(error instanceof TooDeep)) throw error;
+			return { diagnostics: [error.diagnostic], literals: [] };
+		}
 	}
 
 	/**
@@ -140,7 +208,7 @@ class SyntaxChecker {
 	 *
 	 * @returns the token and the index after it.
 	 */
-	private next(): [HclToken, number] {
+	private next(): [PlacedToken, number] {
 		const including = this.includeNewlines[this.includeNewlines.length - 1];
 		for (let index = this.index; index < this.tokens.length; index++) {
 			const token = this.tokens[index];
@@ -154,59 +222,146 @@ class SyntaxChecker {
 		return [this.tokens[this.tokens.length - 1], this.tokens.length];
 	}
 
-	private peek(): HclToken {
+	private peek(): PlacedToken {
 		return this.next()[0];
 	}
 
-	private read(): HclToken {
+	private read(): PlacedToken {
 		const [token, index] = this.next();
 		this.index = index;
 		return token;
 	}
 
+	/** The range of the next token the parser sees. */
+	private nextRange(): Range {
+		return this.peek().range;
+	}
+
+	/** The range of the token before the next, whatever kind it is, or of the next when nothing has been read. */
+	private previousRange(): Range {
+		return this.index === 0 ? this.nextRange() : this.tokens[this.index - 1].range;
+	}
+
+	private pushNewlines(include: boolean): void {
+		this.includeNewlines.push(include);
+	}
+
+	private popNewlines(): void {
+		this.includeNewlines.pop();
+	}
+
 	/**
-	 * Reads on to the bracket that closes the one being checked, as the parser does to carry on after a problem.
+	 * Reads on to the token that ends the part being parsed, counting nested brackets of its kind, and leaves the
+	 * parser in recovery.
 	 *
-	 * @param open the kind of bracket that opens a nested pair.
-	 * @param close the kind that closes one.
-	 * @returns the closing bracket, or the end of the file when there is none.
+	 * @param end the kind of token that ends it.
+	 * @returns that token, or the end of the file when there is none.
 	 */
-	private recover(open: HclTokenType, close: HclTokenType): HclToken {
+	private recover(end: HclTokenType): PlacedToken {
+		const start = oppositeBracket(end);
+		this.recovery = true;
 		for (let nesting = 0; ;) {
 			const token = this.read();
-			if (token.type === 'EOF') return token;
-			if (token.type === open) nesting++;
-			else if (token.type === close && nesting-- < 1) return token;
+			// A control sequence's opener differs from an interpolation's, but the same closer ends both.
+			const type = end === 'TemplateSeqEnd' && token.type === 'TemplateControl' ? 'TemplateInterp' : token.type;
+			if (type === start) {
+				nesting++;
+			} else if (type === end) {
+				if (nesting < 1) return token;
+				nesting--;
+			} else if (type === 'EOF') {
+				return token;
+			}
 		}
 	}
 
 	/**
-	 * Runs a check one level deeper, refusing source nested so deeply that checking it would exhaust the stack.
+	 * Reads on to the next bracketed part that opens with a given bracket, and past the bracket that closes it.
+	 *
+	 * @param start the bracket.
+	 */
+	private recoverOver(start: HclTokenType): void {
+		for (;;) {
+			const type = this.read().type;
+			if (type === start || type === 'EOF') break;
+		}
+		this.recover(oppositeBracket(start));
+	}
+
+	/** Reads on past the newline that ends the argument or block being parsed, and leaves the parser in recovery. */
+	private recoverAfterBodyItem(): void {
+		this.recovery = true;
+		const open: HclTokenType[] = [];
+		for (;;) {
+			const token = this.read();
+			switch (token.type) {
+				case 'Newline':
+					if (open.length === 0) return;
+					break;
+				case 'EOF':
+					return;
+				case 'OBrace': case 'OBrack': case 'OParen': case 'OQuote': case 'OHeredoc': case 'TemplateInterp': case 'TemplateControl':
+					open.push(token.type);
+					break;
+				case 'CBrace': case 'CBrack': case 'CParen': case 'CQuote': case 'CHeredoc': {
+					const opener = oppositeBracket(token.type);
+					while (open.length > 0 && open[open.length - 1] !== opener) open.pop();
+					open.pop();
+					break;
+				}
+				case 'TemplateSeqEnd':
+					while (open.length > 0 && open[open.length - 1] !== 'TemplateInterp' && open[open.length - 1] !== 'TemplateControl') open.pop();
+					open.pop();
+					break;
+			}
+		}
+	}
+
+	/**
+	 * Runs a parse one level deeper, refusing source nested so deeply that parsing it would exhaust the stack.
 	 *
 	 * @param token where the nesting is, for the message.
-	 * @param check the check to run.
+	 * @param parse the parse to run.
+	 * @returns what it returns.
 	 */
-	private nested(token: HclToken, check: () => void): void {
+	private nested<T>(token: PlacedToken, parse: () => T): T {
 		if (++this.depth > maximumNesting) {
-			throw new Problem('Nesting too deep', `Expressions and blocks nested more than ${maximumNesting} deep cannot be checked.`, token);
+			throw new TooDeep({ summary: 'Nesting too deep', detail: `Expressions and blocks nested more than ${maximumNesting} deep cannot be checked.`, subject: token.range });
 		}
-		check();
+		const result = parse();
 		this.depth--;
+		return result;
 	}
 
 	/**
-	 * Checks the arguments and blocks of a body up to the token that ends it.
+	 * Names a part of the source the way the HCL library does: the file, the line and column it starts at, and the
+	 * column it ends at, with the line it ends on when that is another.
+	 *
+	 * @param range the part.
+	 * @returns the name.
+	 */
+	private rangeText(range: Range): string {
+		return range.start.line === range.end.line
+			? `${this.filename}:${range.start.line},${range.start.column}-${range.end.column}`
+			: `${this.filename}:${range.start.line},${range.start.column}-${range.end.line},${range.end.column}`;
+	}
+
+	/**
+	 * Parses the arguments and blocks of a body up to the token that ends it.
 	 *
 	 * @param end `EOF` for the file's own body, `CBrace` for a block's.
-	 * @param opening the token the body starts after, which an unclosed body is reported at.
+	 * @returns the literals of its arguments, then those of its blocks, and the errors.
 	 */
-	private parseBody(end: 'EOF' | 'CBrace', opening: HclToken): void {
-		const attributes = new Map<string, HclToken>();
+	private parseBody(end: 'EOF' | 'CBrace'): [Literal[], Diagnostic[]] {
+		const attributes = new Map<string, { name: PlacedToken; literals: Literal[] }>();
+		const blocks: Literal[][] = [];
+		const diagnostics: Diagnostic[] = [];
+		const startRange = this.previousRange();
 		for (;;) {
 			const next = this.peek();
 			if (next.type === end) {
 				this.read();
-				return;
+				break;
 			}
 			if (next.type === 'Newline') {
 				this.read();
@@ -218,65 +373,122 @@ class SyntaxChecker {
 				continue;
 			}
 			if (next.type === 'Ident') {
-				const name = this.parseBodyItem();
-				if (name === undefined) continue;
-				const existing = attributes.get(name);
-				if (existing) {
-					throw new Problem('Attribute redefined', earlier => `The argument ${goQuoted(name)} was already set at ${earlier}. Each argument may be set only once.`, next, existing);
+				const [item, itemDiagnostics] = this.parseBodyItem();
+				diagnostics.push(...itemDiagnostics);
+				if (item?.kind === 'block') {
+					blocks.push(item.literals);
+				} else if (item?.kind === 'attribute') {
+					const existing = attributes.get(item.name.text);
+					if (existing) {
+						diagnostics.push({
+							summary: 'Attribute redefined',
+							detail: `The argument ${goQuoted(item.name.text)} was already set at ${this.rangeText(existing.name.range)}. Each argument may be set only once.`,
+							subject: item.name.range
+						});
+					} else {
+						attributes.set(item.name.text, item);
+					}
 				}
-				attributes.set(name, next);
 				continue;
 			}
-			if (next.type === 'OQuote') throw new Problem('Invalid argument name', 'Argument names must not be quoted.', next);
-			if (next.type === 'EOF') {
-				throw new Problem('Unclosed configuration block', 'There is no closing brace for this block before the end of the file. This may be caused by incorrect brace nesting elsewhere in this file.', opening);
+			const bad = this.read();
+			if (!this.recovery) {
+				if (bad.type === 'OQuote') {
+					diagnostics.push({ summary: 'Invalid argument name', detail: 'Argument names must not be quoted.', subject: bad.range });
+				} else if (bad.type === 'EOF') {
+					diagnostics.push(end === 'CBrace'
+						? { summary: 'Unclosed configuration block', detail: 'There is no closing brace for this block before the end of the file. This may be caused by incorrect brace nesting elsewhere in this file.', subject: startRange }
+						: { summary: 'Unclosed configuration body', detail: 'Found end of file before the end of this configuration body.', subject: startRange });
+				} else {
+					diagnostics.push({ summary: 'Argument or block definition required', detail: 'An argument or block definition is required here.', subject: bad.range });
+				}
 			}
-			throw new Problem('Argument or block definition required', 'An argument or block definition is required here.', next);
+			this.recover(end);
+			break;
 		}
+		// The library walks a body's arguments before its blocks.
+		const literals = [...attributes.values()].flatMap(attribute => attribute.literals);
+		for (const block of blocks) literals.push(...block);
+		return [literals, diagnostics];
 	}
 
 	/**
-	 * Checks one argument or block of a body.
+	 * Parses one argument or block of a body.
 	 *
-	 * @returns the argument's name, or undefined for a block.
+	 * @returns what it is, or undefined when nothing could be made of it, and the errors.
 	 */
-	private parseBodyItem(): string | undefined {
+	private parseBodyItem(): [BodyItem | undefined, Diagnostic[]] {
 		const name = this.read();
 		const next = this.peek();
-		if (next.type === 'Equal') {
-			this.parseAttribute(false);
-			return name.text;
-		}
-		if (next.type === 'OQuote' || next.type === 'OBrace' || next.type === 'Ident') {
-			this.nested(name, () => this.parseBlock());
-			return undefined;
-		}
-		throw new Problem('Argument or block definition required', 'An argument or block definition is required here. To set an argument, use the equals sign "=" to introduce the argument value.', name);
+		if (next.type === 'Equal') return this.finishParsingBodyAttribute(name, false);
+		if (next.type === 'OQuote' || next.type === 'OBrace' || next.type === 'Ident') return this.nested(name, () => this.finishParsingBodyBlock());
+		this.recoverAfterBodyItem();
+		return [undefined, [{ summary: 'Argument or block definition required', detail: 'An argument or block definition is required here. To set an argument, use the equals sign "=" to introduce the argument value.', subject: name.range }]];
 	}
 
 	/**
-	 * Checks an argument from its equals sign.
+	 * Parses a body of one argument on the line of the block's opening brace, which the brace after it must close.
 	 *
-	 * @param singleLine true inside a one-line block, whose closing brace ends the argument rather than a newline.
+	 * @returns the literals of the argument, and the errors.
 	 */
-	private parseAttribute(singleLine: boolean): void {
-		this.read();
-		this.parseExpression();
-		if (singleLine) return;
-		const end = this.peek();
-		if (end.type === 'Newline' || end.type === 'EOF') {
-			this.read();
-			return;
+	private parseSingleAttributeBody(): [Literal[], Diagnostic[]] {
+		const name = this.read();
+		if (name.type !== 'Ident') {
+			this.recoverAfterBodyItem();
+			return [[], [{ summary: 'Argument or block definition required', detail: 'An argument or block definition is required here.', subject: name.range }]];
 		}
-		if (end.type === 'Comma') {
-			throw new Problem('Unexpected comma after argument', 'Argument definitions must be separated by newlines, not commas. An argument definition must end with a newline.', end);
+		const next = this.peek();
+		if (next.type === 'Equal') {
+			const [attribute, diagnostics] = this.finishParsingBodyAttribute(name, true);
+			return [attribute.literals, diagnostics];
 		}
-		throw new Problem('Missing newline after argument', 'An argument definition must end with a newline.', end);
+		this.recoverAfterBodyItem();
+		if (next.type === 'OQuote' || next.type === 'OBrace' || next.type === 'Ident') {
+			return [[], [{
+				summary: 'Argument definition required',
+				detail: `A single-line block definition can contain only a single argument. If you meant to define argument ${goQuoted(name.text)}, use an equals sign to assign it a value. To define a nested block, place it on a line of its own within its parent block.`,
+				subject: between(name.range, next.range)
+			}]];
+		}
+		return [[], [{ summary: 'Argument or block definition required', detail: 'An argument or block definition is required here. To set an argument, use the equals sign "=" to introduce the argument value.', subject: name.range }]];
 	}
 
-	/** Checks a block from its labels onwards, its type name having been read. */
-	private parseBlock(): void {
-		let open: HclToken;
+	/**
+	 * Parses an argument from its equals sign.
+	 *
+	 * @param name the argument's name, already read.
+	 * @param singleLine true inside a one-line block, whose closing brace ends the argument rather than a newline.
+	 * @returns the argument, and the errors.
+	 */
+	private finishParsingBodyAttribute(name: PlacedToken, singleLine: boolean): [{ kind: 'attribute'; name: PlacedToken; literals: Literal[] }, Diagnostic[]] {
+		this.read();
+		const [expression, diagnostics] = this.parseExpression();
+		if (this.recovery && diagnostics.length > 0) {
+			this.recoverAfterBodyItem();
+		} else if (!singleLine) {
+			const end = this.peek();
+			if (end.type !== 'Newline' && end.type !== 'EOF') {
+				if (!this.recovery) {
+					diagnostics.push(end.type === 'Comma'
+						? { summary: 'Unexpected comma after argument', detail: 'Argument definitions must be separated by newlines, not commas. An argument definition must end with a newline.', subject: end.range }
+						: { summary: 'Missing newline after argument', detail: 'An argument definition must end with a newline.', subject: end.range });
+				}
+				this.recoverAfterBodyItem();
+			} else {
+				this.read();
+			}
+		}
+		return [{ kind: 'attribute', name, literals: expression.literals }, diagnostics];
+	}
+
+	/**
+	 * Parses a block from its labels onwards, its type name having been read.
+	 *
+	 * @returns the block, and the errors.
+	 */
+	private finishParsingBodyBlock(): [BodyItem, Diagnostic[]] {
+		const diagnostics: Diagnostic[] = [];
+		let open: PlacedToken;
 		for (;;) {
 			const token = this.peek();
 			if (token.type === 'OBrace') {
@@ -284,7 +496,7 @@ class SyntaxChecker {
 				break;
 			}
 			if (token.type === 'OQuote') {
-				this.parseQuotedStringLiteral();
+				diagnostics.push(...this.parseQuotedStringLiteral());
 				continue;
 			}
 			if (token.type === 'Ident') {
@@ -292,300 +504,427 @@ class SyntaxChecker {
 				continue;
 			}
 			if (token.type === 'Equal') {
-				throw new Problem('Invalid block definition', 'The equals sign "=" indicates an argument definition, and must not be used when defining a block.', token);
+				diagnostics.push({ summary: 'Invalid block definition', detail: 'The equals sign "=" indicates an argument definition, and must not be used when defining a block.', subject: token.range });
+			} else if (token.type === 'Newline') {
+				diagnostics.push({ summary: 'Invalid block definition', detail: 'A block definition must have block content delimited by "{" and "}", starting on the same line as the block header.', subject: token.range });
+			} else if (!this.recovery) {
+				diagnostics.push({ summary: 'Invalid block definition', detail: 'Either a quoted string block label or an opening brace ("{") is expected here.', subject: token.range });
 			}
-			if (token.type === 'Newline') {
-				throw new Problem('Invalid block definition', 'A block definition must have block content delimited by "{" and "}", starting on the same line as the block header.', token);
-			}
-			throw new Problem('Invalid block definition', 'Either a quoted string block label or an opening brace ("{") is expected here.', token);
+			this.recoverAfterBodyItem();
+			return [{ kind: 'block', literals: [] }, diagnostics];
 		}
 
-		const first = this.peek();
-		if (first.type === 'Newline' || first.type === 'EOF' || first.type === 'CBrace') {
-			this.parseBody('CBrace', open);
+		let body: [Literal[], Diagnostic[]];
+		const first = this.peek().type;
+		if (first === 'Newline' || first === 'EOF' || first === 'CBrace') {
+			body = this.parseBody('CBrace');
 		} else {
-			// A block on one line holds exactly one argument.
-			const name = this.read();
-			if (name.type !== 'Ident') throw new Problem('Argument or block definition required', 'An argument or block definition is required here.', name);
-			const next = this.peek();
-			if (next.type === 'OQuote' || next.type === 'OBrace' || next.type === 'Ident') {
-				throw new Problem('Argument definition required', `A single-line block definition can contain only a single argument. If you meant to define argument "${name.text}", use an equals sign to assign it a value. To define a nested block, place it on a line of its own within its parent block.`, between(name, next));
-			}
-			if (next.type !== 'Equal') {
-				throw new Problem('Argument or block definition required', 'An argument or block definition is required here. To set an argument, use the equals sign "=" to introduce the argument value.', name);
-			}
-			this.parseAttribute(true);
+			body = this.parseSingleAttributeBody();
 			const close = this.peek();
-			if (close.type === 'Comma') {
-				throw new Problem('Invalid single-argument block definition', 'Single-line block syntax can include only one argument definition. To define multiple arguments, use the multi-line block syntax with one argument definition per line.', close);
+			if (close.type === 'CBrace') {
+				this.read();
+			} else {
+				if (close.type === 'Comma') {
+					diagnostics.push({ summary: 'Invalid single-argument block definition', detail: 'Single-line block syntax can include only one argument definition. To define multiple arguments, use the multi-line block syntax with one argument definition per line.', subject: close.range });
+				} else if (close.type === 'Newline') {
+					diagnostics.push({ summary: 'Invalid single-argument block definition', detail: 'An argument definition on the same line as its containing block creates a single-line block definition, which must also be closed on the same line. Place the block\'s closing brace immediately after the argument definition.', subject: close.range });
+				} else if (!this.recovery) {
+					diagnostics.push(close.type === 'EOF'
+						? { summary: 'Unclosed configuration block', detail: 'There is no closing brace for this block before the end of the file. This may be caused by incorrect brace nesting elsewhere in this file.', subject: open.range }
+						: { summary: 'Invalid single-argument block definition', detail: 'A single-line block definition must end with a closing brace immediately after its single argument definition.', subject: close.range });
+				}
+				this.recover('CBrace');
 			}
-			if (close.type === 'Newline') {
-				throw new Problem('Invalid single-argument block definition', 'An argument definition on the same line as its containing block creates a single-line block definition, which must also be closed on the same line. Place the block\'s closing brace immediately after the argument definition.', close);
-			}
-			if (close.type === 'EOF') {
-				throw new Problem('Unclosed configuration block', 'There is no closing brace for this block before the end of the file. This may be caused by incorrect brace nesting elsewhere in this file.', open);
-			}
-			if (close.type !== 'CBrace') {
-				throw new Problem('Invalid single-argument block definition', 'A single-line block definition must end with a closing brace immediately after its single argument definition.', close);
-			}
-			this.read();
 		}
+		// The library lists a one-line block's complaints about how it ends ahead of what went wrong inside it.
+		diagnostics.push(...body[1]);
 
 		const end = this.peek();
-		if (end.type !== 'Newline' && end.type !== 'EOF') throw new Problem('Missing newline after block definition', 'A block definition must end with a newline.', end);
-		this.read();
+		if (end.type === 'Newline' || end.type === 'EOF') {
+			this.read();
+		} else {
+			if (!this.recovery) diagnostics.push({ summary: 'Missing newline after block definition', detail: 'A block definition must end with a newline.', subject: end.range });
+			this.recoverAfterBodyItem();
+		}
+		return [{ kind: 'block', literals: body[0] }, diagnostics];
 	}
 
-	/**
-	 * Checks an expression and says where it is.
-	 *
-	 * @returns the expression's extent, from its first token to its last.
-	 */
-	private parseExpressionSpan(): HclToken {
-		const first = this.peek();
-		this.parseExpression();
-		return between(first, this.tokens[this.index - 1]);
-	}
-
-	/** Checks an expression: a conditional, then any pipes, which are this project's syntax and not HCL's. */
-	private parseExpression(): void {
-		this.nested(this.peek(), () => {
-			this.parseOperation();
-			if (this.peek().type === 'Question') {
-				this.read();
-				this.parseExpression();
-				const colon = this.peek();
-				if (colon.type !== 'Colon') {
-					throw new Problem('Missing false expression in conditional', 'The conditional operator (...?...:...) requires a false expression, delimited by a colon.', colon);
-				}
-				this.read();
-				this.parseExpression();
-			}
+	/** Parses an expression: a conditional, then any pipes, which are this project's syntax and not HCL's. */
+	private parseExpression(): [Expression, Diagnostic[]] {
+		return this.nested(this.peek(), () => {
+			let [expression, diagnostics] = this.parseTernaryConditional();
+			if (this.recovery && diagnostics.length > 0) return [expression, diagnostics];
 			while (this.peek().type === 'Pipe') {
 				const pipe = this.read();
 				const name = this.read();
 				const after = this.peek().type;
 				if (name.type !== 'Ident' || (after !== 'OParen' && after !== 'DoubleColon')) {
-					throw new Problem('Invalid pipe', 'The pipe operator ("|>") must be followed by a function call.', name.type === 'Ident' ? pipe : name);
+					if (!this.recovery) diagnostics.push({ summary: 'Invalid pipe', detail: 'The pipe operator ("|>") must be followed by a function call.', subject: name.type === 'Ident' ? pipe.range : name.range });
+					this.recovery = true;
+					return [expression, diagnostics];
 				}
-				this.parseFunctionCall(name);
+				const [call, callDiagnostics] = this.finishParsingFunctionCall(name);
+				diagnostics = [...diagnostics, ...callDiagnostics];
+				expression = { range: between(expression.range, call.range), literals: [...expression.literals, ...call.literals], literal: false };
+				if (this.recovery && callDiagnostics.length > 0) return [expression, diagnostics];
 			}
+			return [expression, diagnostics];
 		});
 	}
 
-	/** Checks operands joined by binary operators. Precedence decides what they mean, not whether they parse. */
-	private parseOperation(): void {
-		this.parseTermWithTraversals();
-		while (binaryOperators.has(this.peek().type)) {
-			this.read();
-			this.parseTermWithTraversals();
+	/** Parses a conditional, or the operation it would start with. */
+	private parseTernaryConditional(): [Expression, Diagnostic[]] {
+		const startRange = this.nextRange();
+		const [condition, diagnostics] = this.parseBinaryOperations(0);
+		if (this.recovery && diagnostics.length > 0) return [condition, diagnostics];
+		if (this.peek().type !== 'Question') return [condition, diagnostics];
+		this.read();
+
+		const [whenTrue, trueDiagnostics] = this.parseExpression();
+		diagnostics.push(...trueDiagnostics);
+		if (this.recovery && trueDiagnostics.length > 0) return [condition, diagnostics];
+
+		const colon = this.peek();
+		if (colon.type !== 'Colon') {
+			diagnostics.push({ summary: 'Missing false expression in conditional', detail: 'The conditional operator (...?...:...) requires a false expression, delimited by a colon.', subject: colon.range });
+			return [condition, diagnostics];
 		}
+		this.read();
+
+		const [whenFalse, falseDiagnostics] = this.parseExpression();
+		diagnostics.push(...falseDiagnostics);
+		if (this.recovery && falseDiagnostics.length > 0) return [condition, diagnostics];
+		return [{ range: between(startRange, whenFalse.range), literals: [...condition.literals, ...whenTrue.literals, ...whenFalse.literals], literal: false }, diagnostics];
 	}
 
-	/** Checks a term and the attribute accesses, indexes and splats that follow it. */
-	private parseTermWithTraversals(): void {
-		this.parseTerm();
-		for (;;) {
+	/**
+	 * Parses operands joined by the binary operators of one precedence and those that bind more tightly.
+	 *
+	 * @param level the precedence, as an index into {@link binaryOperators}.
+	 */
+	private parseBinaryOperations(level: number): [Expression, Diagnostic[]] {
+		if (level === binaryOperators.length) return this.parseExpressionWithTraversals();
+		const operators = binaryOperators[level];
+		let [left, diagnostics] = this.parseBinaryOperations(level + 1);
+		if (this.recovery && diagnostics.length > 0) return [left, diagnostics];
+		let right: Expression | undefined;
+		while (operators.has(this.peek().type)) {
+			if (right) left = combined(left, right);
+			this.read();
+			let rightDiagnostics: Diagnostic[];
+			[right, rightDiagnostics] = this.parseBinaryOperations(level + 1);
+			diagnostics = [...diagnostics, ...rightDiagnostics];
+			if (this.recovery && rightDiagnostics.length > 0) return [left, diagnostics];
+		}
+		return [right ? combined(left, right) : left, diagnostics];
+	}
+
+	/** Parses a term and the attribute accesses, indexes and splats that follow it. */
+	private parseExpressionWithTraversals(): [Expression, Diagnostic[]] {
+		const [term, diagnostics] = this.parseExpressionTerm();
+		const [result, more] = this.parseExpressionTraversals(term);
+		return [result, [...diagnostics, ...more]];
+	}
+
+	/**
+	 * Parses the attribute accesses, indexes and splats after an expression.
+	 *
+	 * @param from the expression they follow.
+	 */
+	private parseExpressionTraversals(from: Expression): [Expression, Diagnostic[]] {
+		const diagnostics: Diagnostic[] = [];
+		let result = from;
+		traversal: for (;;) {
 			const next = this.peek();
 			if (next.type === 'Dot') {
-				this.read();
+				const dot = this.read();
 				const attribute = this.peek();
 				if (attribute.type === 'Ident') {
 					this.read();
+					result = traversed(result, between(dot.range, attribute.range));
 				} else if (attribute.type === 'NumberLit') {
-					this.parseLegacyIndex('When using the legacy index syntax, chaining two indexes together is not permitted. Use the proper index syntax instead, like', attribute);
+					const number = this.read();
+					if (number.text.includes('.')) {
+						const [whole, fraction] = splitAtFirstDot(number.text);
+						diagnostics.push({ summary: 'Invalid legacy index syntax', detail: `When using the legacy index syntax, chaining two indexes together is not permitted. Use the proper index syntax instead, like [${whole}][${fraction}].`, subject: number.range });
+					} else {
+						diagnostics.push(...numberValue(number)[1]);
+					}
+					result = traversed(result, between(dot.range, number.range));
 				} else if (attribute.type === 'Star') {
 					// An attribute-only splat takes only attribute names and legacy indexes after it.
-					this.read();
+					const marker = this.read();
+					let lastRange = marker.range;
 					while (this.peek().type === 'Dot') {
 						this.read();
 						const step = this.peek();
 						if (step.type === 'NumberLit') {
-							this.parseLegacyIndex('When using the legacy index syntax, chaining two indexes together is not permitted. Use the proper index syntax with a full splat expression [*] instead, like', attribute);
-						} else if (step.type === 'Star') {
-							throw new Problem('Nested splat expression not allowed', 'A splat expression (*) cannot be used inside another attribute-only splat expression.', step);
-						} else if (step.type !== 'Ident') {
-							throw new Problem('Invalid attribute name', 'An attribute name is required after a dot.', attribute);
-						} else {
-							this.read();
+							const number = this.read();
+							if (number.text.includes('.')) {
+								const [whole, fraction] = splitAtFirstDot(number.text);
+								diagnostics.push({ summary: 'Invalid legacy index syntax', detail: `When using the legacy index syntax, chaining two indexes together is not permitted. Use the proper index syntax with a full splat expression [*] instead, like [${whole}][${fraction}].`, subject: attribute.range });
+							} else {
+								diagnostics.push(...numberValue(number)[1]);
+							}
+							lastRange = number.range;
+							continue;
 						}
+						if (step.type !== 'Ident') {
+							if (!this.recovery) {
+								diagnostics.push(step.type === 'Star'
+									? { summary: 'Nested splat expression not allowed', detail: 'A splat expression (*) cannot be used inside another attribute-only splat expression.', subject: step.range }
+									: { summary: 'Invalid attribute name', detail: 'An attribute name is required after a dot.', subject: attribute.range });
+							}
+							this.recovery = true;
+							continue traversal;
+						}
+						lastRange = this.read().range;
 					}
+					result = { range: between(from.range, lastRange), literals: result.literals, literal: false };
 				} else {
-					throw new Problem('Invalid attribute name', 'An attribute name is required after a dot.', attribute);
+					diagnostics.push({ summary: 'Invalid attribute name', detail: 'An attribute name is required after a dot.', subject: attribute.range });
+					result = { range: between(from.range, dot.range), literals: [], literal: false };
+					this.recovery = true;
 				}
 				continue;
 			}
 			if (next.type === 'OBrack') {
-				this.read();
+				const open = this.read();
 				if (this.peek().type === 'Star') {
 					this.read();
-					// The parser reports these two at the bracket it carries on from, not at what it found in its place.
-					if (this.read().type !== 'CBrack') {
-						throw new Problem('Missing close bracket on splat index', 'The star for a full splat operator must be immediately followed by a closing bracket ("]").', this.recover('OBrack', 'CBrack'));
+					let close = this.read();
+					if (close.type !== 'CBrack' && !this.recovery) {
+						// The library keeps a pointer to the token it found, then points that at the bracket it recovers
+						// to, so the error is reported there.
+						close = this.recover('CBrack');
+						diagnostics.push({ summary: 'Missing close bracket on splat index', detail: 'The star for a full splat operator must be immediately followed by a closing bracket ("]").', subject: close.range });
 					}
+					const item: Expression = { range: between(open.range, close.range), literals: [], literal: false };
+					const [each, nested] = this.parseExpressionTraversals(item);
+					diagnostics.push(...nested);
+					result = { range: between(from.range, each.range), literals: [...result.literals, ...each.literals], literal: false };
 					continue;
 				}
-				this.includeNewlines.push(false);
-				this.parseExpression();
-				if (this.read().type !== 'CBrack') {
-					throw new Problem('Missing close bracket on index', 'The index operator must end with a closing bracket ("]").', this.recover('OBrack', 'CBrack'));
+				let close: PlacedToken;
+				this.pushNewlines(false);
+				const [key, keyDiagnostics] = this.parseExpression();
+				diagnostics.push(...keyDiagnostics);
+				if (this.recovery && keyDiagnostics.length > 0) {
+					close = this.recover('CBrack');
+				} else {
+					close = this.read();
+					if (close.type !== 'CBrack' && !this.recovery) {
+						close = this.recover('CBrack');
+						diagnostics.push({ summary: 'Missing close bracket on index', detail: 'The index operator must end with a closing bracket ("]").', subject: close.range });
+					}
 				}
-				this.includeNewlines.pop();
+				this.popNewlines();
+				// A literal key becomes a step of the traversal, so the literal is no longer in the tree.
+				result = key.literal
+					? traversed(result, between(open.range, close.range))
+					: { range: between(from.range, close.range), literals: [...result.literals, ...key.literals], literal: false };
 				continue;
 			}
-			return;
+			return [result, diagnostics];
 		}
 	}
 
-	/**
-	 * Checks a number written after a dot, the old way of indexing.
-	 *
-	 * @param advice how the message for two such indexes run together begins.
-	 * @param subject the token that message is reported at.
-	 */
-	private parseLegacyIndex(advice: string, subject: HclToken): void {
-		const number = this.read();
-		const dot = number.text.indexOf('.');
-		if (dot >= 0) {
-			throw new Problem('Invalid legacy index syntax', `${advice} [${number.text.slice(0, dot)}][${number.text.slice(dot + 1)}].`, subject);
-		}
-		checkNumber(number);
-	}
-
-	/** Checks one term: a literal, a name, a call, a template, a collection, or one of those negated. */
-	private parseTerm(): void {
+	/** Parses one term: a literal, a name, a call, a template, a collection, or one of those negated. */
+	private parseExpressionTerm(): [Expression, Diagnostic[]] {
 		const start = this.peek();
 		switch (start.type) {
 			case 'OParen': {
-				this.read();
-				this.includeNewlines.push(false);
-				this.parseExpression();
+				const open = this.read();
+				this.pushNewlines(false);
+				const [expression, diagnostics] = this.parseExpression();
+				if (diagnostics.length > 0) {
+					this.recover('CParen');
+					this.popNewlines();
+					return [expression, diagnostics];
+				}
 				const close = this.peek();
-				if (close.type !== 'CParen') throw new Problem('Unbalanced parentheses', 'Expected a closing parenthesis to terminate the expression.', close);
-				this.read();
-				this.includeNewlines.pop();
-				return;
+				if (close.type !== 'CParen') {
+					diagnostics.push({ summary: 'Unbalanced parentheses', detail: 'Expected a closing parenthesis to terminate the expression.', subject: close.range });
+					this.recovery = true;
+				}
+				const closed = this.read();
+				this.popNewlines();
+				return [{ range: between(open.range, closed.range), literals: expression.literals, literal: false }, diagnostics];
 			}
-			case 'NumberLit':
-				checkNumber(this.read());
-				return;
+			case 'NumberLit': {
+				const token = this.read();
+				const [value, diagnostics] = numberValue(token);
+				return [{ range: token.range, literals: [{ range: token.range, value }], literal: true }, diagnostics];
+			}
 			case 'Ident': {
 				const name = this.read();
 				const after = this.peek().type;
-				if (after === 'OParen' || after === 'DoubleColon') this.parseFunctionCall(name);
-				return;
+				if (after === 'OParen' || after === 'DoubleColon') return this.finishParsingFunctionCall(name);
+				return [{ range: name.range, literals: [], literal: name.text === 'true' || name.text === 'false' || name.text === 'null' }, []];
 			}
 			case 'OQuote':
-			case 'OHeredoc':
-				this.read();
-				this.parseTemplate(start.type === 'OQuote' ? 'CQuote' : 'CHeredoc');
-				return;
+			case 'OHeredoc': {
+				const open = this.read();
+				const [literals, diagnostics] = this.parseTemplate(start.type === 'OQuote' ? 'CQuote' : 'CHeredoc');
+				return [{ range: between(open.range, this.previousRange()), literals, literal: false }, diagnostics];
+			}
 			case 'Minus':
-			case 'Bang':
+			case 'Bang': {
 				this.read();
-				this.nested(start, () => this.parseTermWithTraversals());
-				return;
+				const [operand, diagnostics] = this.nested(start, () => this.parseExpressionWithTraversals());
+				return [{ range: between(start.range, operand.range), literals: operand.literals, literal: false }, diagnostics];
+			}
 			case 'OBrack':
-				this.parseTuple();
-				return;
+				return this.parseTupleConstructor();
 			case 'OBrace':
-				this.parseObject();
-				return;
-			case 'EOF':
-				throw new Problem('Missing expression', 'Expected the start of an expression, but found the end of the file.', start);
-			default:
-				throw new Problem('Invalid expression', 'Expected the start of an expression, but found an invalid expression token.', start);
+				return this.parseObjectConstructor();
+			default: {
+				const diagnostics: Diagnostic[] = [];
+				if (!this.recovery) {
+					diagnostics.push(start.type === 'EOF'
+						? { summary: 'Missing expression', detail: 'Expected the start of an expression, but found the end of the file.', subject: start.range }
+						: { summary: 'Invalid expression', detail: 'Expected the start of an expression, but found an invalid expression token.', subject: start.range });
+				}
+				this.recovery = true;
+				// A placeholder keeps the tree whole where there is no expression.
+				return [{ range: start.range, literals: [{ range: start.range, value: undefined }], literal: true }, diagnostics];
+			}
 		}
 	}
 
 	/**
-	 * Checks a function call from the token after its name.
+	 * Parses a function call from the token after its name.
 	 *
 	 * @param name the first part of the function's name, already read.
 	 */
-	private parseFunctionCall(name: HclToken): void {
+	private finishParsingFunctionCall(name: PlacedToken): [Expression, Diagnostic[]] {
+		const diagnostics: Diagnostic[] = [];
 		let open = this.read();
 		while (open.type === 'DoubleColon') {
 			const part = this.read();
 			if (part.type !== 'Ident') {
-				throw new Problem('Missing function name', 'Function scope resolution symbol :: must be followed by a function name in this scope.', part);
+				diagnostics.push({ summary: 'Missing function name', detail: 'Function scope resolution symbol :: must be followed by a function name in this scope.', subject: part.range });
+				this.recoverOver('OParen');
+				return [{ range: between(name.range, part.range), literals: [], literal: false }, diagnostics];
 			}
 			open = this.read();
 		}
 		if (open.type !== 'OParen') {
-			throw new Problem('Missing open parenthesis', 'Function selector must be followed by an open parenthesis to begin the function call.', open);
+			diagnostics.push({ summary: 'Missing open parenthesis', detail: 'Function selector must be followed by an open parenthesis to begin the function call.', subject: open.range });
+			this.recoverOver('OParen');
+			return [{ range: between(name.range, open.range), literals: [], literal: false }, diagnostics];
 		}
-		this.includeNewlines.push(false);
+
+		const literals: Literal[] = [];
+		// Where the call ends, unless recovering from an error in its arguments reached the end of the file.
+		let close: PlacedToken | undefined;
+		this.pushNewlines(false);
 		for (;;) {
 			if (this.peek().type === 'CParen') {
-				this.read();
+				close = this.read();
 				break;
 			}
-			this.parseExpression();
+			const [argument, argumentDiagnostics] = this.parseExpression();
+			literals.push(...argument.literals);
+			diagnostics.push(...argumentDiagnostics);
+			if (this.recovery && argumentDiagnostics.length > 0) {
+				const recovered = this.recover('CParen');
+				if (recovered.type === 'CParen') close = recovered;
+				break;
+			}
 			const separator = this.read();
-			if (separator.type === 'CParen') break;
+			if (separator.type === 'CParen') {
+				close = separator;
+				break;
+			}
 			if (separator.type === 'Ellipsis') {
 				if (this.peek().type !== 'CParen') {
-					throw new Problem('Missing closing parenthesis', 'An expanded function argument (with ...) must be immediately followed by closing parentheses.', separator);
+					if (!this.recovery) diagnostics.push({ summary: 'Missing closing parenthesis', detail: 'An expanded function argument (with ...) must be immediately followed by closing parentheses.', subject: separator.range });
+					close = this.recover('CParen');
+				} else {
+					close = this.read();
 				}
-				this.read();
 				break;
 			}
-			if (separator.type === 'EOF') {
-				throw new Problem('Unterminated function call', 'There is no closing parenthesis for this function call before the end of the file. This may be caused by incorrect parenthesis nesting elsewhere in this file.', between(name, open));
-			}
 			if (separator.type !== 'Comma') {
-				throw new Problem('Missing argument separator', 'A comma is required to separate each function argument from the next.', separator);
+				diagnostics.push(separator.type === 'EOF'
+					? { summary: 'Unterminated function call', detail: 'There is no closing parenthesis for this function call before the end of the file. This may be caused by incorrect parenthesis nesting elsewhere in this file.', subject: between(name.range, open.range) }
+					: { summary: 'Missing argument separator', detail: 'A comma is required to separate each function argument from the next.', subject: separator.range });
+				close = this.recover('CParen');
+				break;
 			}
 			// A comma may follow the last argument.
 			if (this.peek().type === 'CParen') {
-				this.read();
+				close = this.read();
 				break;
 			}
 		}
-		this.includeNewlines.pop();
+		this.popNewlines();
+		return [{ range: { start: name.range.start, end: close ? close.range.end : nowhere }, literals, literal: false }, diagnostics];
 	}
 
-	/** Checks a tuple in square brackets, or the `for` expression that builds one. */
-	private parseTuple(): void {
+	/** Parses a tuple in square brackets, or the `for` expression that builds one. */
+	private parseTupleConstructor(): [Expression, Diagnostic[]] {
 		const open = this.read();
-		this.includeNewlines.push(false);
-		if (isKeyword(this.peek(), 'for')) {
-			this.parseFor(open);
-		} else {
-			for (;;) {
-				if (this.peek().type === 'CBrack') {
-					this.read();
-					break;
-				}
-				this.parseExpression();
-				const next = this.peek();
-				if (next.type === 'CBrack') {
-					this.read();
-					break;
-				}
-				if (next.type === 'EOF') {
-					throw new Problem('Unterminated tuple constructor expression', 'There is no corresponding closing bracket before the end of the file. This may be caused by incorrect bracket nesting elsewhere in this file.', open);
-				}
-				if (next.type !== 'Comma') throw new Problem('Missing item separator', 'Expected a comma to mark the beginning of the next item.', next);
-				this.read();
-			}
-		}
-		this.includeNewlines.pop();
+		this.pushNewlines(false);
+		const result = isKeyword(this.peek(), 'for') ? this.finishParsingForExpression(open) : this.finishParsingTuple(open);
+		this.popNewlines();
+		return result;
 	}
 
-	/** Checks an object in braces, or the `for` expression that builds one. */
-	private parseObject(): void {
+	/**
+	 * Parses the items of a tuple.
+	 *
+	 * @param open its opening bracket, already read.
+	 */
+	private finishParsingTuple(open: PlacedToken): [Expression, Diagnostic[]] {
+		const literals: Literal[] = [];
+		const diagnostics: Diagnostic[] = [];
+		let close: PlacedToken;
+		for (;;) {
+			if (this.peek().type === 'CBrack') {
+				close = this.read();
+				break;
+			}
+			const [item, itemDiagnostics] = this.parseExpression();
+			literals.push(...item.literals);
+			diagnostics.push(...itemDiagnostics);
+			if (this.recovery && itemDiagnostics.length > 0) {
+				close = this.recover('CBrack');
+				break;
+			}
+			const next = this.peek();
+			if (next.type === 'CBrack') {
+				close = this.read();
+				break;
+			}
+			if (next.type !== 'Comma') {
+				if (!this.recovery) {
+					diagnostics.push(next.type === 'EOF'
+						? { summary: 'Unterminated tuple constructor expression', detail: 'There is no corresponding closing bracket before the end of the file. This may be caused by incorrect bracket nesting elsewhere in this file.', subject: open.range }
+						: { summary: 'Missing item separator', detail: 'Expected a comma to mark the beginning of the next item.', subject: next.range });
+				}
+				close = this.recover('CBrack');
+				break;
+			}
+			this.read();
+		}
+		return [{ range: between(open.range, close.range), literals, literal: false }, diagnostics];
+	}
+
+	/** Parses an object in braces, or the `for` expression that builds one. */
+	private parseObjectConstructor(): [Expression, Diagnostic[]] {
 		const open = this.read();
 		// A `for` expression may start on a later line, though the items of an object are divided by newlines.
-		this.includeNewlines.push(false);
+		this.pushNewlines(false);
 		const isFor = isKeyword(this.peek(), 'for');
-		this.includeNewlines.pop();
-		if (isFor) {
-			this.parseFor(open);
-			return;
-		}
-		this.includeNewlines.push(true);
+		this.popNewlines();
+		if (isFor) return this.finishParsingForExpression(open);
+
+		this.pushNewlines(true);
+		const literals: Literal[] = [];
+		const diagnostics: Diagnostic[] = [];
+		let close: PlacedToken;
 		for (;;) {
 			let next = this.peek();
 			if (next.type === 'Newline') {
@@ -593,178 +932,475 @@ class SyntaxChecker {
 				continue;
 			}
 			if (next.type === 'CBrace') {
-				this.read();
+				close = this.read();
 				break;
 			}
-			this.parseExpression();
+			const [key, keyDiagnostics] = this.parseExpression();
+			diagnostics.push(...keyDiagnostics);
+			if (this.recovery && keyDiagnostics.length > 0) {
+				close = this.recover('CBrace');
+				break;
+			}
 			next = this.peek();
 			if (next.type !== 'Equal' && next.type !== 'Colon') {
-				if (next.type === 'Newline' || next.type === 'Comma') {
-					throw new Problem('Missing attribute value', 'Expected an attribute value, introduced by an equals sign ("=").', next);
+				if (!this.recovery) {
+					if (next.type === 'Newline' || next.type === 'Comma') {
+						diagnostics.push({ summary: 'Missing attribute value', detail: 'Expected an attribute value, introduced by an equals sign ("=").', subject: next.range });
+					} else if (next.type === 'Ident') {
+						diagnostics.push({ summary: 'Missing key/value separator', detail: 'Expected an equals sign ("=") to mark the beginning of the attribute value. If you intended to given an attribute name containing periods or spaces, write the name in quotes to create a string literal.', subject: next.range });
+					} else if (next.type === 'EOF') {
+						diagnostics.push({ summary: 'Unterminated object constructor expression', detail: 'There is no corresponding closing brace before the end of the file. This may be caused by incorrect brace nesting elsewhere in this file.', subject: open.range });
+					} else {
+						diagnostics.push({ summary: 'Missing key/value separator', detail: 'Expected an equals sign ("=") to mark the beginning of the attribute value.', subject: next.range });
+					}
 				}
-				if (next.type === 'Ident') {
-					throw new Problem('Missing key/value separator', 'Expected an equals sign ("=") to mark the beginning of the attribute value. If you intended to given an attribute name containing periods or spaces, write the name in quotes to create a string literal.', next);
-				}
-				if (next.type === 'EOF') {
-					throw new Problem('Unterminated object constructor expression', 'There is no corresponding closing brace before the end of the file. This may be caused by incorrect brace nesting elsewhere in this file.', open);
-				}
-				throw new Problem('Missing key/value separator', 'Expected an equals sign ("=") to mark the beginning of the attribute value.', next);
-			}
-			this.read();
-			this.parseExpression();
-			next = this.peek();
-			if (next.type === 'CBrace') {
-				this.read();
+				close = this.recover('CBrace');
 				break;
 			}
-			if (next.type === 'EOF') {
-				throw new Problem('Unterminated object constructor expression', 'There is no corresponding closing brace before the end of the file. This may be caused by incorrect brace nesting elsewhere in this file.', open);
+			this.read();
+			const [value, valueDiagnostics] = this.parseExpression();
+			diagnostics.push(...valueDiagnostics);
+			// An item joins the tree once its value has been parsed, whatever became of the value.
+			literals.push(...key.literals, ...value.literals);
+			if (this.recovery && valueDiagnostics.length > 0) {
+				close = this.recover('CBrace');
+				break;
+			}
+			next = this.peek();
+			if (next.type === 'CBrace') {
+				close = this.read();
+				break;
 			}
 			if (next.type !== 'Comma' && next.type !== 'Newline') {
-				throw new Problem('Missing attribute separator', 'Expected a newline or comma to mark the beginning of the next attribute.', next);
+				if (!this.recovery) {
+					diagnostics.push(next.type === 'EOF'
+						? { summary: 'Unterminated object constructor expression', detail: 'There is no corresponding closing brace before the end of the file. This may be caused by incorrect brace nesting elsewhere in this file.', subject: open.range }
+						: { summary: 'Missing attribute separator', detail: 'Expected a newline or comma to mark the beginning of the next attribute.', subject: next.range });
+				}
+				close = this.recover('CBrace');
+				break;
 			}
 			this.read();
 		}
-		this.includeNewlines.pop();
+		this.popNewlines();
+		return [{ range: between(open.range, close.range), literals, literal: false }, diagnostics];
 	}
 
 	/**
-	 * Checks a `for` expression from its keyword to its closing bracket.
+	 * Parses a `for` expression from its keyword to its closing bracket.
 	 *
 	 * @param open the bracket or brace it opened with, which decides whether it builds a tuple or an object.
 	 */
-	private parseFor(open: HclToken): void {
-		const object = open.type === 'OBrace';
-		const closeType = object ? 'CBrace' : 'CBrack';
-		this.includeNewlines.push(false);
-		this.read();
-		if (this.peek().type !== 'Ident') throw new Problem('Invalid \'for\' expression', 'For expression requires variable name after \'for\'.', this.peek());
-		this.read();
-		if (this.peek().type === 'Comma') {
-			this.read();
-			if (this.peek().type !== 'Ident') throw new Problem('Invalid \'for\' expression', 'For expression requires value variable name after comma.', this.peek());
-			this.read();
-		}
-		if (!isKeyword(this.peek(), 'in')) {
-			throw new Problem('Invalid \'for\' expression', 'For expression requires the \'in\' keyword after its name declarations.', this.peek());
-		}
-		this.read();
-		this.parseExpression();
-		if (this.peek().type !== 'Colon') throw new Problem('Invalid \'for\' expression', 'For expression requires a colon after the collection expression.', this.peek());
-		this.read();
-
-		let value = this.parseExpressionSpan();
-		let key: HclToken | undefined;
-		if (this.peek().type === 'FatArrow') {
-			this.read();
-			key = value;
-			value = this.parseExpressionSpan();
-		}
-		const ellipsis = this.peek().type === 'Ellipsis' ? this.read() : undefined;
-		if (isKeyword(this.peek(), 'if')) {
-			this.read();
-			this.parseExpression();
-		}
-		if (this.peek().type !== closeType) throw new Problem('Invalid \'for\' expression', 'Extra characters after the end of the \'for\' expression.', this.peek());
-		this.read();
-		if (!object && key) throw new Problem('Invalid \'for\' expression', 'Key expression is not valid when building a tuple.', key);
-		if (!object && ellipsis) throw new Problem('Invalid \'for\' expression', 'Grouping ellipsis (...) cannot be used when building a tuple.', ellipsis);
-		if (object && !key) throw new Problem('Invalid \'for\' expression', 'Key expression is required when building an object.', value);
-		this.includeNewlines.pop();
-	}
-
-	/** Checks a quoted string that may not hold template sequences, such as a block label. */
-	private parseQuotedStringLiteral(): void {
-		this.read();
-		for (;;) {
-			const token = this.read();
-			if (token.type === 'CQuote') return;
-			if (token.type === 'QuotedLit') {
-				checkEscapes(token);
-				continue;
-			}
-			if (token.type === 'TemplateInterp' || token.type === 'TemplateControl') {
-				const sigil = token.type === 'TemplateControl' ? '%' : '$';
-				throw new Problem('Invalid string literal', `Template sequences are not allowed in this string. To include a literal "${sigil}", double it (as "${sigil}${sigil}") to escape it.`, token);
-			}
-			if (token.type === 'EOF') throw new Problem('Unterminated string literal', 'Unable to find the closing quote mark before the end of the file.', token);
-			throw new Problem('Invalid string literal', 'This item is not valid in a string literal.', token);
-		}
+	private finishParsingForExpression(open: PlacedToken): [Expression, Diagnostic[]] {
+		this.pushNewlines(false);
+		const result = this.parseForExpression(open);
+		this.popNewlines();
+		return result;
 	}
 
 	/**
-	 * Checks a template from after its opening marker: its literals, the expressions in its sequences, and that its
-	 * `if` and `for` directives are closed in order.
+	 * Parses the parts of a `for` expression.
+	 *
+	 * @param open the bracket or brace it opened with.
+	 */
+	private parseForExpression(open: PlacedToken): [Expression, Diagnostic[]] {
+		this.read();
+		const object = open.type === 'OBrace';
+		const closeType = object ? 'CBrace' : 'CBrack';
+		const diagnostics: Diagnostic[] = [];
+		/**
+		 * Gives up on the expression, which the tree then holds a placeholder for, from its opening bracket to the
+		 * one it recovered to.
+		 *
+		 * @param close the bracket recovered to.
+		 * @returns the placeholder, and the errors.
+		 */
+		const placeholder = (close: PlacedToken): [Expression, Diagnostic[]] => {
+			const range = between(open.range, close.range);
+			return [{ range, literals: [{ range, value: undefined }], literal: true }, diagnostics];
+		};
+		/**
+		 * Reports a missing part where the parser stands, unless it is recovering, and gives up on the expression.
+		 *
+		 * @param detail what is missing.
+		 * @returns the placeholder, and the errors.
+		 */
+		const invalid = (detail: string): [Expression, Diagnostic[]] => {
+			if (!this.recovery) diagnostics.push({ summary: 'Invalid \'for\' expression', detail, subject: this.peek().range });
+			return placeholder(this.recover(closeType));
+		};
+
+		if (this.peek().type !== 'Ident') return invalid('For expression requires variable name after \'for\'.');
+		this.read();
+		if (this.peek().type === 'Comma') {
+			this.read();
+			if (this.peek().type !== 'Ident') return invalid('For expression requires value variable name after comma.');
+			this.read();
+		}
+		if (!isKeyword(this.peek(), 'in')) return invalid('For expression requires the \'in\' keyword after its name declarations.');
+		this.read();
+
+		const [collection, collectionDiagnostics] = this.parseExpression();
+		diagnostics.push(...collectionDiagnostics);
+		if (this.recovery && collectionDiagnostics.length > 0) return placeholder(this.recover(closeType));
+		if (this.peek().type !== 'Colon') return invalid('For expression requires a colon after the collection expression.');
+		this.read();
+
+		let [value, valueDiagnostics] = this.parseExpression();
+		let key: Expression | undefined;
+		let keyDiagnostics: Diagnostic[] = [];
+		if (this.peek().type === 'FatArrow') {
+			this.read();
+			[key, keyDiagnostics] = [value, valueDiagnostics];
+			[value, valueDiagnostics] = this.parseExpression();
+		}
+		diagnostics.push(...keyDiagnostics, ...valueDiagnostics);
+		if (this.recovery && (keyDiagnostics.length > 0 || valueDiagnostics.length > 0)) return placeholder(this.recover(closeType));
+
+		const ellipsis = this.peek().type === 'Ellipsis' ? this.read() : undefined;
+		let condition: Expression | undefined;
+		if (isKeyword(this.peek(), 'if')) {
+			this.read();
+			let conditionDiagnostics: Diagnostic[];
+			[condition, conditionDiagnostics] = this.parseExpression();
+			diagnostics.push(...conditionDiagnostics);
+			if (this.recovery && conditionDiagnostics.length > 0) return placeholder(this.recover(oppositeBracket(open.type)));
+		}
+
+		let close: PlacedToken;
+		if (this.peek().type === closeType) {
+			close = this.read();
+		} else {
+			if (!this.recovery) diagnostics.push({ summary: 'Invalid \'for\' expression', detail: 'Extra characters after the end of the \'for\' expression.', subject: this.peek().range });
+			close = this.recover(closeType);
+		}
+		if (!object) {
+			if (key) diagnostics.push({ summary: 'Invalid \'for\' expression', detail: 'Key expression is not valid when building a tuple.', subject: key.range });
+			if (ellipsis) diagnostics.push({ summary: 'Invalid \'for\' expression', detail: 'Grouping ellipsis (...) cannot be used when building a tuple.', subject: ellipsis.range });
+		} else if (!key) {
+			diagnostics.push({ summary: 'Invalid \'for\' expression', detail: 'Key expression is required when building an object.', subject: value.range });
+		}
+		const literals = [...collection.literals, ...(key?.literals ?? []), ...value.literals, ...(condition?.literals ?? [])];
+		return [{ range: between(open.range, close.range), literals, literal: false }, diagnostics];
+	}
+
+	/**
+	 * Parses a quoted string that may not hold template sequences, such as a block label.
+	 *
+	 * @returns the errors.
+	 */
+	private parseQuotedStringLiteral(): Diagnostic[] {
+		this.read();
+		const diagnostics: Diagnostic[] = [];
+		for (;;) {
+			const token = this.read();
+			if (token.type === 'CQuote') break;
+			if (token.type === 'QuotedLit') {
+				diagnostics.push(...escapeDiagnostics(token));
+			} else if (token.type === 'TemplateInterp' || token.type === 'TemplateControl') {
+				const sigil = token.type === 'TemplateControl' ? '%' : '$';
+				diagnostics.push({ summary: 'Invalid string literal', detail: `Template sequences are not allowed in this string. To include a literal "${sigil}", double it (as "${sigil}${sigil}") to escape it.`, subject: token.range });
+				this.recover('TemplateSeqEnd');
+			} else if (token.type === 'EOF') {
+				diagnostics.push({ summary: 'Unterminated string literal', detail: 'Unable to find the closing quote mark before the end of the file.', subject: token.range });
+				break;
+			} else {
+				diagnostics.push({ summary: 'Invalid string literal', detail: 'This item is not valid in a string literal.', subject: token.range });
+				this.recover('CQuote');
+				break;
+			}
+		}
+		return diagnostics;
+	}
+
+	/**
+	 * Parses a template from after its opening marker: its literals and the expressions in its sequences, and then
+	 * the structure its `if` and `for` directives make.
 	 *
 	 * @param end the token that closes it.
+	 * @returns the literals of the tree it makes, and the errors.
 	 */
-	private parseTemplate(end: 'CQuote' | 'CHeredoc'): void {
-		const start = this.peek();
-		const parts: DirectivePart[] = [];
+	private parseTemplate(end: 'CQuote' | 'CHeredoc'): [Literal[], Diagnostic[]] {
+		const [parts, diagnostics] = this.parseTemplateParts(end);
+		const [literals, structureDiagnostics] = new TemplateParser(parts, range => this.rangeText(range)).parseRoot();
+		return [literals, [...diagnostics, ...structureDiagnostics]];
+	}
+
+	/**
+	 * Reads a template into its parts: literals, interpolations and directives, each sequence's expressions parsed.
+	 *
+	 * @param end the token that closes it.
+	 * @returns the parts, ending with one for where the template ends, and the errors.
+	 */
+	private parseTemplateParts(end: 'CQuote' | 'CHeredoc'): [TemplatePart[], Diagnostic[]] {
+		const parts: TemplatePart[] = [];
+		const diagnostics: Diagnostic[] = [];
+		const startRange = this.nextRange();
+		let endRange: Range;
 		for (;;) {
 			const next = this.read();
-			if (next.type === end) break;
-			if (next.type === 'StringLit') {
-				parts.push({ part: 'content', token: next });
-			} else if (next.type === 'QuotedLit') {
-				checkEscapes(next);
-				parts.push({ part: 'content', token: next });
-			} else if (next.type === 'TemplateInterp') {
-				this.includeNewlines.push(false);
-				this.parseExpression();
+			if (next.type === end) {
+				endRange = next.range;
+				break;
+			}
+			if (next.type === 'StringLit' || next.type === 'QuotedLit') {
+				diagnostics.push(...escapeDiagnostics(next));
+				parts.push({ kind: 'literal', range: next.range });
+				continue;
+			}
+			if (next.type === 'TemplateInterp') {
+				this.pushNewlines(false);
+				const [expression, expressionDiagnostics] = this.parseExpression();
+				diagnostics.push(...expressionDiagnostics);
 				const close = this.peek();
 				if (close.type !== 'TemplateSeqEnd') {
-					if (close.type === 'EOF') {
-						throw new Problem('Unclosed template interpolation sequence', 'There is no closing brace for this interpolation sequence before the end of the file. This might be caused by incorrect nesting inside the given expression.', start);
+					if (!this.recovery) {
+						if (close.type === 'EOF') {
+							diagnostics.push({ summary: 'Unclosed template interpolation sequence', detail: 'There is no closing brace for this interpolation sequence before the end of the file. This might be caused by incorrect nesting inside the given expression.', subject: startRange });
+						} else if (close.type === 'Colon') {
+							diagnostics.push({ summary: 'Extra characters after interpolation expression', detail: 'Template interpolation doesn\'t expect a colon at this location. Did you intend this to be a literal sequence to be processed as part of another language? If so, you can escape it by starting with "$${" instead of just "${".', subject: close.range });
+						} else if ((close.type === 'CQuote' || close.type === 'OQuote') && end === 'CQuote') {
+							diagnostics.push({ summary: 'Unclosed template interpolation sequence', detail: 'There is no closing brace for this interpolation sequence before the end of the quoted template. This might be caused by incorrect nesting inside the given expression.', subject: startRange });
+						} else {
+							diagnostics.push({ summary: 'Extra characters after interpolation expression', detail: 'Expected a closing brace to end the interpolation expression, but found extra characters.\n\nThis can happen when you include interpolation syntax for another language, such as shell scripting, but forget to escape the interpolation start token. If this is an embedded sequence for another language, escape it by starting with "$${" instead of just "${".', subject: close.range });
+						}
 					}
-					if (close.type === 'Colon') {
-						throw new Problem('Extra characters after interpolation expression', 'Template interpolation doesn\'t expect a colon at this location. Did you intend this to be a literal sequence to be processed as part of another language? If so, you can escape it by starting with "$${" instead of just "${".', close);
-					}
-					if ((close.type === 'CQuote' || close.type === 'OQuote') && end === 'CQuote') {
-						throw new Problem('Unclosed template interpolation sequence', 'There is no closing brace for this interpolation sequence before the end of the quoted template. This might be caused by incorrect nesting inside the given expression.', start);
-					}
-					throw new Problem('Extra characters after interpolation expression', 'Expected a closing brace to end the interpolation expression, but found extra characters.\n\nThis can happen when you include interpolation syntax for another language, such as shell scripting, but forget to escape the interpolation start token. If this is an embedded sequence for another language, escape it by starting with "$${" instead of just "${".', close);
+					this.recover('TemplateSeqEnd');
+				} else {
+					this.read();
 				}
-				this.read();
-				this.includeNewlines.pop();
-				parts.push({ part: 'content', token: next });
-			} else if (next.type === 'TemplateControl') {
-				this.includeNewlines.push(false);
+				this.popNewlines();
+				parts.push({ kind: 'interp', expression, range: between(next.range, close.range) });
+				continue;
+			}
+			if (next.type === 'TemplateControl') {
+				this.pushNewlines(false);
 				const keyword = this.peek();
 				if (keyword.type !== 'Ident') {
-					throw new Problem('Invalid template directive', 'A template directive keyword ("if", "for", etc) is expected at the beginning of a %{ sequence.', keyword);
+					if (!this.recovery) diagnostics.push({ summary: 'Invalid template directive', detail: 'A template directive keyword ("if", "for", etc) is expected at the beginning of a %{ sequence.', subject: keyword.range });
+					this.recover('TemplateSeqEnd');
+					this.popNewlines();
+					continue;
 				}
 				this.read();
+				/**
+				 * Gives up on the directive, reporting what is missing where the parser stands unless it is recovering.
+				 *
+				 * @param detail what is missing.
+				 */
+				const invalidFor = (detail: string) => {
+					if (!this.recovery) diagnostics.push({ summary: 'Invalid \'for\' directive', detail, subject: this.peek().range });
+					this.recover('TemplateSeqEnd');
+					this.popNewlines();
+				};
 				if (keyword.text === 'if') {
-					this.parseExpression();
+					const [condition, conditionDiagnostics] = this.parseExpression();
+					diagnostics.push(...conditionDiagnostics);
+					parts.push({ kind: 'if', condition, range: between(next.range, this.nextRange()) });
+				} else if (keyword.text === 'else' || keyword.text === 'endif' || keyword.text === 'endfor') {
+					parts.push({ kind: keyword.text, range: between(next.range, this.nextRange()) });
 				} else if (keyword.text === 'for') {
-					if (this.peek().type !== 'Ident') throw new Problem('Invalid \'for\' directive', 'For directive requires variable name after \'for\'.', this.peek());
+					if (this.peek().type !== 'Ident') {
+						invalidFor('For directive requires variable name after \'for\'.');
+						continue;
+					}
 					this.read();
 					if (this.peek().type === 'Comma') {
 						this.read();
-						if (this.peek().type !== 'Ident') throw new Problem('Invalid \'for\' directive', 'For directive requires value variable name after comma.', this.peek());
+						if (this.peek().type !== 'Ident') {
+							invalidFor('For directive requires value variable name after comma.');
+							continue;
+						}
 						this.read();
 					}
-					if (!isKeyword(this.peek(), 'in')) throw new Problem('Invalid \'for\' directive', 'For directive requires \'in\' keyword after names.', this.peek());
+					if (!isKeyword(this.peek(), 'in')) {
+						invalidFor('For directive requires \'in\' keyword after names.');
+						continue;
+					}
 					this.read();
-					this.parseExpression();
-				} else if (keyword.text !== 'else' && keyword.text !== 'endif' && keyword.text !== 'endfor') {
-					const suggestion = ['if', 'for', 'else', 'endif', 'endfor'].find(candidate => editDistance(keyword.text, candidate) < 3);
-					throw new Problem('Invalid template control keyword', `"${keyword.text}" is not a valid template control keyword.${suggestion ? ` Did you mean "${suggestion}"?` : ''}`, keyword);
+					const [collection, collectionDiagnostics] = this.parseExpression();
+					diagnostics.push(...collectionDiagnostics);
+					parts.push({ kind: 'for', collection, range: between(next.range, this.nextRange()) });
+				} else {
+					if (!this.recovery) {
+						const suggestion = ['if', 'for', 'else', 'endif', 'endfor'].find(candidate => editDistance(keyword.text, candidate) < 3);
+						diagnostics.push({ summary: 'Invalid template control keyword', detail: `${goQuoted(keyword.text)} is not a valid template control keyword.${suggestion ? ` Did you mean ${goQuoted(suggestion)}?` : ''}`, subject: keyword.range });
+					}
+					this.recover('TemplateSeqEnd');
+					this.popNewlines();
+					continue;
 				}
 				const close = this.peek();
 				if (close.type !== 'TemplateSeqEnd') {
-					throw new Problem(`Extra characters in ${keyword.text} marker`, 'Expected a closing brace to end the sequence, but found extra characters.', close);
+					if (!this.recovery) diagnostics.push({ summary: `Extra characters in ${keyword.text} marker`, detail: 'Expected a closing brace to end the sequence, but found extra characters.', subject: close.range });
+					this.recover('TemplateSeqEnd');
+				} else {
+					this.read();
 				}
-				this.read();
-				this.includeNewlines.pop();
-				parts.push({ part: keyword.text as TemplatePart, token: { ...next, end: close.end } });
-			} else {
-				throw new Problem('Unterminated template string', 'No closing marker was found for the string.', next);
+				this.popNewlines();
+				continue;
 			}
+			if (!this.recovery) diagnostics.push({ summary: 'Unterminated template string', detail: 'No closing marker was found for the string.', subject: next.range });
+			endRange = this.recover(end).range;
+			break;
 		}
-		checkDirectives(parts, this.tokens[this.index - 1]);
+		if (parts.length === 0) parts.push({ kind: 'literal', range: { start: startRange.end, end: startRange.end } });
+		parts.push({ kind: 'end', range: endRange });
+		return [parts, diagnostics];
 	}
+}
+
+/**
+ * Reads the parts of a template into the structure its `if` and `for` directives make, as the HCL library's template
+ * parser does.
+ */
+class TemplateParser {
+	private position = 0;
+
+	/**
+	 * Creates the parser.
+	 *
+	 * @param parts the template's parts, ending with the one for where it ends.
+	 * @param rangeText names a part of the source as the HCL library does.
+	 */
+	constructor(private readonly parts: TemplatePart[], private readonly rangeText: (range: Range) => string) {}
+
+	/** Reads every part up to the template's end. */
+	parseRoot(): [Literal[], Diagnostic[]] {
+		const literals: Literal[] = [];
+		const diagnostics: Diagnostic[] = [];
+		while (this.peek().kind !== 'end') {
+			const [partLiterals, partDiagnostics] = this.parseExpression();
+			literals.push(...partLiterals);
+			diagnostics.push(...partDiagnostics);
+		}
+		return [literals, diagnostics];
+	}
+
+	private peek(): TemplatePart {
+		return this.parts[this.position];
+	}
+
+	/** Reads a part; the template's end is never read past. */
+	private read(): TemplatePart {
+		const part = this.peek();
+		if (part.kind !== 'end') this.position++;
+		return part;
+	}
+
+	/** Reads one part, or a whole `if` or `for` directive with what it holds. */
+	private parseExpression(): [Literal[], Diagnostic[]] {
+		const next = this.peek();
+		switch (next.kind) {
+			case 'literal':
+				this.read();
+				return [[], []];
+			case 'interp':
+				this.read();
+				return [next.expression.literals, []];
+			case 'if':
+				return this.parseIf();
+			case 'for':
+				return this.parseFor();
+			case 'end':
+				this.read();
+				return [[{ range: next.range, value: undefined }], [{ summary: 'Unexpected end of template', detail: 'The control directives within this template are unbalanced.', subject: next.range }]];
+			default:
+				this.read();
+				return [[{ range: next.range, value: undefined }], [{ summary: `Unexpected ${next.kind} directive`, detail: 'The control directives within this template are unbalanced.', subject: next.range }]];
+		}
+	}
+
+	/** Reads an `if` directive to its `endif`. */
+	private parseIf(): [Literal[], Diagnostic[]] {
+		const open = this.read() as Extract<TemplatePart, { kind: 'if' }>;
+		const whenTrue: Literal[] = [];
+		const whenFalse: Literal[] = [];
+		let current = whenTrue;
+		const diagnostics: Diagnostic[] = [];
+		for (;;) {
+			const next = this.peek();
+			if (next.kind === 'end') {
+				diagnostics.push({ summary: 'Unexpected end of template', detail: `The if directive at ${this.rangeText(open.range)} is missing its corresponding endif directive.`, subject: next.range });
+				return [[{ range: next.range, value: undefined }], diagnostics];
+			}
+			if (next.kind === 'else' || next.kind === 'endif' || next.kind === 'endfor') {
+				this.read();
+				if (next.kind === 'endif') break;
+				if (next.kind === 'else' && current === whenTrue) {
+					current = whenFalse;
+					continue;
+				}
+				diagnostics.push(next.kind === 'else'
+					? { summary: 'Unexpected else directive', detail: `Already in the else clause for the if started at ${this.rangeText(open.range)}.`, subject: next.range }
+					: { summary: 'Unexpected endfor directive', detail: `Expecting an endif directive for the if started at ${this.rangeText(open.range)}.`, subject: next.range });
+				return [[{ range: next.range, value: undefined }], diagnostics];
+			}
+			const [literals, partDiagnostics] = this.parseExpression();
+			diagnostics.push(...partDiagnostics);
+			current.push(...literals);
+		}
+		return [[...open.condition.literals, ...whenTrue, ...whenFalse], diagnostics];
+	}
+
+	/** Reads a `for` directive to its `endfor`. */
+	private parseFor(): [Literal[], Diagnostic[]] {
+		const open = this.read() as Extract<TemplatePart, { kind: 'for' }>;
+		const content: Literal[] = [];
+		const diagnostics: Diagnostic[] = [];
+		for (;;) {
+			const next = this.peek();
+			if (next.kind === 'end') {
+				diagnostics.push({ summary: 'Unexpected end of template', detail: `The for directive at ${this.rangeText(open.range)} is missing its corresponding endfor directive.`, subject: next.range });
+				return [[{ range: next.range, value: undefined }], diagnostics];
+			}
+			if (next.kind === 'else' || next.kind === 'endif' || next.kind === 'endfor') {
+				this.read();
+				if (next.kind === 'endfor') break;
+				diagnostics.push(next.kind === 'else'
+					? { summary: 'Unexpected else directive', detail: 'An else clause is not expected for a for directive.', subject: next.range }
+					: { summary: 'Unexpected endif directive', detail: `Expecting an endfor directive corresponding to the for directive at ${this.rangeText(open.range)}.`, subject: next.range });
+				return [[{ range: next.range, value: undefined }], diagnostics];
+			}
+			const [literals, partDiagnostics] = this.parseExpression();
+			diagnostics.push(...partDiagnostics);
+			content.push(...literals);
+		}
+		return [[...open.collection.literals, ...content], diagnostics];
+	}
+}
+
+/**
+ * Joins two operands with a binary operator.
+ *
+ * @param left the left operand.
+ * @param right the right operand.
+ * @returns the operation.
+ */
+function combined(left: Expression, right: Expression): Expression {
+	return { range: between(left.range, right.range), literals: [...left.literals, ...right.literals], literal: false };
+}
+
+/**
+ * Adds a step to a traversal, which keeps what it starts from.
+ *
+ * @param from the expression the traversal starts from.
+ * @param step the extent of the step.
+ * @returns the traversal.
+ */
+function traversed(from: Expression, step: Range): Expression {
+	return { range: between(from.range, step), literals: from.literals, literal: false };
+}
+
+/**
+ * Splits a number written after a dot where the old way of indexing reads two indexes run together, as `.0.1` does.
+ *
+ * @param text the number.
+ * @returns what comes before its first dot, and everything after it.
+ */
+function splitAtFirstDot(text: string): [string, string] {
+	const dot = text.indexOf('.');
+	return [text.slice(0, dot), text.slice(dot + 1)];
 }
 
 /**
@@ -801,15 +1437,16 @@ function editDistance(from: string, to: string): number {
 }
 
 /**
- * Checks that a number literal has a value, as go-cty's ParseNumberVal, which HCL reads it with, decides it.
+ * Reads a number literal as go-cty's ParseNumberVal, which HCL reads it with, does.
  *
  * @param token the number literal.
- * @throws {Problem} when it has no value.
+ * @returns its value, undefined when it has none, and the error for one that has none.
  */
-function checkNumber(token: HclToken): void {
-	if (CtyNumber.tryParse(token.text) === undefined) {
-		throw new Problem('Invalid number literal', 'Failed to recognize the value of this number literal.', token);
-	}
+function numberValue(token: PlacedToken): [CtyNumber | undefined, Diagnostic[]] {
+	const value = CtyNumber.tryParse(token.text);
+	return value === undefined
+		? [undefined, [{ summary: 'Invalid number literal', detail: 'Failed to recognize the value of this number literal.', subject: token.range }]]
+		: [value, []];
 }
 
 /**
@@ -851,72 +1488,92 @@ function quotedPieces(text: string): string[] {
 }
 
 /**
- * Checks the backslash escapes in the literal text of a quoted string.
+ * Checks the backslash escapes in the literal text of a quoted string, each piece of which the parser counts on its
+ * own, taking a lone carriage return for a line break. A heredoc's text has no escapes.
  *
- * @param token a quoted literal.
- * @throws {Problem} for a backslash that begins no valid escape, reported at that escape.
+ * @param token a literal of a template.
+ * @returns an error for each backslash that begins no valid escape, at that escape.
  */
-function checkEscapes(token: HclToken): void {
-	const pieces = quotedPieces(token.text);
-	pieces.forEach((piece, index) => {
-		if (piece[0] !== '\\') return;
-		/**
-		 * Reports this escape.
-		 *
-		 * @param detail what is wrong with it.
-		 * @returns the problem.
-		 */
-		const invalid = (detail: string) => new Problem('Invalid escape sequence', detail, token, undefined, { before: pieces.slice(0, index), piece });
+function escapeDiagnostics(token: PlacedToken): Diagnostic[] {
+	if (token.type !== 'QuotedLit') return [];
+	const diagnostics: Diagnostic[] = [];
+	const breaksLine = (cluster: string) => cluster[0] === '\r' || cluster[0] === '\n';
+	let end = token.range.start;
+	for (const piece of quotedPieces(token.text)) {
+		const start = end;
+		end = advance(start, piece, breaksLine);
+		if (piece[0] !== '\\') continue;
+		const invalid = (detail: string) => diagnostics.push({ summary: 'Invalid escape sequence', detail, subject: { start, end } });
 		const selector = piece[1];
-		if (selector === undefined) throw invalid('Backslash must be followed by an escape sequence selector character.');
-		if (selector === 'u' || selector === 'U') {
+		if (selector === undefined) {
+			invalid('Backslash must be followed by an escape sequence selector character.');
+		} else if (selector === 'u' || selector === 'U') {
 			const wanted = selector === 'u' ? 4 : 8;
-			if (piece.length !== 2 + wanted) throw invalid(`The \\${selector} escape sequence must be followed by ${wanted === 4 ? 'four' : 'eight'} hexadecimal digits.`);
-			const code = Number.parseInt(piece.slice(2), 16);
-			if (code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF)) throw invalid(`Cannot encode character U+${code.toString(16).padStart(4, '0')} in UTF-8.`);
-			return;
+			if (piece.length !== 2 + wanted) {
+				invalid(`The \\${selector} escape sequence must be followed by ${wanted === 4 ? 'four' : 'eight'} hexadecimal digits.`);
+			} else {
+				const code = Number.parseInt(piece.slice(2), 16);
+				if (code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF)) invalid(`Cannot encode character U+${code.toString(16).padStart(4, '0')} in UTF-8.`);
+			}
+		} else if (!'nrt"\\'.includes(selector)) {
+			invalid(`The symbol ${goQuoted(piece.slice(1))} is not a valid escape sequence selector.`);
 		}
-		if (!'nrt"\\'.includes(selector)) throw invalid(`The symbol ${goQuoted(piece.slice(1))} is not a valid escape sequence selector.`);
-	});
+	}
+	return diagnostics;
 }
 
 /**
- * Checks that the `if` and `for` directives of a template are closed, in order, by `endif` and `endfor`, with at
- * most one `else` in each `if`.
+ * Reports the characters the scanner never accepts, as the HCL library does before it parses: each of them, except
+ * that it tells of bitwise operators at most four times, of semicolons once, and of only the first and third backtick
+ * and single quote, taking the others for the ends of strings quoted with them.
  *
- * @param parts the template's content and directives, in order.
- * @param end the token closing the template, which an unclosed directive is reported at.
- * @throws {Problem} when the directives are unbalanced.
+ * @param tokens the tokens.
+ * @returns the errors.
  */
-function checkDirectives(parts: DirectivePart[], end: HclToken): void {
-	const open: { kind: 'if' | 'for'; inElse: boolean; token: HclToken }[] = [];
-	for (const { part, token } of parts) {
-		if (part === 'content') continue;
-		if (part === 'if' || part === 'for') {
-			open.push({ kind: part, inElse: false, token });
-			continue;
+function scannerDiagnostics(tokens: PlacedToken[]): Diagnostic[] {
+	const diagnostics: Diagnostic[] = [];
+	let bitwise = 0;
+	let backticks = 0;
+	let apostrophes = 0;
+	let semicolons = 0;
+	for (const token of tokens) {
+		const report = (summary: string, detail: string) => diagnostics.push({ summary, detail, subject: token.range });
+		switch (token.type) {
+			case 'BitwiseAnd': case 'BitwiseOr': case 'BitwiseXor': case 'BitwiseNot': {
+				if (bitwise < 4) {
+					const suggestion = { BitwiseAnd: ' Did you mean boolean AND ("&&")?', BitwiseOr: ' Did you mean boolean OR ("||")?', BitwiseNot: ' Did you mean boolean NOT ("!")?', BitwiseXor: '' }[token.type];
+					report('Unsupported operator', `Bitwise operators are not supported.${suggestion}`);
+					bitwise++;
+				}
+				break;
+			}
+			case 'Backtick':
+				if (backticks % 2 === 0) report('Invalid character', 'The "`" character is not valid. To create a multi-line string, use the "heredoc" syntax, like "<<EOT".');
+				if (backticks <= 2) backticks++;
+				break;
+			case 'Apostrophe':
+				if (apostrophes % 2 === 0) report('Invalid character', 'Single quotes are not valid. Use double quotes (") to enclose strings.');
+				if (apostrophes <= 2) apostrophes++;
+				break;
+			case 'Semicolon':
+				if (semicolons < 1) {
+					report('Invalid character', 'The ";" character is not valid. Use newlines to separate arguments and blocks, and commas to separate items in collection values.');
+					semicolons++;
+				}
+				break;
+			case 'QuotedNewline':
+				report('Invalid multi-line string', 'Quoted strings may not be split over multiple lines. To produce a multi-line string, either use the \\n escape to represent a newline character or use the "heredoc" multi-line template syntax.');
+				break;
+			case 'Invalid':
+				if (token.text === '“' || token.text === '”') {
+					report('Invalid character', '"Curly quotes" are not valid here. These can sometimes be inadvertently introduced when sharing code via documents or discussion forums. It might help to replace the character with a "straight quote".');
+				} else {
+					report('Invalid character', 'This character is not used within the language.');
+				}
+				break;
 		}
-		const current = open[open.length - 1];
-		const unbalanced = 'The control directives within this template are unbalanced.';
-		if (current === undefined) throw new Problem(`Unexpected ${part} directive`, unbalanced, token);
-		if (part === 'else') {
-			if (current.kind === 'for') throw new Problem('Unexpected else directive', 'An else clause is not expected for a for directive.', token);
-			if (current.inElse) throw new Problem('Unexpected else directive', earlier => `Already in the else clause for the if started at ${earlier}.`, token, current.token);
-			current.inElse = true;
-			continue;
-		}
-		if ((part === 'endif') !== (current.kind === 'if')) {
-			const detail = current.kind === 'if'
-				? (earlier: string) => `Expecting an endif directive for the if started at ${earlier}.`
-				: (earlier: string) => `Expecting an endfor directive corresponding to the for directive at ${earlier}.`;
-			throw new Problem(`Unexpected ${part} directive`, detail, token, current.token);
-		}
-		open.pop();
 	}
-	const unclosed = open[open.length - 1];
-	if (unclosed) {
-		throw new Problem('Unexpected end of template', earlier => `The ${unclosed.kind} directive at ${earlier} is missing its corresponding end${unclosed.kind} directive.`, end, unclosed.token);
-	}
+	return diagnostics;
 }
 
 /**
@@ -948,88 +1605,121 @@ function advance(from: HclPosition, text: string, breaksLine: (cluster: string) 
  *
  * @param source the source text.
  * @param tokens its tokens, in order.
- * @returns the positions of the offsets tokens start at and of the offsets they end at.
+ * @returns the tokens, placed.
  */
-function tokenPositions(source: string, tokens: HclToken[]): { starts: Map<number, HclPosition>; ends: Map<number, HclPosition> } {
-	const starts = new Map<number, HclPosition>();
-	const ends = new Map<number, HclPosition>();
+function placeTokens(source: string, tokens: HclToken[]): PlacedToken[] {
 	let at: HclPosition = { offset: source.startsWith('\u{FEFF}') ? 1 : 0, line: 1, column: 1 };
-	for (const token of tokens) {
+	return tokens.map(token => {
 		const start = { offset: token.start, line: at.line, column: at.column + Buffer.byteLength(source.slice(at.offset, token.start)) };
 		at = advance(start, token.text, cluster => cluster === '\n' || cluster === '\r\n');
-		starts.set(token.start, start);
-		ends.set(token.end, at);
-	}
-	return { starts, ends };
+		return { ...token, range: { start, end: at } };
+	});
 }
 
 /**
- * Names a part of the source the way the HCL library does: the file, the line and column it starts at, and the
- * column it ends at, with the line it ends on when that is another.
+ * Parses source as the HCL library's ParseConfig does.
  *
+ * @param source the source text.
  * @param filename the name of the source.
- * @param start where the part starts.
- * @param end where it ends.
- * @returns the name.
+ * @returns the errors the scanner and then the parser report, and the literals of the tree the parser builds.
  */
-function rangeText(filename: string, start: HclPosition, end: HclPosition): string {
-	return start.line === end.line
-		? `${filename}:${start.line},${start.column}-${end.column}`
-		: `${filename}:${start.line},${start.column}-${end.line},${end.column}`;
+function parseConfig(source: string, filename: string): { diagnostics: Diagnostic[]; literals: Literal[] } {
+	const tokens = placeTokens(source, scanHclTokens(source));
+	const parsed = new SyntaxChecker(tokens, filename).checkFile();
+	return { diagnostics: [...scannerDiagnostics(tokens), ...parsed.diagnostics], literals: parsed.literals };
 }
 
 /**
- * Finds what the HCL parser Terragrunt uses reports first as an error in source, which is what makes Terragrunt
- * refuse a file: a character the scanner never accepts, wherever it is, and otherwise the first error the parser
- * comes to. Two things here are valid that are not HCL, because they are this project's own syntax: an inline
- * function as a statement of the file, and the pipe operator after an expression.
+ * Turns an error into the problem reported.
+ *
+ * @param diagnostic the error.
+ * @returns the problem.
+ */
+function problem(diagnostic: Diagnostic): HclSyntaxProblem {
+	return { summary: diagnostic.summary, detail: diagnostic.detail, start: diagnostic.subject.start, end: diagnostic.subject.end };
+}
+
+/**
+ * Finds every error the HCL parser reports in source, in the order it reports them: first each character the scanner
+ * never accepts, then what the parser finds, carrying on after each error as the parser does. Two things here are
+ * valid that are not HCL, because they are this project's own syntax: an inline function as a statement of the file,
+ * and the pipe operator after an expression.
  *
  * @param source the source text.
  * @param filename the name of the source, which the few messages that point back at an earlier part of it use.
- * @returns the problem, or undefined when the source is valid.
+ * @returns the problems; none when the source is valid.
  */
-export function findHclSyntaxProblem(source: string, filename = ''): HclSyntaxProblem | undefined {
-	const tokens = scanHclTokens(source);
-	let found: Problem | undefined;
-	try {
-		new SyntaxChecker(tokens).checkFile();
-	} catch (error) {
-		if (!(error instanceof Problem)) throw error;
-		found = error;
-	}
-	// The scanner's objections come before the parser's, so a character that is never valid is what is reported,
-	// wherever it is.
-	const invalid = tokens.find(token => invalidTokens[token.type] !== undefined);
-	if (invalid) {
-		const [summary, detail] = invalid.text === '“' || invalid.text === '”'
-			? ['Invalid character', '"Curly quotes" are not valid here. These can sometimes be inadvertently introduced when sharing code via documents or discussion forums. It might help to replace the character with a "straight quote".']
-			: invalidTokens[invalid.type]!;
-		found = new Problem(summary, detail, invalid);
-	}
-	if (found === undefined) return undefined;
-	const { starts, ends } = tokenPositions(source, tokens);
-	const detail = typeof found.detail === 'string'
-		? found.detail
-		: found.detail(rangeText(filename, starts.get(found.earlier!.start)!, ends.get(found.earlier!.end)!));
-	let start = starts.get(found.token.start)!;
-	let end = ends.get(found.token.end)!;
-	if (found.within) {
-		// Within a quoted literal the parser counts piece by piece, and takes a lone carriage return for a line break.
-		const breaksLine = (cluster: string) => cluster[0] === '\r' || cluster[0] === '\n';
-		for (const piece of found.within.before) start = advance(start, piece, breaksLine);
-		end = advance(start, found.within.piece, breaksLine);
-	}
-	return { summary: found.summary, detail, start, end };
+export function findHclSyntaxProblems(source: string, filename = ''): HclSyntaxProblem[] {
+	return parseConfig(source, filename).diagnostics.map(problem);
 }
 
 /**
- * Requires source to be valid HCL, as {@link findHclSyntaxProblem} judges it.
+ * Finds every error Terragrunt reports when it parses a configuration file: the HCL parser's, as
+ * {@link findHclSyntaxProblems} gives them, then "Number out of range" for each literal in the tree the parser built
+ * that Terragrunt refuses. It refuses a number too far from zero or too close to it, and an unknown value, which is
+ * what the parser leaves in place of a number it cannot read and of an expression it could not parse. The errors are
+ * not yet told apart by range, as `hcl validate` tells them apart.
+ *
+ * @param source the source text.
+ * @param filename the name of the source, which the few messages that point back at an earlier part of it use.
+ * @returns the problems; none when Terragrunt parses the source.
+ */
+export function findTerragruntParseProblems(source: string, filename = ''): HclSyntaxProblem[] {
+	const { diagnostics, literals } = parseConfig(source, filename);
+	const refused = literals.filter(literal => literal.value === undefined || !literal.value.withinSupportedRange());
+	return [
+		...diagnostics.map(problem),
+		...refused.map(literal => problem({ summary: 'Number out of range', detail: NUMBER_OUT_OF_RANGE, subject: literal.range }))
+	];
+}
+
+/** A position as Terragrunt's diagnostics give it: the line and column, and how many UTF-8 bytes come before it. */
+export interface ShownPosition {
+	line: number;
+	column: number;
+	byte: number;
+}
+
+/**
+ * Gives the range Terragrunt shows for a problem, as its diagnostics give one: the problem's own, except that an
+ * empty range ends a column and a byte later, so that it covers something. `hcl validate` reports a problem once for
+ * each range shown, keeping the first.
+ *
+ * @param source the source text the problem is in.
+ * @param problem the problem.
+ * @returns where it starts and ends.
+ */
+export function shownRange(source: string, problem: HclSyntaxProblem): { start: ShownPosition; end: ShownPosition } {
+	const shown = (at: HclPosition) => ({ line: at.line, column: at.column, byte: Buffer.byteLength(source.slice(0, at.offset), 'utf8') });
+	const start = shown(problem.start);
+	const end = shown(problem.end);
+	if (end.byte === start.byte) {
+		end.column++;
+		end.byte++;
+	}
+	return { start, end };
+}
+
+/**
+ * Requires source to be valid HCL, as {@link findHclSyntaxProblems} judges it.
  *
  * @param source the source text.
  * @param filename the name of the source, for the messages that point back at an earlier part of it.
- * @throws {HclSyntaxError} when it is not.
+ * @throws {HclSyntaxError} when it is not, with every problem.
  */
 export function assertHclSyntax(source: string, filename = ''): void {
-	const problem = findHclSyntaxProblem(source, filename);
-	if (problem) throw new HclSyntaxError(problem);
+	const problems = findHclSyntaxProblems(source, filename);
+	if (problems.length > 0) throw new HclSyntaxError(problems);
+}
+
+/**
+ * Requires Terragrunt to parse source, as {@link findTerragruntParseProblems} judges it.
+ *
+ * @param source the source text.
+ * @param filename the name of the source, for the messages that point back at an earlier part of it.
+ * @throws {HclSyntaxError} when it does not, with every problem.
+ */
+export function assertTerragruntParse(source: string, filename = ''): void {
+	const problems = findTerragruntParseProblems(source, filename);
+	if (problems.length > 0) throw new HclSyntaxError(problems);
 }
