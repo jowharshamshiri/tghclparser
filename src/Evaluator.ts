@@ -1305,9 +1305,12 @@ export class ConfigEvaluator {
 				// Attribute by attribute, so a fault in one does not hide a fault in the next.
 				const entries = new Map<string, RuntimeValue<ValueType>>();
 				let unresolved: UnresolvedRenderValueError | undefined;
+				// A sensitive key marks the object, as it marks any object constructor.
+				let sensitiveKey = false;
 				for (const child of inputNode.children ?? []) {
 					const keyNode = child.children?.find(part => part.type === 'object_key');
 					const keyValue = keyNode ? computable(await this.evalNode(keyNode.children?.[0], scope)) : undefined;
+					sensitiveKey ||= keyValue !== undefined && unwrapSensitive(keyValue) !== keyValue;
 					const key = keyValue
 						? this.atNode(keyNode?.children?.[0], scope, () => objectKey(keyValue))
 						: String(child.value);
@@ -1331,7 +1334,7 @@ export class ConfigEvaluator {
 				}
 				throwFaults();
 				if (unresolved) throw unresolved;
-				value = makeObjectValue(entries);
+				value = sensitiveKey ? makeSensitiveValue(makeObjectValue(entries)) : makeObjectValue(entries);
 			} else {
 				try {
 					value = await this.evalNode(inputNode, scope);
@@ -2164,24 +2167,38 @@ export class ConfigEvaluator {
 		return parts;
 	}
 
+	/**
+	 * Evaluates an object constructor as HCL's ObjectConsExpr does: each key converted to a string as {@link objectKey}
+	 * converts it, and the object marked sensitive when any key is, as HCL marks it with its keys' marks.
+	 *
+	 * @param node the object.
+	 * @param scope the scope of the file it is written in.
+	 * @returns the object.
+	 * @throws Error where a key or value faults, in HCL's words.
+	 */
 	private async evalObject(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
-		type Entry = { key: string; value: RuntimeValue<ValueType>; inherited: boolean };
+		type Entry = { key: string; value: RuntimeValue<ValueType>; inherited: boolean; sensitiveKey: boolean };
 		const members = await this.settleOperands((node.children ?? []).flatMap((child): (() => Promise<Entry[]>)[] => {
 			if (child.type === 'attribute') {
 				return [async () => {
 					const keyNode = child.children?.find(c => c.type === 'object_key');
 					const valueNode = child.children?.find(c => c.type !== 'attribute_identifier' && c.type !== 'object_key');
-					if (!keyNode) return [{ key: String(child.value), value: await this.evalNode(valueNode, scope), inherited: false }];
+					if (!keyNode) return [{ key: String(child.value), value: await this.evalNode(valueNode, scope), inherited: false, sensitiveKey: false }];
 					const [key, value] = await this.evalOperands([keyNode.children?.[0], valueNode], scope);
 					const keyValue = computable(key);
-					return [{ key: this.atNode(keyNode.children?.[0], scope, () => objectKey(keyValue)), value, inherited: false }];
+					return [{
+						key: this.atNode(keyNode.children?.[0], scope, () => objectKey(keyValue)),
+						value,
+						inherited: false,
+						sensitiveKey: unwrapSensitive(keyValue) !== keyValue
+					}];
 				}];
 			}
 			if (child.type === 'inheritance') {
 				return [async () => {
 					const source = await this.evalNode(child.children?.[0], scope);
 					if (source.type !== 'object' && source.type !== 'block') throw new Error('inherit requires an object source');
-					return [...(source.value as Map<string, RuntimeValue<ValueType>>)].map(([key, value]) => ({ key, value, inherited: true }));
+					return [...(source.value as Map<string, RuntimeValue<ValueType>>)].map(([key, value]) => ({ key, value, inherited: true, sensitiveKey: false }));
 				}];
 			}
 			return [];
@@ -2190,7 +2207,8 @@ export class ConfigEvaluator {
 		for (const { key, value, inherited } of members.flat()) {
 			if (!inherited || !map.has(key)) map.set(key, value);
 		}
-		return makeObjectValue(map);
+		const object = makeObjectValue(map);
+		return members.flat().some(member => member.sensitiveKey) ? makeSensitiveValue(object) : object;
 	}
 
 	/**

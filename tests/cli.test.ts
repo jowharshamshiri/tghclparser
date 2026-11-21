@@ -202,6 +202,55 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(root, {recursive: true, force: true});
 	});
 
+	it('renders sensitive values written into templates and keys as their text, as Terragrunt v1.2.2 does', async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-render-sensitive-template-'));
+		await fs.writeFile(path.join(root, 'terragrunt.hcl'), [
+			'locals {',
+			'  secret = sensitive("s3cr3t")',
+			'  keyed  = { "k-${local.secret}" = 1 }',
+			'}',
+			'inputs = {',
+			'  quoted   = "x-${local.secret}"',
+			'  heredoc  = <<EOT',
+			'before ${local.secret}',
+			'EOT',
+			'  ts       = templatestring("t-$${v}", { v = local.secret })',
+			'  found    = local.keyed["k-s3cr3t"]',
+			'  s_quoted = issensitive("x-${local.secret}")',
+			'  s_keyed  = issensitive(local.keyed)',
+			'}',
+			''
+		].join('\n'));
+		const cli = path.resolve('dist/cli.cjs');
+		// What Terragrunt v1.2.2 prints for the same file.
+		const json = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', root], {encoding: 'utf8'});
+		expect(json.status).to.equal(0, json.stderr);
+		expect(json.stdout).to.equal('{"dependencies":null,"dependency":{},"download_dir":"","feature":{},"generate":{},"iam_assume_role_duration":null,'
+			+ '"iam_assume_role_session_name":"","iam_role":"","iam_web_identity_token":"","inputs":{"found":1,"heredoc":"before s3cr3t\\n",'
+			+ '"quoted":"x-s3cr3t","s_keyed":true,"s_quoted":true,"ts":"t-s3cr3t"},"locals":{"keyed":{"k-s3cr3t":1},"secret":"s3cr3t"},'
+			+ '"terraform_binary":"","terraform_version_constraint":"","terragrunt_version_constraint":""}\n');
+		const hcl = spawnSync(process.execPath, [cli, 'render', '--working-dir', root], {encoding: 'utf8'});
+		expect(hcl.status).to.equal(0, hcl.stderr);
+		expect(hcl.stdout).to.equal([
+			'locals {',
+			'  keyed = {',
+			'    k-s3cr3t = 1',
+			'  }',
+			'  secret = "s3cr3t"',
+			'}',
+			'inputs = {',
+			'  found    = 1',
+			'  heredoc  = "before s3cr3t\\n"',
+			'  quoted   = "x-s3cr3t"',
+			'  s_keyed  = true',
+			'  s_quoted = true',
+			'  ts       = "t-s3cr3t"',
+			'}',
+			''
+		].join('\n'));
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
 	it('escapes JSON strings as Go does when rendering JSON', async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-render-escape-'));
 		await fs.writeFile(path.join(root, 'terragrunt.hcl'), 'inputs = {\n  "<k>" = "<a> & b\\u2028c\\u2029"\n}\n');

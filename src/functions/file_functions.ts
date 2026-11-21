@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import yaml from 'js-yaml';
 
+import { markResult } from '../function-signature';
 import type { FunctionContext, RuntimeValue, ValueType } from '../model';
 import { renderTemplate } from './template';
 import {
@@ -11,7 +12,8 @@ import {
 	expectParams,
 	makeBooleanValue,
 	makeStringValue,
-	markEncrypted
+	markEncrypted,
+	unwrapSensitive
 } from './utils';
 
 export const fileFunctionGroup = {
@@ -130,7 +132,9 @@ export const fileFunctionGroup = {
             context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
             assertTrusted(context, 'templatefile');
-            const templatePath = stringArgument(args, 0, 'templatefile');
+            // The path takes a sensitive value, and marks the rendering with it.
+            const pathArgument = unwrapSensitive(args[0]);
+            const templatePath = stringArgument([pathArgument], 0, 'templatefile');
             const vars = args[1];
             if (!vars || vars.type !== 'object') {
                 throw new Error('templatefile requires an object of template variables');
@@ -138,7 +142,7 @@ export const fileFunctionGroup = {
             const filePath = resolveFilePath(templatePath, context);
             await assertPathAllowed(context, filePath);
             const content = await fs.readFile(filePath, 'utf8');
-            return renderTemplate(content, vars, context);
+            return markResult(await renderTemplate(content, vars, context), pathArgument !== args[0]);
         },
         yamldecode: async (
             args: RuntimeValue<ValueType>[], 

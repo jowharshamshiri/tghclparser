@@ -541,6 +541,113 @@ describe('semantic configuration evaluation', () => {
 		});
 	});
 
+	// Each case is what Terragrunt v1.2.2 gives for the same source. HCL renders a sensitive value into a template as the
+	// text it holds and marks the result; it converts a sensitive key to the string it holds, marking an object built
+	// with one, and refuses null or a collection a sensitive value holds as it refuses any. render shows the values
+	// without their marks, which issensitive() shows.
+	describe('sensitive values in templates and keys', () => {
+		const evaluate = (content: string, dir = process.cwd()) => evaluator.evaluateUnit(path.join(dir, 'terragrunt.hcl'), content, dir);
+		const unit = (expression: string) => `locals {\n  secret = sensitive("s3cr3t")\n}\ninputs = {\n  x = ${expression}\n}\n`;
+		const value = async (expression: string, dir?: string): Promise<unknown> => {
+			const result = await evaluate(unit(expression), dir);
+			assert.equal(result.error, undefined, expression);
+			return (plainValue(result.inputs!) as Record<string, unknown>).x;
+		};
+		/** The expression's value, and whether it is sensitive. */
+		const marked = async (expression: string, dir?: string): Promise<[unknown, unknown]> =>
+			[await value(expression, dir), await value(`issensitive(${expression})`, dir)];
+		const refused = async (expression: string) => {
+			const result = await evaluate(unit(expression));
+			assert.equal(result.valid, false, expression);
+			return result.problems?.map(problem => problem.message);
+		};
+
+		it('renders a sensitive value into a quoted template or a heredoc as the text it holds, and marks the result', async () => {
+			assert.deepEqual(await marked('"x-${local.secret}"'), ['x-s3cr3t', true]);
+			assert.deepEqual(await marked('"n=${sensitive(42)} f=${sensitive(true)}"'), ['n=42 f=true', true]);
+			assert.deepEqual(await marked('"[ ${~ local.secret ~} ]"'), ['[s3cr3t]', true]);
+			assert.deepEqual(await marked('"$${x}-${local.secret}"'), ['${x}-s3cr3t', true]);
+			assert.deepEqual(await marked('"${local.secret}"'), ['s3cr3t', true]);
+			assert.deepEqual(await marked('"%{ for x in [local.secret, "b"] }${x},%{ endfor }"'), ['s3cr3t,b,', true]);
+			assert.deepEqual(await marked('<<EOT\nbefore ${local.secret}\nafter\nEOT\n'), ['before s3cr3t\nafter\n', true]);
+			assert.deepEqual(await marked('<<-EOT\n    in ${local.secret}\n    EOT\n'), ['in s3cr3t\n', true]);
+		});
+
+		it('renders one into templatestring as the text it holds, marked by the template, its vars or a value it renders', async () => {
+			assert.deepEqual(await marked('templatestring("t-$${v}", { v = local.secret })'), ['t-s3cr3t', true]);
+			assert.deepEqual(await marked('templatestring(sensitive("d-$${v}"), { v = "plain" })'), ['d-plain', true]);
+			assert.deepEqual(await marked('templatestring("$${v}-x", sensitive({ v = "a" }))'), ['a-x', true]);
+			assert.deepEqual(await marked('templatestring("$${v}", { v = local.secret })'), ['s3cr3t', true]);
+			assert.deepEqual(await marked('templatestring("%%{ for x in xs }$${x};%%{ endfor }", { xs = [local.secret, "b"] })'), ['s3cr3t;b;', true]);
+			assert.deepEqual(await marked('templatestring("w=$${w}", { v = local.secret, w = "b" })'), ['w=b', false]);
+		});
+
+		describe('in a template file', () => {
+			let dir: string;
+			before(async () => {
+				const os = await import('node:os');
+				const fs = await import('node:fs/promises');
+				dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-template-file-sensitive-')));
+				await fs.writeFile(path.join(dir, 'v.tftpl'), 'v=${v}\n');
+				await fs.writeFile(path.join(dir, 'w.tftpl'), 'w=${w}\n');
+			});
+			after(async () => {
+				const fs = await import('node:fs/promises');
+				await fs.rm(dir, { recursive: true, force: true });
+			});
+
+			it('marks the rendering by a sensitive path, and by a sensitive value anywhere in its vars', async () => {
+				assert.deepEqual(await marked('templatefile("v.tftpl", { v = local.secret })', dir), ['v=s3cr3t\n', true]);
+				assert.deepEqual(await marked('templatefile("v.tftpl", sensitive({ v = "a" }))', dir), ['v=a\n', true]);
+				assert.deepEqual(await marked('templatefile(sensitive("v.tftpl"), { v = "a" })', dir), ['v=a\n', true]);
+				assert.deepEqual(await marked('templatefile("w.tftpl", { v = local.secret, w = "b" })', dir), ['w=b\n', true]);
+				assert.deepEqual(await marked('templatefile("w.tftpl", { w = "b" })', dir), ['w=b\n', false]);
+			});
+		});
+
+		it('evaluates a quoted key that holds a template for the key, in an object and in inputs', async () => {
+			const result = await evaluate('inputs = {\n  a = { "k-${"a"}" = 1, plain = 2 }\n  b = { "${1}" = 2 }\n  "in-${"put"}" = 3\n}\n');
+			assert.equal(result.error, undefined);
+			assert.deepEqual(plainValue(result.inputs!), { a: { 'k-a': 1, plain: 2 }, b: { 1: 2 }, 'in-put': 3 });
+			assert.deepEqual(await refused('{ "${null}" = 1 }'), ["Can't use a null value as a key."]);
+		});
+
+		it('converts a sensitive object key to the string it holds, and marks the object by it', async () => {
+			assert.deepEqual(await value('nonsensitive({ "k-${local.secret}" = 1 })'), { 'k-s3cr3t': 1 });
+			assert.equal(await value('issensitive({ "k-${local.secret}" = 1 })'), true);
+			assert.equal(await value('issensitive({ (local.secret) = 1 })'), true);
+			assert.equal(await value('issensitive({ k = local.secret })'), false);
+			assert.deepEqual(await marked('{ "k-${local.secret}" = 1 }["k-s3cr3t"]'), [1, true]);
+		});
+
+		it('indexes by a sensitive key as by the value it holds, marking an element of a tuple but not an attribute of an object', async () => {
+			assert.deepEqual(await marked('{ a = 1 }["${sensitive("a")}"]'), [1, false]);
+			assert.deepEqual(await marked('{ a = "x" }[sensitive("a")]'), ['x', false]);
+			assert.deepEqual(await marked('["a", "b"][sensitive(1)]'), ['b', true]);
+			assert.deepEqual(await marked('["a", "b"]["${sensitive(1)}"]'), ['b', true]);
+		});
+
+		it('refuses null or a collection a sensitive value holds, in HCL\'s words, as for any value', async () => {
+			assert.deepEqual(await refused('"a${sensitive(null)}"'),
+				['The expression result is null. Cannot include a null value in a string template.']);
+			assert.deepEqual(await refused('<<EOT\na ${sensitive(["a"])}\nEOT\n'),
+				['Cannot include the given value in a string template: string required, but have tuple.']);
+			assert.deepEqual(await refused('{ (sensitive(null)) = 1 }'), ["Can't use a null value as a key."]);
+			assert.deepEqual(await refused('{ (sensitive(["a"])) = 1 }'), ["Can't use this value as a key: string required, but have tuple."]);
+			assert.deepEqual(await refused('{ a = 1 }[sensitive(null)]'), ["Can't use a null value as an indexing key."]);
+			assert.deepEqual(await refused('{ a = 1 }[sensitive(["a"])]'),
+				['The given key does not identify an element in this collection value: string required, but have tuple.']);
+			const [message] = (await refused('templatestring("x$${v}", { v = sensitive(["a"]) })'))!;
+			assert.match(message, /Cannot include the given value in a string template: string required, but have tuple\./u);
+		});
+
+		it('refuses inputs built with a sensitive key, an object Terragrunt v1.2.2 cannot take', async () => {
+			// v1.2.2 panics on it ("value is marked, so must be unmarked first"), and exits 1.
+			const result = await evaluate('inputs = {\n  "${sensitive("b")}x" = 1\n}\n');
+			assert.equal(result.valid, false);
+		});
+	});
+
 	describe('substr', () => {
 		const substr = async (args: string): Promise<unknown> => {
 			const result = await evaluator.evaluateUnit(configPath, `inputs = {\n  x = substr(${args})\n}\n`, process.cwd());

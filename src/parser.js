@@ -643,6 +643,7 @@ function peg$parse(input, options) {
 		return makeNode('object_key', null, location(), [key]);
 	};
   var peg$f29 = function(str) {
+    if (str.type !== 'string_lit') return makeNode('object_key', null, location(), [str]);
     return makeNode('attribute_identifier', str.value, location(), [], { quoted: true });
   };
   var peg$f30 = function(name) {

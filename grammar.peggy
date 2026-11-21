@@ -488,8 +488,11 @@ ObjectKey
 AttributeIdentifier
   = QuotedAttributeIdentifier / UnquotedAttributeIdentifier
 
+// A quoted key that holds a template sequence is an expression, evaluated for the key as HCL evaluates one; a plain
+// quoted string names the attribute.
 QuotedAttributeIdentifier
   = str:StringLiteral {
+    if (str.type !== 'string_lit') return makeNode('object_key', null, location(), [str]);
     return makeNode('attribute_identifier', str.value, location(), [], { quoted: true });
   }
 
