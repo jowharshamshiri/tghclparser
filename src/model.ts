@@ -128,7 +128,10 @@ export type PrimitiveValueType =
 	| 'string'
 	| 'number'
 	| 'boolean'
-	| 'null';
+	| 'null'
+	// A value HCL cannot know, of the go-cty type its ctyType gives: what an expression gives where it has errors, as
+	// HCL evaluates it when Terragrunt goes on past them.
+	| 'unknown';
 
 export type ComplexValueType =
 	| 'array'
@@ -377,8 +380,8 @@ export interface RuntimeValue<T extends ValueType> {
 	type: T;
 	value: RuntimeValueType<T>;
 	/**
-	 * The value's go-cty type where its shape does not give it: a null's, and a list's, set's or map's, which an
-	 * `array` or `object` holds. A tuple's and an object's type is that of what they hold, so they carry none.
+	 * The value's go-cty type where its shape does not give it: a null's, an unknown's, and a list's, set's or map's,
+	 * which an `array` or `object` holds. A tuple's and an object's type is that of what they hold, so they carry none.
 	 */
 	ctyType?: CtyType;
 	/** Set on a value sops stored encrypted, read from a file that could not be decrypted: there, but not to be shown. */
@@ -396,6 +399,7 @@ export type RuntimeValueType<T extends ValueType> =
 	T extends 'number' ? CtyNumber :
 	T extends 'boolean' ? boolean :
 	T extends 'null' ? null :
+	T extends 'unknown' ? null :
 	T extends 'array' ? RuntimeValue<ValueType>[] :
 	T extends 'object' | 'block' ? Map<string, RuntimeValue<ValueType>> :
 	T extends 'function' ? (args: RuntimeValue<ValueType>[]) => RuntimeValue<ValueType> :

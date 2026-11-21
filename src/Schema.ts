@@ -182,7 +182,8 @@ export class Schema {
 	}
 
 	generateAttributeSnippet(attr: AttributeDefinition): string {
-		const typeMap: Record<ValueType, string> = {
+		// An attribute is declared with the types a value is written as; unknown is only what an evaluation gives.
+		const typeMap: Record<Exclude<ValueType, 'unknown'>, string> = {
 			string: `"\${1:string}"`,
 			number: `\${1:0}`,
 			boolean: `\${1:true}`,
@@ -209,7 +210,7 @@ export class Schema {
 			meta_argument: `meta(\${1:args})`,
 		};
 
-		const type = attr.types.find(t => t in typeMap);
+		const type = attr.types.find((t): t is Exclude<ValueType, 'unknown'> => t in typeMap);
 		if (!type) throw new Error(`No completion representation for ${attr.name}: ${attr.types.join(', ')}`);
 		return `${attr.name} = ${typeMap[type]}`;
 	}

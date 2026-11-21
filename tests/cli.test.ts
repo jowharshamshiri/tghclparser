@@ -1719,16 +1719,22 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(made.root, {recursive: true, force: true});
 	});
 
-	it('names a dependency declared nowhere the unit merges as a fault', async () => {
+	it('renders a dependency declared nowhere the unit merges as an attribute the dependencies do not have, as Terragrunt v1.2.2 does', async () => {
 		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-no-block-')));
 		const cli = path.resolve('dist/cli.cjs');
 		const unit = path.join(root, 'app');
-		await fs.mkdir(unit);
+		for (const dir of ['app', 'network', 'bin']) await fs.mkdir(path.join(root, dir));
+		await fs.writeFile(path.join(root, 'network', 'terragrunt.hcl'), 'inputs = {}\n');
 		await fs.writeFile(path.join(root, 'root.hcl'), 'dependency "network" {\n  config_path = "../network"\n}\n');
 		await fs.writeFile(path.join(unit, 'terragrunt.hcl'), 'include "root" {\n  path = "../root.hcl"\n}\n\ninputs = { id = dependency.vpc.outputs.id }\n');
-		const typo = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', unit], {cwd: unit, encoding: 'utf8'});
-		expect(typo.status).to.equal(1);
-		expect(typo.stderr.trim()).to.equal(`No dependency "vpc" block in ${path.join(unit, 'terragrunt.hcl')} or the configurations it includes`);
+		// An unapplied dependency: the output command succeeds with no outputs.
+		await fs.writeFile(path.join(root, 'bin', 'tofu'), '#!/bin/sh\necho "{}"\n', {mode: 0o755});
+		const typo = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', unit],
+			{cwd: unit, encoding: 'utf8', env: {...process.env, TG_TF_PATH: path.join(root, 'bin', 'tofu')}});
+		expect(typo.status).to.equal(0, typo.stderr);
+		expect(JSON.parse(typo.stdout).inputs).to.deep.equal({id: ''});
+		expect(typo.stderr).to.contain('Error: Unsupported attribute\n');
+		expect(typo.stderr).to.contain('This object does not have an attribute named "vpc".');
 		await fs.rm(root, {recursive: true, force: true});
 	});
 

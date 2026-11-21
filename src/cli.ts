@@ -13,7 +13,8 @@ import { DiagnosticSeverity } from 'vscode-languageserver';
 import { CtyNumber } from './cty-number';
 import { unmarshalType, unmarshalValue } from './cty-json';
 import { ConfigEvaluator, UnresolvedDependencyOutputError, runtimeValueToPlain } from './Evaluator';
-import type { DependencyRequest } from './Evaluator';
+import type { DependencyRequest, ToleratedDecode } from './Evaluator';
+import { diagnosticLogLines, diagnosticsError } from './hcl-diagnostics';
 import { compareStrings, makeObjectValue, parseJsonDocument } from './functions/utils';
 import type { RuntimeValue, ValueType } from './model';
 import type { FunctionDefinition } from './model';
@@ -1743,14 +1744,48 @@ async function renderConfig(argv: string[]): Promise<number> {
 	}
 	// Terragrunt passes OpenTofu -no-color when colour is turned off, and get_terraform_cli_args() sees it.
 	const terraformCliArgs = ['render', ...(switchOf('no-color') ? ['-no-color'] : [])];
-	const evaluator = evaluatorFor({terraformCommand: 'render', terraformCliArgs, experiments: valuesOf('experiment'), partialRender: true});
+	const evaluator = evaluatorFor({terraformCommand: 'render', terraformCliArgs, experiments: valuesOf('experiment'), partialRender: true, renderDecode: true});
 	const config = await evaluator.evaluateRenderedConfig(realConfig, content, root, true);
 	process.stdout.write(json ? `${renderedJson(terragruntConfigAsCty(config))}\n` : terragruntConfigAsHcl(config));
+	writeToleratedDecodes(evaluator.toleratedDecodes(), valuesOf('log-level')[0], switchOf('log-disable'));
 	const unresolved = evaluator.unresolvedRenderFields();
 	for (const entry of unresolved) {
 		process.stderr.write(`unresolved ${entry.field} in ${entry.file}: ${entry.reason}\n`);
 	}
 	return unresolved.length > 0 ? 2 : 0;
+}
+
+/** The levels `--log-level` takes, from the least written to the most: below `error`, no error is logged. */
+const LOG_VERBOSITY = ['stderr', 'stdout', 'error', 'warn', 'info', 'debug', 'trace'];
+
+/**
+ * Writes to standard error what Terragrunt v1.2.2 logs for each file its render decoded past errors: each diagnostic
+ * of the decode as HCL's text writer writes it, one message to a line, at the error level, and at the debug level
+ * "Deferred attribute access error to autoinclude merge:" with the decode's diagnostics as Go writes them. A file
+ * read by read_terragrunt_config() is logged at the debug level only, as Terragrunt's parser there writes
+ * diagnostics only then. Terragrunt decodes an included file several times and logs it each time; each diagnostic
+ * and each debug message is written here once.
+ *
+ * @param decodes the tolerated decodes, in the order they ended.
+ * @param level the log level asked for, in any case; info when none is.
+ * @param disabled whether logging is turned off.
+ */
+function writeToleratedDecodes(decodes: readonly ToleratedDecode[], level: string | undefined, disabled: boolean): void {
+	if (disabled) return;
+	const verbosity = LOG_VERBOSITY.indexOf((level ?? 'info').toLowerCase());
+	if (verbosity < LOG_VERBOSITY.indexOf('error')) return;
+	const debug = verbosity >= LOG_VERBOSITY.indexOf('debug');
+	const written = new Set<string>();
+	const write = (text: string) => {
+		if (written.has(text)) return;
+		written.add(text);
+		process.stderr.write(`${text}\n`);
+	};
+	for (const decode of decodes) {
+		if (decode.quiet && !debug) continue;
+		for (const diagnostic of decode.diagnostics) write(diagnosticLogLines(diagnostic, decode.content).join('\n'));
+		if (debug) write(`Deferred attribute access error to autoinclude merge: ${diagnosticsError(decode.diagnostics)}`);
+	}
 }
 
 /**
@@ -1798,6 +1833,7 @@ function evaluatorFor(options: {
 	experiments?: string[];
 	tfPath?: string;
 	partialRender?: boolean;
+	renderDecode?: boolean;
 	skipOutputs?: boolean;
 	readEncryptedSops?: boolean;
 } = {}): ConfigEvaluator {
@@ -1810,6 +1846,7 @@ function evaluatorFor(options: {
 		workspaceTrusted: true,
 		allowedPaths,
 		partialRender: options.partialRender,
+		renderDecode: options.renderDecode,
 		readEncryptedSops: options.readEncryptedSops,
 		// The command decides whether a dependency's mock_outputs may be seen,
 		// so it has to reach the resolver. Without it every evaluation looked

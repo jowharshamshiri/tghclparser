@@ -29,6 +29,35 @@ export const makeNullValue = (type: CtyType): RuntimeValue<'null'> => ({
     ctyType: type
 });
 
+/** A value of a go-cty type HCL cannot know: cty.DynamicVal for the dynamic pseudo-type, else cty.UnknownVal(type). */
+export const makeUnknownValue = (type: CtyType): RuntimeValue<'unknown'> => ({
+    type: 'unknown',
+    value: null,
+    ctyType: type
+});
+
+/** go-cty's DynamicVal: a value of no known type. */
+export const makeDynamicValue = (): RuntimeValue<'unknown'> => makeUnknownValue(ctyDynamic);
+
+/** Whether a value is unknown itself, as go-cty's IsKnown decides; a known collection holding unknowns is known. */
+export const isUnknown = (value: RuntimeValue<ValueType>): boolean => unwrapSensitive(value).type === 'unknown';
+
+/** Whether a value is known and so is everything in it, as go-cty's IsWhollyKnown decides. */
+export function isWhollyKnown(value: RuntimeValue<ValueType>): boolean {
+    const plain = unwrapSensitive(value);
+    switch (plain.type) {
+        case 'unknown':
+            return false;
+        case 'array':
+            return (plain.value as RuntimeValue<ValueType>[]).every(isWhollyKnown);
+        case 'object':
+        case 'block':
+            return [...(plain.value as Map<string, RuntimeValue<ValueType>>).values()].every(isWhollyKnown);
+        default:
+            return true;
+    }
+}
+
 export const makeArrayValue = (value: RuntimeValue<ValueType>[]): RuntimeValue<'array'> => ({
     type: 'array',
     value
@@ -115,6 +144,9 @@ export function valueType(value: RuntimeValue<ValueType>): CtyType {
             return ctyBool;
         case 'null':
             if (!plain.ctyType) throw new TypeError('a null value carries no type');
+            return plain.ctyType;
+        case 'unknown':
+            if (!plain.ctyType) throw new TypeError('an unknown value carries no type');
             return plain.ctyType;
         case 'array':
             return plain.ctyType ?? tupleOf((plain.value as RuntimeValue<ValueType>[]).map(valueType));

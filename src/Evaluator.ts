@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { CtyNumber, NUMBER_OUT_OF_RANGE } from './cty-number';
+import { ConversionError, convert, getConversionUnsafe, unify } from './cty-convert';
 import {
 	arithmetic,
 	attributeType,
@@ -13,19 +14,25 @@ import {
 	conditionalResult,
 	conditionValue,
 	convertToBool,
+	describeConditionalTypeMismatch,
 	forCondition,
 	forElements,
 	forKey,
+	HclError,
 	indexValue,
 	negation,
 	objectKey,
 	operandBool,
+	settleUnknowns,
 	splatResult,
-	templatePart
+	templatePart,
+	UNSUPPORTED_ATTRIBUTE
 } from './cty-operations';
-import { ctyDynamic } from './cty-types';
+import { type CtyType, ctyBool, ctyDynamic, ctyNumber, ctyString, friendlyName, listOf, tupleOf, typeEquals } from './cty-types';
 import { FunctionOperation, invokeFunctionOperation, readArgs, FUNCTION_CONTEXT_KEY } from './function-ops';
-import { type FunctionSignature, markResult, prepareArguments } from './function-signature';
+import { EXPRESSION_CLOSURE, type FunctionSignature, markResult, parameterAt, prepareArguments } from './function-signature';
+import { goQuoted } from './go-quote';
+import { type HclDiagnostic, type HclRange, hclRange, hclValueText, rangeOver, rangeString } from './hcl-diagnostics';
 import type { InlineFunctionDefinition } from './inline-functions';
 import { checkTypeConstraint, readInlineFunction, readTypeConstraint, synthesizeDefinition } from './inline-functions';
 import { parseHclSyntax } from './syntax';
@@ -39,17 +46,23 @@ import {
 	logicalOperation,
 	NULL_OPERAND,
 	convertToRuntimeValue,
+	isUnknown,
+	isWhollyKnown,
 	makeArrayValue,
 	makeBooleanValue,
+	makeDynamicValue,
+	makeListValue,
 	makeNullValue,
 	makeNumberValue,
 	makeObjectValue,
 	makeSensitiveValue,
 	makeStringValue,
+	makeUnknownValue,
 	runtimeToJavaScript,
-	unwrapSensitive
+	unwrapSensitive,
+	valueType
 } from './functions/utils';
-import { decodeConfigFile, mergeDeep, mergeShallow, samePlain, terragruntConfigValue, throughJson, UNRESOLVED } from './terragrunt-config';
+import { decodeConfigFile, mergeDeep, mergeShallow, samePlain, terragruntConfigValue, throughJson, UnknownAttribute, UNRESOLVED } from './terragrunt-config';
 import type { ConfigBlock, ConfigBody, Plain, TerragruntConfig } from './terragrunt-config';
 import { isDefect } from './unresolved';
 import { isWrittenOut } from './writtenOut';
@@ -98,6 +111,12 @@ export interface ConfigEvaluatorOptions {
 	resolveDependency?: (request: DependencyRequest) => Promise<RuntimeValue<ValueType> | undefined>;
 	/** Omit fields that read unresolvable values, and expose them through unresolvedRenderFields(). */
 	partialRender?: boolean;
+	/**
+	 * Decode each file as Terragrunt's `render` decodes it: its inputs and the attributes of its blocks evaluated as HCL
+	 * evaluates them, going on past errors, and the file's errors let pass when one of them is an attribute a value
+	 * does not have. The errors let pass are given by toleratedDecodes().
+	 */
+	renderDecode?: boolean;
 	/**
 	 * When sops cannot decrypt a file, read its keys from the encrypted file itself, with the values left as sops
 	 * wrote them. For an editor, whose completion and hover can then name a secret's keys on a machine that has no
@@ -364,6 +383,29 @@ interface FileResult {
 	inputs: Map<string, RuntimeValue<ValueType>> | null;
 	unresolvedInputs: Map<string, {file: string; reason: string}>;
 	hasInputs: boolean;
+	/** The diagnostics a render's decode gave for the file's own inputs, which its decode weighs with the rest. */
+	inputDiagnostics: HclDiagnostic[];
+}
+
+/** An expression's value as HCL gives it, unknown where HCL's is, with the diagnostics it gives beside it. */
+interface Tolerated {
+	value: RuntimeValue<ValueType>;
+	diagnostics: HclDiagnostic[];
+}
+
+/**
+ * A file a render decoded past errors, as Terragrunt's CompleteTerragruntConfigFile lets them pass: the file, its
+ * text, and every diagnostic its decode gave, at least one of them an attribute a value does not have.
+ */
+export interface ToleratedDecode {
+	filePath: string;
+	content: string;
+	diagnostics: HclDiagnostic[];
+	/**
+	 * Read by read_terragrunt_config(), whose parser Terragrunt has write diagnostics only at the debug level, rather
+	 * than decoded for the configuration being rendered.
+	 */
+	quiet: boolean;
 }
 
 interface Scope {
@@ -473,6 +515,9 @@ function readMergeStrategy(value: RuntimeValue<ValueType>, includeName: string, 
 
 const AUTOINCLUDE_FILES = new Set(['terragrunt.autoinclude.hcl', 'terragrunt.autoinclude.stack.hcl']);
 
+/** The attributes Terragrunt decodes on their own before the rest of a file, to find the IAM role to parse it with. */
+const PRE_DECODED_FLAGS = ['iam_role', 'iam_web_identity_token', 'prevent_destroy'];
+
 /**
  * Identifier under which the configuration binding is exposed to inline function
  * bodies. The grammar rejects a parameter of this name, since it would shadow
@@ -578,11 +623,18 @@ export class ConfigEvaluator {
 		return [...new Map(this.renderUnresolved.map(issue => [JSON.stringify(issue), issue])).values()];
 	}
 
-	private async renderField(
+	private readonly tolerated: ToleratedDecode[] = [];
+
+	/** Each file the last render decoded past errors, in the order its decode ended. */
+	toleratedDecodes(): readonly ToleratedDecode[] {
+		return this.tolerated;
+	}
+
+	private async renderField<T = RuntimeValue<ValueType>>(
 		file: string,
 		field: string,
-		evaluate: () => Promise<RuntimeValue<ValueType>>
-	): Promise<RuntimeValue<ValueType> | undefined> {
+		evaluate: () => Promise<T>
+	): Promise<T | undefined> {
 		try {
 			return await evaluate();
 		} catch (error) {
@@ -864,6 +916,7 @@ export class ConfigEvaluator {
 		this.assertTrusted('Rendered configuration evaluation');
 		const workspaceRoot = await this.resolveWorkspaceRoot(workDir);
 		this.renderUnresolved.length = 0;
+		this.tolerated.length = 0;
 		const result = await this.evaluateFile(configPath, content, workspaceRoot);
 		return this.readTerragruntConfig(result, withOutputs);
 	}
@@ -1298,10 +1351,28 @@ export class ConfigEvaluator {
 				}
 			}
 		}
+		const inputDiagnostics: HclDiagnostic[] = [];
 		if (inputsAssignment && !skipInputs) {
 			const inputNode = requiredValueNode(inputsAssignment, 'root_assignment_identifier');
 			let value: RuntimeValue<ValueType>;
-			if (inputNode.type === 'object' && !(inputNode.children ?? []).some(child => child.type !== 'attribute')) {
+			if (this.options.renderDecode) {
+				// As Terragrunt's render decodes inputs: past their errors, which the file's decode weighs, with each value
+				// not known settled. A value that cannot be known yet leaves its input out, as a partial render does.
+				const valueOf = async (valueNode: TNode | undefined, key: string | undefined): Promise<Tolerated | undefined> => {
+					try {
+						const item = await this.tolerate(valueNode, scope);
+						if (key !== undefined) unresolvedInputs.delete(key);
+						return item;
+					} catch (error) {
+						if (!(error instanceof UnresolvedRenderValueError) || !this.options.partialRender) throw error;
+						if (key !== undefined) unresolvedInputs.set(key, {file: filePath, reason: error.message});
+						return undefined;
+					}
+				};
+				const evaluated = inputNode.type === 'object' ? await this.tolerateObject(inputNode, scope, valueOf) : await this.tolerate(inputNode, scope);
+				inputDiagnostics.push(...evaluated.diagnostics);
+				value = settleUnknowns(evaluated.value);
+			} else if (inputNode.type === 'object' && !(inputNode.children ?? []).some(child => child.type !== 'attribute')) {
 				// Attribute by attribute, so a fault in one does not hide a fault in the next.
 				const entries = new Map<string, RuntimeValue<ValueType>>();
 				let unresolved: UnresolvedRenderValueError | undefined;
@@ -1395,7 +1466,8 @@ export class ConfigEvaluator {
 			scope,
 			inputs: mergedInputs,
 			unresolvedInputs: mergedUnresolved,
-			hasInputs: inputsAssignment !== undefined
+			hasInputs: inputsAssignment !== undefined,
+			inputDiagnostics
 		};
 	}
 
@@ -1446,7 +1518,7 @@ export class ConfigEvaluator {
 					() => this.evaluateFile(target, fileContent, scope.workspaceRoot)
 				);
 				const written = new Map<string, RuntimeValue<ValueType>[]>();
-				const config = await this.readTerragruntConfig(result, true, written);
+				const config = await this.readTerragruntConfig(result, true, written, true);
 				return terragruntConfigValue(config, (field, plain) => written.get(field)?.find(value => samePlain(runtimeValueToPlain(value), plain)));
 			},
 			readTFVarsFile: async (relativePath: string) => {
@@ -1526,9 +1598,9 @@ export class ConfigEvaluator {
 	 * unresolved and read as unset. What is written to a file, a `generate` block's or the backend's, may not hold a
 	 * value sops left encrypted.
 	 */
-	private configBody(result: FileResult, scope: Scope, values?: Map<string, RuntimeValue<ValueType>[]>): ConfigBody {
+	private configBody(result: FileResult, scope: Scope, values?: Map<string, RuntimeValue<ValueType>[]>, diagnostics?: HclDiagnostic[]): ConfigBody {
 		const file = result.filePath;
-		const attribute = (field: string, node: TNode, written: boolean) => async (): Promise<Plain | typeof UNRESOLVED> => {
+		const strict = (field: string, node: TNode, written: boolean) => async (): Promise<Plain | typeof UNRESOLVED> => {
 			const value = await this.renderField(file, field, async () => {
 				const evaluated = await this.evalNode(node, scope);
 				return written ? computable(evaluated) : evaluated;
@@ -1536,6 +1608,35 @@ export class ConfigEvaluator {
 			if (value === undefined) return UNRESOLVED;
 			values?.set(field, [...(values.get(field) ?? []), value]);
 			return runtimeValueToPlain(value);
+		};
+		// A render's decode evaluates as HCL does, going on past errors; a value not wholly known is settled for a field
+		// kept as a cty value, and not known to a field of a Go type, which gohcl reports.
+		const tolerant = (field: string, node: TNode, written: boolean, sink: HclDiagnostic[]) => async (): Promise<Plain | typeof UNRESOLVED | UnknownAttribute> => {
+			const evaluated = await this.renderField(file, field, () => this.tolerate(node, scope));
+			if (evaluated === undefined) return UNRESOLVED;
+			sink.push(...evaluated.diagnostics);
+			const value = written ? computable(evaluated.value) : evaluated.value;
+			const settled = settleUnknowns(value);
+			values?.set(field, [...(values.get(field) ?? []), settled]);
+			if (isWhollyKnown(value)) return runtimeValueToPlain(value);
+			return new UnknownAttribute(runtimeValueToPlain(settled), () => {
+				const subject = this.startRangeOf(scope, node);
+				sink.push({
+					summary: 'Unsuitable value type',
+					detail: 'Unsuitable value: value must be known',
+					subject,
+					context: this.rangeOf(scope, node),
+					block: topLevelBlockName(scope.ast, subject.start.offset)
+				});
+			});
+		};
+		// Terragrunt decodes dependency and feature blocks apart from the rest, and the flags it reads before the rest of
+		// the file (iam_role, iam_web_identity_token, prevent_destroy) by a decode of their own, none of which goes on
+		// past an error.
+		const attribute = (field: string, node: TNode, written: boolean) => {
+			const [head] = field.split('.');
+			if (!diagnostics || ['dependency', 'feature', 'include', 'locals', ...PRE_DECODED_FLAGS].includes(head)) return strict(field, node, written);
+			return tolerant(field, node, written, diagnostics);
 		};
 		const block = (node: TNode, prefix: string, written: boolean): ConfigBlock => {
 			const type = String(node.value);
@@ -1565,20 +1666,28 @@ export class ConfigEvaluator {
 	 * unit's own, then its autoinclude merged over it shallowly, then each include merged under it, the last first,
 	 * by the include's strategy. The locals are the unit's own and the exclude block the unit's when it has one; the
 	 * inputs are those the evaluation merged. With `withOutputs`, each enabled dependency that does not skip its
-	 * outputs carries them.
+	 * outputs has them read, as Terragrunt reads every dependency's outputs as it parses; read by
+	 * read_terragrunt_config(), the dependency carries them, as only that function's configuration does in Terragrunt.
 	 */
-	private async readTerragruntConfig(result: FileResult, withOutputs: boolean, values?: Map<string, RuntimeValue<ValueType>[]>): Promise<TerragruntConfig> {
+	private async readTerragruntConfig(result: FileResult, withOutputs: boolean, values?: Map<string, RuntimeValue<ValueType>[]>, readByFunction = false): Promise<TerragruntConfig> {
 		for (const [name, issue] of result.unresolvedInputs) {
 			this.renderUnresolved.push({file: issue.file, field: `inputs.${name}`, reason: issue.reason});
 		}
-		const own = await decodeConfigFile(this.configBody(result, result.scope, values));
+		const decode = async (from: FileResult, scope: Scope): Promise<TerragruntConfig> => {
+			if (!this.options.renderDecode) return decodeConfigFile(this.configBody(from, scope, values));
+			const diagnostics = [...from.inputDiagnostics];
+			const config = await decodeConfigFile(this.configBody(from, scope, values, diagnostics));
+			this.settleDecode(from, diagnostics, readByFunction);
+			return config;
+		};
+		const own = await decode(result, result.scope);
 		const autoinclude = result.scope.autoinclude;
-		if (autoinclude) mergeShallow(own, await decodeConfigFile(this.configBody(autoinclude, this.mergedScope(autoinclude, result), values)));
+		if (autoinclude) mergeShallow(own, await decode(autoinclude, this.mergedScope(autoinclude, result)));
 		let config = own;
 		for (const name of [...result.scope.includes.keys()].reverse()) {
 			const include = result.scope.includes.get(name)!;
 			if (include.mergeStrategy === 'no_merge') continue;
-			const included = await decodeConfigFile(this.configBody(include.result, this.mergedScope(include.result, result), values));
+			const included = await decode(include.result, this.mergedScope(include.result, result));
 			if (include.mergeStrategy === 'deep') mergeDeep(included, config);
 			else mergeShallow(included, config);
 			config = included;
@@ -1596,13 +1705,38 @@ export class ConfigEvaluator {
 		for (const dependency of withOutputs ? config.dependencyBlocks : []) {
 			if (dependency.enabled === false || dependency.skipOutputs === true) continue;
 			const value = await this.renderField(result.filePath, `dependency.${dependency.name}`, () => this.dependencyValue(dependency.name, result.scope));
-			if (value === undefined) continue;
+			if (value === undefined || !readByFunction) continue;
 			const outputs = (runtimeValueToPlain(value) as Record<string, Plain>).outputs;
 			dependency.outputs = outputs === undefined ? null : outputs;
 			const typed = (unwrapSensitive(value).value as Map<string, RuntimeValue<ValueType>>).get('outputs');
 			if (typed) values?.set(`dependency.${dependency.name}.outputs`, [typed]);
 		}
 		return config;
+	}
+
+	/**
+	 * Weighs one file's decode as Terragrunt's CompleteTerragruntConfigFile weighs it for a render: when any of its
+	 * diagnostics is an attribute a value does not have (isAttributeAccessError), every one of them is let pass and
+	 * the file recorded among the tolerated decodes; otherwise the first fails the render.
+	 *
+	 * @param from the file decoded.
+	 * @param diagnostics every diagnostic its decode gave, its inputs' first.
+	 * @param quiet whether read_terragrunt_config() read it.
+	 * @throws LocatedEvaluationError for the first diagnostic, where none is an attribute a value does not have.
+	 */
+	private settleDecode(from: FileResult, diagnostics: HclDiagnostic[], quiet: boolean): void {
+		if (diagnostics.length === 0) return;
+		if (diagnostics.some(diagnostic => diagnostic.summary.includes(UNSUPPORTED_ATTRIBUTE))) {
+			this.tolerated.push({ filePath: from.filePath, content: from.content, diagnostics, quiet });
+			return;
+		}
+		const [first] = diagnostics;
+		const subject = first.subject;
+		const at = (offset: number, line: number) => ({ line: line - 1, character: offset - (from.content.lastIndexOf('\n', offset - 1) + 1) });
+		const range: Range = subject && subject.filename === from.filePath
+			? { start: at(subject.start.offset, subject.start.line), end: at(subject.end.offset, subject.end.line) }
+			: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } };
+		throw new LocatedEvaluationError(first.detail, subject?.filename ?? from.filePath, range);
 	}
 
 	private async readTFVars(target: string, content: string): Promise<RuntimeValue<ValueType>> {
@@ -1947,6 +2081,1058 @@ export class ConfigEvaluator {
 			if (!(error instanceof Error) || !range) throw error;
 			throw new LocatedEvaluationError(error.message, scope.filePath, range, { cause: error });
 		}
+	}
+
+	/*
+	 * Tolerant evaluation: an expression evaluated as hclsyntax v2.25.0 evaluates it, giving a value and the
+	 * diagnostics beside it rather than stopping at the first fault. Where a part of an expression has errors, the
+	 * expression gives what HCL gives in its place: an unknown of its result's type, or of no known type, and the
+	 * other parts as they are. Terragrunt decodes a configuration for `render` this way and goes on past its errors
+	 * when one of them is an attribute a value does not have (see renderDecode).
+	 */
+
+	/** The range of a node in its file, as HCL counts it; for a postfix expression, up to where it ends. */
+	private rangeOf(scope: Scope, node: TNode): HclRange {
+		if (!node.location) throw new TypeError(`a ${node.type} node has no location`);
+		return hclRange(scope.filePath, scope.content, node.location.start.offset, this.endOf(scope, node));
+	}
+
+	/** The range between two offsets of a scope's file. */
+	private rangeAt(scope: Scope, start: number, end: number): HclRange {
+		return hclRange(scope.filePath, scope.content, start, end);
+	}
+
+	/**
+	 * Where an expression ends. A postfix expression's node spans the whole chain it is part of, so its end is worked
+	 * out from its base and the source after it: `]` for an index, the member's name, and a splat's `[*]` or `.*` and
+	 * the attribute after it.
+	 */
+	private endOf(scope: Scope, node: TNode): number {
+		if (!node.location) throw new TypeError(`a ${node.type} node has no location`);
+		const [base, tail] = node.children ?? [];
+		const after = (offset: number): number => {
+			let index = offset;
+			while (index < scope.content.length && /\s/u.test(scope.content[index])) index++;
+			return index;
+		};
+		switch (node.type) {
+			case 'index_expression': {
+				if (!tail?.location) return node.location.end.offset;
+				return after(this.endOf(scope, tail)) + 1;
+			}
+			case 'member_access': {
+				if (!base) return node.location.end.offset;
+				const dot = after(this.endOf(scope, base));
+				return after(dot + 1) + String(tail?.value ?? '').length;
+			}
+			case 'splat_expression': {
+				if (!base) return node.location.end.offset;
+				let index = after(this.endOf(scope, base));
+				index = scope.content[index] === '[' ? scope.content.indexOf(']', index) + 1 : index + 2;
+				if (!tail) return index;
+				const dot = after(index);
+				return after(dot + 1) + String(tail.value ?? '').length;
+			}
+			default:
+				return node.location.end.offset;
+		}
+	}
+
+	/**
+	 * Where an expression starts, as HCL's StartRange gives it for a diagnostic about a value it gave: a function call's
+	 * name and `(`, a tuple's `[`, an object's `{`, an operation's or conditional's first operand, a template's first
+	 * part, and any other expression whole.
+	 */
+	private startRangeOf(scope: Scope, node: TNode): HclRange {
+		const [first] = node.children ?? [];
+		switch (node.type) {
+			case 'function_call': {
+				const start = node.location!.start.offset;
+				return this.rangeAt(scope, start, scope.content.indexOf('(', start + String(node.value ?? '').length) + 1);
+			}
+			case 'array_lit':
+			case 'object':
+			case 'list_comprehension':
+			case 'map_comprehension': {
+				const start = node.location!.start.offset;
+				return this.rangeAt(scope, start, start + 1);
+			}
+			case 'arithmetic_expression':
+			case 'comparison_expression':
+			case 'logical_expression':
+			case 'ternary_expression': {
+				// A binary operation and a conditional start with their first operand; a unary operation with its symbol.
+				if (first && (node.children?.length ?? 0) > 1) return this.startRangeOf(scope, first);
+				const start = node.location!.start.offset;
+				return this.rangeAt(scope, start, start + 1);
+			}
+			case 'interpolated_string': {
+				const children = node.children ?? [];
+				if (children.length === 1 && children[0].type === 'interpolation') return this.rangeOf(scope, node);
+				const part = children[0]?.type === 'interpolation' ? children[0].children?.[0] : children[0];
+				return part?.location ? this.startRangeOf(scope, part) : this.rangeOf(scope, node);
+			}
+			default:
+				return this.rangeOf(scope, node);
+		}
+	}
+
+	/**
+	 * A diagnostic about part of a scope's file. Where HCL's diagnostic carries the expression it is about, the values
+	 * of the variables that expression reads are worked out here, as HCL's text writer works them out.
+	 */
+	private async diagnosticAt(scope: Scope, summary: string, detail: string, subject: HclRange, context?: HclRange, expression?: TNode): Promise<HclDiagnostic> {
+		const diagnostic: HclDiagnostic = { summary, detail, subject, block: topLevelBlockName(scope.ast, subject.start.offset) };
+		if (context) diagnostic.context = context;
+		if (expression) {
+			const values = await this.diagnosticValues(expression, scope);
+			if (values.length > 0) diagnostic.values = values;
+		}
+		return diagnostic;
+	}
+
+	/**
+	 * The values of the variables an expression reads, as HCL's text writer states them after a diagnostic's source:
+	 * `name as value`, or `name set to null`, sorted; one that cannot be read without errors, is unknown or is
+	 * sensitive is not stated.
+	 */
+	private async diagnosticValues(expression: TNode, scope: Scope): Promise<string[]> {
+		const statements = new Map<string, string>();
+		for (const reference of referencesIn(expression)) {
+			const steps = this.referenceSteps(reference, scope);
+			const text = steps.map((step, index) => index === 0 ? step.name : step.key === undefined ? `.${step.name}` : `[${hclValueText(step.key)}]`).join('');
+			if (statements.has(text)) continue;
+			const resolved = await this.tolerateReference(reference, scope).catch(() => undefined);
+			if (!resolved || resolved.diagnostics.length > 0) continue;
+			const value = resolved.value;
+			if (value.type === 'unknown' || (value.type as string) === 'sensitive') continue;
+			statements.set(text, value.type === 'null' ? `${text} set to null` : `${text} as ${hclValueText(value)}`);
+		}
+		return [...statements.values()].sort(compareStrings);
+	}
+
+	/**
+	 * A fault thrown while part of an expression was evaluated, as a diagnostic: what HCL calls it where its summary is
+	 * known, and where it was written. A value that cannot be known yet and a defect in the evaluator are not
+	 * diagnostics: they are thrown on.
+	 */
+	private async faultDiagnostic(error: unknown, scope: Scope, node: TNode): Promise<HclDiagnostic> {
+		if (!(error instanceof Error) || isDefect(error) || error instanceof UnresolvedRenderValueError) throw error;
+		let cause: unknown = error;
+		while (cause instanceof LocatedEvaluationError && cause.cause instanceof Error) cause = cause.cause;
+		if (cause instanceof HclError) return this.diagnosticAt(scope, cause.summary, cause.message, this.rangeOf(scope, node));
+		const message = cause instanceof Error ? cause.message : String(cause);
+		// tghclp's own faults, and those it words as HCL does, write the summary before the detail.
+		const stated = /^([A-Z][^;\n]*); ([\s\S]*)$/u.exec(message);
+		return this.diagnosticAt(scope, stated ? stated[1] : 'Invalid expression', stated ? stated[2] : message, this.rangeOf(scope, node));
+	}
+
+	/**
+	 * Evaluates an expression tolerantly: as hclsyntax evaluates it, with the diagnostics it gives.
+	 *
+	 * @param node the expression.
+	 * @param scope the scope of the file it is written in.
+	 * @returns its value, unknown where HCL's is, and its diagnostics.
+	 * @throws UnresolvedRenderValueError when part of it cannot be known yet, as the strict evaluation throws it.
+	 */
+	private async tolerate(node: TNode | undefined, scope: Scope): Promise<Tolerated> {
+		if (!node) throw new TypeError('Cannot evaluate an empty expression');
+		switch (node.type) {
+			case 'array_lit': {
+				const values: RuntimeValue<ValueType>[] = [];
+				const diagnostics: HclDiagnostic[] = [];
+				for (const element of node.children ?? []) {
+					const item = await this.tolerate(element, scope);
+					values.push(item.value);
+					diagnostics.push(...item.diagnostics);
+				}
+				return { value: makeArrayValue(values), diagnostics };
+			}
+			case 'object':
+				return this.tolerateObject(node, scope);
+			case 'interpolated_string': {
+				const children = node.children ?? [];
+				if (children.length === 1 && children[0].type === 'interpolation') return this.tolerate(children[0], scope);
+				return this.tolerateTemplate(node, scope);
+			}
+			case 'interpolation':
+				if (!node.children?.length) break;
+				return this.tolerate(node.children[0], scope);
+			case 'if_directive': {
+				const [condition, whenTrue, whenFalse] = node.children ?? [];
+				return this.tolerateConditional(node, condition, () => this.tolerateTemplate(whenTrue, scope), () => this.tolerateTemplate(whenFalse, scope), scope);
+			}
+			case 'for_directive':
+				return this.tolerateTemplateFor(node, scope);
+			case 'ternary_expression': {
+				const [condition, whenTrue, whenFalse] = node.children ?? [];
+				return this.tolerateConditional(node, condition, () => this.tolerate(whenTrue, scope), () => this.tolerate(whenFalse, scope), scope);
+			}
+			case 'logical_expression':
+				return String(node.value) === '!' ? this.tolerateUnary(node, ctyBool, scope) : this.tolerateLogical(node, scope);
+			case 'comparison_expression': {
+				const operator = String(node.value);
+				return this.tolerateBinary(node, operator === '==' || operator === '!=' ? ctyDynamic : ctyNumber, ctyBool, scope);
+			}
+			case 'arithmetic_expression':
+				return (node.children?.length ?? 0) === 1 ? this.tolerateUnary(node, ctyNumber, scope) : this.tolerateBinary(node, ctyNumber, ctyNumber, scope);
+			case 'member_access':
+				return this.tolerateMemberAccess(node, scope);
+			case 'index_expression':
+				return this.tolerateIndex(node, scope);
+			case 'list_comprehension':
+			case 'map_comprehension':
+			case 'for_expression':
+				return this.tolerateFor(node, scope);
+			case 'splat_expression':
+				return this.tolerateSplat(node, scope);
+			case 'function_call':
+				return this.tolerateCall(node, scope);
+			case 'reference':
+			case 'local_reference':
+			case 'terraform_reference':
+			case 'var_reference':
+			case 'data_reference':
+			case 'module_reference':
+			case 'dependency_reference':
+			case 'path_reference':
+			case 'traversal_reference':
+				return this.tolerateReference(node, scope);
+			default:
+				break;
+		}
+		// A literal, and the expressions only tghclp's grammar has, evaluated strictly; a fault in one is its diagnostic.
+		try {
+			return { value: await this.evalNode(node, scope), diagnostics: [] };
+		} catch (error) {
+			return { value: makeDynamicValue(), diagnostics: [await this.faultDiagnostic(error, scope, node)] };
+		}
+	}
+
+	/**
+	 * HCL's ObjectConsExpr: each key and value evaluated; a key that has errors, is null or unknown, or is not a string
+	 * makes the object of no known type.
+	 *
+	 * @param node the object.
+	 * @param scope the scope of the file it is written in.
+	 * @param valueOf evaluates an attribute's value, given its key's text where the key evaluated to one; undefined
+	 *   leaves the attribute out.
+	 */
+	private async tolerateObject(
+		node: TNode,
+		scope: Scope,
+		valueOf: (valueNode: TNode | undefined, key: string | undefined) => Promise<Tolerated | undefined> = valueNode => this.tolerate(valueNode, scope)
+	): Promise<Tolerated> {
+		const entries = new Map<string, RuntimeValue<ValueType>>();
+		const diagnostics: HclDiagnostic[] = [];
+		let known = true;
+		for (const child of node.children ?? []) {
+			if (child.type === 'inheritance') {
+				// tghclp's own `...source`: every attribute of the source not set by name.
+				const source = await this.tolerate(child.children?.[0], scope);
+				diagnostics.push(...source.diagnostics);
+				if (source.diagnostics.length > 0 || source.value.type === 'unknown') {
+					known = false;
+					continue;
+				}
+				if (!isObjectValue(source.value)) {
+					diagnostics.push(await this.diagnosticAt(scope, 'Invalid expression', 'inherit requires an object source', this.rangeOf(scope, child)));
+					known = false;
+					continue;
+				}
+				for (const [key, value] of source.value.value as Map<string, RuntimeValue<ValueType>>) if (!entries.has(key)) entries.set(key, value);
+				continue;
+			}
+			if (child.type !== 'attribute') continue;
+			const keyNode = child.children?.find(part => part.type === 'object_key');
+			const valueNode = child.children?.find(part => part.type !== 'attribute_identifier' && part.type !== 'object_key');
+			const key = keyNode ? await this.tolerate(keyNode.children?.[0], scope) : { value: makeStringValue(String(child.value)), diagnostics: [] };
+			diagnostics.push(...key.diagnostics);
+			const keyPlain = unwrapSensitive(key.value);
+			const value = await valueOf(valueNode, key.diagnostics.length === 0 && keyPlain.type === 'string' ? String(keyPlain.value) : undefined);
+			if (!value) continue;
+			diagnostics.push(...value.diagnostics);
+			if (key.diagnostics.length > 0) {
+				known = false;
+				continue;
+			}
+			const keyValue = unwrapSensitive(computable(key.value));
+			if (keyValue.type === 'null') {
+				diagnostics.push(await this.diagnosticAt(scope, 'Null value as key', "Can't use a null value as a key.", this.rangeOf(scope, valueNode!), undefined, keyNode?.children?.[0]));
+				known = false;
+				continue;
+			}
+			let converted: RuntimeValue<ValueType>;
+			try {
+				converted = convert(keyValue, ctyString);
+			} catch (error) {
+				if (!(error instanceof ConversionError)) throw error;
+				diagnostics.push(await this.diagnosticAt(scope, 'Incorrect key type', `Can't use this value as a key: ${error.message}.`, this.rangeOf(scope, keyNode!.children![0]), undefined, keyNode?.children?.[0]));
+				known = false;
+				continue;
+			}
+			if (converted.type === 'unknown') {
+				known = false;
+				continue;
+			}
+			entries.set(String(converted.value), value.value);
+		}
+		return { value: known ? makeObjectValue(entries) : makeDynamicValue(), diagnostics };
+	}
+
+	/**
+	 * HCL's TemplateExpr: each part rendered and converted to a string; an unknown part makes the result an unknown
+	 * string, and once a part has errors the parts after it are no longer added to the text.
+	 */
+	private async tolerateTemplate(node: TNode | undefined, scope: Scope): Promise<Tolerated> {
+		// A template `if` without an `else` has the empty template for it.
+		if (!node) return { value: makeStringValue(''), diagnostics: [] };
+		if (node.type === 'string_lit') return { value: makeStringValue(String(node.value ?? '')), diagnostics: [] };
+		if (node.type !== 'interpolated_string') throw new TypeError(`A template cannot be a ${node.type}`);
+		const templateRange = this.rangeOf(scope, node);
+		const diagnostics: HclDiagnostic[] = [];
+		let text = '';
+		let known = true;
+		let sensitive = false;
+		for (const child of node.children ?? []) {
+			if (child.type === 'string_lit') {
+				if (known && diagnostics.length === 0) text += String(child.value ?? '');
+				continue;
+			}
+			const expression = child.type === 'interpolation' ? child.children?.[0] : child;
+			const part = await this.tolerate(child, scope);
+			diagnostics.push(...part.diagnostics);
+			const partRange = this.rangeOf(scope, expression ?? child);
+			const value = computable(part.value);
+			const plain = unwrapSensitive(value);
+			if (plain.type === 'null') {
+				diagnostics.push(await this.diagnosticAt(scope, 'Invalid template interpolation value', 'The expression result is null. Cannot include a null value in a string template.', partRange, templateRange, expression));
+				continue;
+			}
+			sensitive ||= plain !== value;
+			if (plain.type === 'unknown') {
+				known = false;
+				continue;
+			}
+			let converted: RuntimeValue<ValueType>;
+			try {
+				converted = convert(plain, ctyString);
+			} catch (error) {
+				if (!(error instanceof ConversionError)) throw error;
+				diagnostics.push(await this.diagnosticAt(scope, 'Invalid template interpolation value', `Cannot include the given value in a string template: ${error.message}.`, partRange, templateRange, expression));
+				continue;
+			}
+			if (known && diagnostics.length === 0) text += String(converted.value);
+		}
+		const value = known ? makeStringValue(text) : makeUnknownValue(ctyString);
+		return { value: sensitive ? makeSensitiveValue(value) : value, diagnostics };
+	}
+
+	/** A template's `%{ for }`, as HCL's TemplateJoinExpr joins the for expression it lowers it to. */
+	private async tolerateTemplateFor(node: TNode, scope: Scope): Promise<Tolerated> {
+		const tuple = await this.tolerateFor(node, scope);
+		const diagnostics = [...tuple.diagnostics];
+		const value = unwrapSensitive(tuple.value);
+		if (value.type === 'unknown') return { value: makeUnknownValue(ctyString), diagnostics };
+		let text = '';
+		for (const element of value.value as RuntimeValue<ValueType>[]) {
+			const plain = unwrapSensitive(element);
+			if (plain.type === 'null') {
+				diagnostics.push(await this.diagnosticAt(scope, 'Invalid template interpolation value', 'An iteration result is null. Cannot include a null value in a string template.', this.rangeOf(scope, node), undefined, node));
+				continue;
+			}
+			if (plain.type === 'unknown') return { value: makeUnknownValue(ctyString), diagnostics };
+			let converted: RuntimeValue<ValueType>;
+			try {
+				converted = convert(plain, ctyString);
+			} catch (error) {
+				if (!(error instanceof ConversionError)) throw error;
+				diagnostics.push(await this.diagnosticAt(scope, 'Invalid template interpolation value', `Cannot include one of the interpolation results into the string template: ${error.message}.`, this.rangeOf(scope, node), undefined, node));
+				continue;
+			}
+			text += String(converted.value);
+		}
+		return { value: makeStringValue(text), diagnostics };
+	}
+
+	/**
+	 * HCL's ConditionalExpr: both branches evaluated first and their types unified to the result's; then the
+	 * condition, an unknown one making the result an unknown of that type; then the chosen branch, whose diagnostics
+	 * alone are kept, converted to that type.
+	 */
+	private async tolerateConditional(node: TNode, conditionNode: TNode | undefined, whenTrue: () => Promise<Tolerated>, whenFalse: () => Promise<Tolerated>, scope: Scope): Promise<Tolerated> {
+		const trueResult = await whenTrue();
+		const falseResult = await whenFalse();
+		const trueType = valueType(trueResult.value);
+		const falseType = valueType(falseResult.value);
+		const isUntypedNull = (value: RuntimeValue<ValueType>): boolean => value.type === 'null' && value.ctyType?.kind === 'dynamic';
+		let resultType: CtyType = ctyDynamic;
+		let conversions: (((value: RuntimeValue<ValueType>) => RuntimeValue<ValueType>) | undefined)[] = [undefined, undefined];
+		if (isUntypedNull(trueResult.value)) {
+			resultType = falseType;
+			conversions = [getConversionUnsafe(ctyDynamic, resultType), undefined];
+		} else if (isUntypedNull(falseResult.value)) {
+			resultType = trueType;
+			conversions = [undefined, getConversionUnsafe(ctyDynamic, resultType)];
+		} else if (trueType.kind !== 'dynamic' && falseType.kind !== 'dynamic') {
+			const unified = unify([trueType, falseType], true);
+			if (!unified) {
+				const [whenTrueNode, whenFalseNode] = [node.children?.[1], node.children?.[2]];
+				const subject = whenTrueNode && whenFalseNode ? rangeOver(this.rangeOf(scope, whenTrueNode), this.rangeOf(scope, whenFalseNode)) : this.rangeOf(scope, node);
+				return {
+					value: makeDynamicValue(),
+					diagnostics: [await this.diagnosticAt(scope, 'Inconsistent conditional result types', `The true and false result expressions must have consistent types. ${describeConditionalTypeMismatch(trueType, falseType)}.`, subject, this.rangeOf(scope, node), node)]
+				};
+			}
+			resultType = unified.type;
+			conversions = unified.conversions;
+		}
+		const condition = await this.tolerate(conditionNode, scope);
+		const diagnostics = [...condition.diagnostics];
+		const conditionValue = unwrapSensitive(computable(condition.value));
+		const sensitive = [condition.value, trueResult.value, falseResult.value].some(value => (value.type as string) === 'sensitive');
+		const mark = (value: RuntimeValue<ValueType>): RuntimeValue<ValueType> => sensitive && (value.type as string) !== 'sensitive' ? makeSensitiveValue(value) : value;
+		if (conditionValue.type === 'null') {
+			diagnostics.push(await this.diagnosticAt(scope, 'Null condition', 'The condition value is null. Conditions must either be true or false.', this.rangeOf(scope, conditionNode!), this.rangeOf(scope, node), conditionNode));
+			return { value: makeUnknownValue(resultType), diagnostics };
+		}
+		if (conditionValue.type === 'unknown') {
+			if (unwrapSensitive(trueResult.value).type === 'null' && unwrapSensitive(falseResult.value).type === 'null') return { value: mark(makeNullValue(resultType)), diagnostics };
+			return { value: mark(makeUnknownValue(resultType)), diagnostics };
+		}
+		let truth: boolean;
+		try {
+			truth = Boolean(convert(conditionValue, ctyBool).value);
+		} catch (error) {
+			if (!(error instanceof ConversionError)) throw error;
+			diagnostics.push(await this.diagnosticAt(scope, 'Incorrect condition type', 'The condition expression must be of type bool.', this.rangeOf(scope, conditionNode!), this.rangeOf(scope, node), conditionNode));
+			return { value: makeUnknownValue(resultType), diagnostics };
+		}
+		const chosen = truth ? trueResult : falseResult;
+		diagnostics.push(...chosen.diagnostics);
+		const conversion = conversions[truth ? 0 : 1];
+		if (!conversion) return { value: mark(unwrapSensitive(chosen.value)), diagnostics };
+		try {
+			return { value: mark(conversion(unwrapSensitive(chosen.value))), diagnostics };
+		} catch (error) {
+			if (!(error instanceof ConversionError)) throw error;
+			const branch = node.children?.[truth ? 1 : 2];
+			diagnostics.push(await this.diagnosticAt(scope, 'Inconsistent conditional result types', `The ${truth ? 'true' : 'false'} result value has the wrong type: ${error.message}.`, branch ? this.rangeOf(scope, branch) : this.rangeOf(scope, node), this.rangeOf(scope, node), branch));
+			return { value: makeUnknownValue(resultType), diagnostics };
+		}
+	}
+
+	/**
+	 * An operand of an operation converted to the type the operation takes, as HCL's BinaryOpExpr and UnaryOpExpr
+	 * convert one, or the diagnostic saying why it does not convert.
+	 */
+	private async tolerateOperand(operand: Tolerated, type: CtyType, side: 'left' | 'right' | 'unary', operandNode: TNode, node: TNode, scope: Scope): Promise<{ value: RuntimeValue<ValueType> } | { diagnostic: HclDiagnostic }> {
+		try {
+			return { value: convert(computable(operand.value), type) };
+		} catch (error) {
+			if (!(error instanceof ConversionError)) throw error;
+			return { diagnostic: await this.diagnosticAt(scope, 'Invalid operand', `Unsuitable value for ${side} operand: ${error.message}.`, this.rangeOf(scope, operandNode), this.rangeOf(scope, node), operandNode) };
+		}
+	}
+
+	/** HCL's BinaryOpExpr for an arithmetic or comparison operator: an unknown of the result's type where an operand has errors or is unknown. */
+	private async tolerateBinary(node: TNode, operandType: CtyType, resultType: CtyType, scope: Scope): Promise<Tolerated> {
+		const [leftNode, rightNode] = node.children ?? [];
+		const operator = String(node.value);
+		const left = await this.tolerate(leftNode, scope);
+		const leftOperand = await this.tolerateOperand(left, operandType, 'left', leftNode!, node, scope);
+		const right = await this.tolerate(rightNode, scope);
+		const rightOperand = await this.tolerateOperand(right, operandType, 'right', rightNode!, node, scope);
+		const conversionDiagnostics = [leftOperand, rightOperand].flatMap(operand => ('diagnostic' in operand ? [operand.diagnostic] : []));
+		if (conversionDiagnostics.length > 0) return { value: makeUnknownValue(resultType), diagnostics: [...conversionDiagnostics, ...left.diagnostics, ...right.diagnostics] };
+		const diagnostics = [...left.diagnostics, ...right.diagnostics];
+		const operands = [left.value, right.value].map(computable);
+		if (diagnostics.length > 0 || operands.some(isUnknown)) return { value: makeUnknownValue(resultType), diagnostics };
+		try {
+			const value = resultType.kind === 'number' ? arithmetic(operator, operands[0], operands[1]) : comparison(operator, operands[0], operands[1]);
+			return { value, diagnostics };
+		} catch (error) {
+			if (!(error instanceof HclError)) throw error;
+			return { value: makeUnknownValue(resultType), diagnostics: [await this.diagnosticAt(scope, error.summary, error.message, this.rangeOf(scope, node), undefined, node)] };
+		}
+	}
+
+	/** HCL's UnaryOpExpr: `!` or unary `-`, an unknown of the result's type where the operand has errors. */
+	private async tolerateUnary(node: TNode, type: CtyType, scope: Scope): Promise<Tolerated> {
+		const operandNode = node.children?.[0];
+		const operand = await this.tolerate(operandNode, scope);
+		const converted = await this.tolerateOperand(operand, type, 'unary', operandNode!, node, scope);
+		const diagnostics = [...operand.diagnostics, ...('diagnostic' in converted ? [converted.diagnostic] : [])];
+		if (diagnostics.length > 0 || !('value' in converted) || isUnknown(converted.value)) return { value: makeUnknownValue(type), diagnostics };
+		try {
+			if (type.kind === 'number') return { value: negation(operand.value), diagnostics };
+			const truth = operandBool(operand.value, 'unary');
+			if (truth === null) throw new HclError('Operation failed', NULL_OPERAND);
+			return { value: makeBooleanValue(!truth), diagnostics };
+		} catch (error) {
+			if (!(error instanceof HclError)) throw error;
+			return { value: makeUnknownValue(type), diagnostics: [await this.diagnosticAt(scope, error.summary, error.message, this.rangeOf(scope, node), undefined, node)] };
+		}
+	}
+
+	/**
+	 * HCL's BinaryOpExpr for `&&` and `||`: the operands converted to bools, then the operation's short circuit, which
+	 * takes the result from one operand, known or not, and keeps only that operand's diagnostics.
+	 */
+	private async tolerateLogical(node: TNode, scope: Scope): Promise<Tolerated> {
+		const [leftNode, rightNode] = node.children ?? [];
+		const operator = String(node.value) as '&&' | '||';
+		const left = await this.tolerate(leftNode, scope);
+		const leftOperand = await this.tolerateOperand(left, ctyBool, 'left', leftNode!, node, scope);
+		const right = await this.tolerate(rightNode, scope);
+		const rightOperand = await this.tolerateOperand(right, ctyBool, 'right', rightNode!, node, scope);
+		if (!('value' in leftOperand) || !('value' in rightOperand)) {
+			const conversionDiagnostics = [leftOperand, rightOperand].flatMap(operand => ('diagnostic' in operand ? [operand.diagnostic] : []));
+			return { value: makeUnknownValue(ctyBool), diagnostics: [...conversionDiagnostics, ...left.diagnostics, ...right.diagnostics] };
+		}
+		const sensitive = [leftOperand.value, rightOperand.value].some(value => (value.type as string) === 'sensitive');
+		const mark = (value: RuntimeValue<ValueType>): RuntimeValue<ValueType> => sensitive ? makeSensitiveValue(value) : value;
+		const lhs = unwrapSensitive(leftOperand.value);
+		const rhs = unwrapSensitive(rightOperand.value);
+		// go-cty's True and False read a null bool as false.
+		const isTrue = (value: RuntimeValue<ValueType>): boolean => value.type === 'boolean' && value.value === true;
+		const deciding = operator === '||' ? isTrue : (value: RuntimeValue<ValueType>) => value.type !== 'unknown' && !isTrue(value);
+		const opposite = operator === '||' ? (value: RuntimeValue<ValueType>) => value.type !== 'unknown' && !isTrue(value) : isTrue;
+		if (lhs.type === 'unknown' && rhs.type === 'unknown') {
+			if (left.diagnostics.length === 0) return { value: mark(makeUnknownValue(ctyBool)), diagnostics: left.diagnostics };
+		} else if (lhs.type !== 'unknown' && deciding(lhs)) {
+			return { value: mark(makeBooleanValue(operator === '||')), diagnostics: left.diagnostics };
+		} else if (rhs.type !== 'unknown' && deciding(rhs)) {
+			return { value: mark(makeBooleanValue(operator === '||')), diagnostics: right.diagnostics };
+		} else if (lhs.type === 'unknown' && opposite(rhs)) {
+			return { value: mark(makeUnknownValue(ctyBool)), diagnostics: left.diagnostics };
+		} else if (rhs.type === 'unknown' && opposite(lhs)) {
+			return { value: mark(makeUnknownValue(ctyBool)), diagnostics: right.diagnostics };
+		}
+		const diagnostics = [...left.diagnostics, ...right.diagnostics];
+		if (diagnostics.length > 0 || lhs.type === 'unknown' || rhs.type === 'unknown') return { value: mark(makeUnknownValue(ctyBool)), diagnostics };
+		const asOperand = (value: RuntimeValue<ValueType>): LogicalOperand => value.type === 'null' ? null : Boolean(value.value);
+		try {
+			return { value: mark(makeBooleanValue(logicalOperation(operator, asOperand(lhs), asOperand(rhs)))), diagnostics };
+		} catch (error) {
+			if (!(error instanceof Error) || isDefect(error)) throw error;
+			return { value: makeUnknownValue(ctyBool), diagnostics: [await this.diagnosticAt(scope, 'Operation failed', error.message, this.rangeOf(scope, node), undefined, node)] };
+		}
+	}
+
+	/** HCL's IndexExpr: the collection and key evaluated, and hcl.Index applied whatever their diagnostics. */
+	private async tolerateIndex(node: TNode, scope: Scope): Promise<Tolerated> {
+		const [collectionNode, keyNode] = node.children ?? [];
+		const collection = await this.tolerate(collectionNode, scope);
+		const key = await this.tolerate(keyNode, scope);
+		const diagnostics = [...collection.diagnostics, ...key.diagnostics];
+		try {
+			return { value: indexValue(collection.value, computable(key.value)), diagnostics };
+		} catch (error) {
+			if (!(error instanceof HclError)) throw error;
+			const open = scope.content.lastIndexOf('[', keyNode!.location!.start.offset);
+			diagnostics.push(await this.diagnosticAt(scope, error.summary, error.message, this.rangeAt(scope, open, this.endOf(scope, node)), undefined, node));
+			return { value: makeDynamicValue(), diagnostics };
+		}
+	}
+
+	/** HCL's RelativeTraversalExpr: `.name` steps after an expression, the first step that fails giving a value of no known type. */
+	private async tolerateMemberAccess(node: TNode, scope: Scope): Promise<Tolerated> {
+		const [baseNode, member] = node.children ?? [];
+		const base = await this.tolerate(baseNode, scope);
+		let value = base.value;
+		let offset = this.endOf(scope, baseNode!);
+		for (const name of String(member?.value ?? '').split('.')) {
+			const start = scope.content.indexOf('.', offset);
+			const nameStart = scope.content.indexOf(name, start);
+			offset = nameStart + name.length;
+			try {
+				value = /^\d+$/u.test(name) ? indexValue(value, makeNumberValue(CtyNumber.parse(name))) : attributeValue(value, name);
+			} catch (error) {
+				if (!(error instanceof HclError)) throw error;
+				return { value: makeDynamicValue(), diagnostics: [...base.diagnostics, await this.diagnosticAt(scope, error.summary, error.message, this.rangeAt(scope, start, offset), undefined, node)] };
+			}
+		}
+		return { value, diagnostics: base.diagnostics };
+	}
+
+	/**
+	 * HCL's ForExpr: the collection, then the `if` clause checked once with the variables unknown, then each element.
+	 * A collection or clause with errors, an unknown collection, and an element whose clause or key cannot be known
+	 * make the result of no known type.
+	 */
+	private async tolerateFor(node: TNode, scope: Scope): Promise<Tolerated> {
+		const children = node.children ?? [];
+		let variables: TNode[];
+		let collectionNode: TNode | undefined;
+		let keyNode: TNode | undefined;
+		let valueNode: TNode | undefined;
+		let conditionNode: TNode | undefined;
+		let grouping = false;
+		if (node.type === 'for_expression') {
+			[collectionNode, valueNode] = children.slice(1);
+			variables = children.slice(0, 1);
+		} else if (node.type === 'for_directive') {
+			variables = children.slice(0, children.length - 2);
+			[collectionNode, valueNode] = children.slice(variables.length);
+		} else {
+			variables = children[1]?.type === 'identifier' ? children.slice(0, 2) : children.slice(0, 1);
+			const rest = children.slice(variables.length + 1);
+			collectionNode = children[variables.length];
+			if (node.type === 'map_comprehension') {
+				[keyNode, valueNode, conditionNode] = rest;
+				grouping = node.value === '...';
+			} else {
+				[valueNode, conditionNode] = rest;
+			}
+		}
+		const forRange = this.rangeOf(scope, node);
+		const names = variables.map(variable => String(variable.value ?? ''));
+		const withElement = async <T>(key: RuntimeValue<ValueType>, element: RuntimeValue<ValueType>, run: () => Promise<T>): Promise<T> => {
+			const frame = new Map<string, RuntimeValue<ValueType>>();
+			if (names.length === 2) frame.set(names[0], key);
+			frame.set(names[names.length - 1], element);
+			scope.comprehension.push(frame);
+			try {
+				return await run();
+			} finally {
+				scope.comprehension.pop();
+			}
+		};
+		const evaluateBody = node.type === 'for_directive'
+			? () => this.tolerateTemplate(valueNode, scope)
+			: () => this.tolerate(valueNode, scope);
+		const collection = await this.tolerate(collectionNode, scope);
+		const diagnostics = [...collection.diagnostics];
+		const collectionValue = unwrapSensitive(computable(collection.value));
+		if (collectionValue.type === 'null') {
+			diagnostics.push(await this.diagnosticAt(scope, 'Iteration over null value', "A null value cannot be used as the collection in a 'for' expression.", this.rangeOf(scope, collectionNode!), forRange, collectionNode));
+			return { value: makeDynamicValue(), diagnostics };
+		}
+		const collectionType = valueType(collectionValue);
+		if (collectionType.kind === 'dynamic') return { value: makeDynamicValue(), diagnostics };
+		if (!['list', 'tuple', 'set', 'map', 'object'].includes(collectionType.kind)) {
+			diagnostics.push(await this.diagnosticAt(scope, 'Iteration over non-iterable value', `A value of type ${friendlyName(collectionType)} cannot be used as the collection in a 'for' expression.`, this.rangeOf(scope, collectionNode!), forRange, collectionNode));
+			return { value: makeDynamicValue(), diagnostics };
+		}
+		if (conditionNode) {
+			const check = await withElement(makeDynamicValue(), makeDynamicValue(), () => this.tolerate(conditionNode, scope));
+			diagnostics.push(...check.diagnostics);
+			const result = unwrapSensitive(check.value);
+			if (result.type === 'null') {
+				diagnostics.push(await this.diagnosticAt(scope, 'Condition is null', "The value of the 'if' clause must not be null.", this.rangeOf(scope, conditionNode), forRange, conditionNode));
+				return { value: makeDynamicValue(), diagnostics };
+			}
+			try {
+				convert(result, ctyBool);
+			} catch (error) {
+				if (!(error instanceof ConversionError)) throw error;
+				diagnostics.push(await this.diagnosticAt(scope, "Invalid 'for' condition", `The 'if' clause value is invalid: ${error.message}.`, this.rangeOf(scope, conditionNode), forRange, conditionNode));
+				return { value: makeDynamicValue(), diagnostics };
+			}
+			if (check.diagnostics.length > 0) return { value: makeDynamicValue(), diagnostics };
+		}
+		if (collectionValue.type === 'unknown') return { value: makeDynamicValue(), diagnostics };
+		let known = true;
+		const values: RuntimeValue<ValueType>[] = [];
+		const entries = new Map<string, RuntimeValue<ValueType>>();
+		const groups = new Map<string, RuntimeValue<ValueType>[]>();
+		for (const [key, element] of forElements(collectionValue)) {
+			const skip = await withElement(key, element, async (): Promise<boolean> => {
+				if (conditionNode) {
+					const include = await this.tolerate(conditionNode, scope);
+					diagnostics.push(...include.diagnostics);
+					const raw = unwrapSensitive(include.value);
+					if (raw.type === 'null') {
+						if (known) diagnostics.push(await this.diagnosticAt(scope, "Invalid 'for' condition", "The value of the 'if' clause must not be null.", this.rangeOf(scope, conditionNode), forRange, conditionNode));
+						known = false;
+						return true;
+					}
+					// A tuple's clause is checked for being known before it is converted, an object's after.
+					if (!keyNode && raw.type === 'unknown') {
+						known = false;
+						return true;
+					}
+					let included: RuntimeValue<ValueType>;
+					try {
+						included = convert(raw, ctyBool);
+					} catch (error) {
+						if (!(error instanceof ConversionError)) throw error;
+						if (known) diagnostics.push(await this.diagnosticAt(scope, "Invalid 'for' condition", `The 'if' clause value is invalid: ${error.message}.`, this.rangeOf(scope, conditionNode), forRange, conditionNode));
+						known = false;
+						return true;
+					}
+					if (included.type === 'unknown') {
+						known = false;
+						return true;
+					}
+					if (included.value === false) return true;
+				}
+				if (!keyNode) {
+					const item = await evaluateBody();
+					diagnostics.push(...item.diagnostics);
+					values.push(item.value);
+					return false;
+				}
+				const keyResult = await this.tolerate(keyNode, scope);
+				diagnostics.push(...keyResult.diagnostics);
+				const rawKey = unwrapSensitive(keyResult.value);
+				if (rawKey.type === 'null') {
+					if (known) diagnostics.push(await this.diagnosticAt(scope, 'Invalid object key', "Key expression in 'for' expression must not produce a null value.", this.rangeOf(scope, keyNode), forRange, keyNode));
+					known = false;
+					return true;
+				}
+				if (rawKey.type === 'unknown') {
+					known = false;
+					return true;
+				}
+				let keyText: string;
+				try {
+					keyText = String(convert(rawKey, ctyString).value);
+				} catch (error) {
+					if (!(error instanceof ConversionError)) throw error;
+					if (known) diagnostics.push(await this.diagnosticAt(scope, 'Invalid object key', `The key expression produced an invalid result: ${error.message}.`, this.rangeOf(scope, keyNode), forRange, keyNode));
+					known = false;
+					return true;
+				}
+				const item = await evaluateBody();
+				diagnostics.push(...item.diagnostics);
+				if (grouping) {
+					groups.set(keyText, [...(groups.get(keyText) ?? []), item.value]);
+				} else if (entries.has(keyText)) {
+					diagnostics.push(await this.diagnosticAt(scope, 'Duplicate object key', `Two different items produced the key "${keyText}" in this 'for' expression. If duplicates are expected, use the ellipsis (...) after the value expression to enable grouping by key.`, this.rangeOf(scope, keyNode), forRange, keyNode));
+				} else {
+					entries.set(keyText, item.value);
+				}
+				return false;
+			});
+			if (skip) continue;
+		}
+		if (!known) return { value: makeDynamicValue(), diagnostics };
+		if (!keyNode) return { value: makeArrayValue(values), diagnostics };
+		if (grouping) for (const [key, group] of groups) entries.set(key, makeArrayValue(group));
+		return { value: makeObjectValue(entries), diagnostics };
+	}
+
+	/**
+	 * HCL's SplatExpr: the attribute after the splat taken of each element of a list, set or tuple, or of a value taken
+	 * as a tuple of itself. A source with errors gives a value of no known type, and an element whose attribute fails
+	 * makes the result an unknown of the type the splat would have.
+	 */
+	private async tolerateSplat(node: TNode, scope: Scope): Promise<Tolerated> {
+		const [baseNode, attributeNode] = node.children ?? [];
+		const source = await this.tolerate(baseNode, scope);
+		const diagnostics = [...source.diagnostics];
+		if (diagnostics.length > 0) return { value: makeDynamicValue(), diagnostics };
+		const attribute = attributeNode ? String(attributeNode.value ?? '') : undefined;
+		const each = (element: RuntimeValue<ValueType>): RuntimeValue<ValueType> => (attribute === undefined ? element : attributeValue(element, attribute));
+		const eachType = (type: CtyType): CtyType => {
+			try {
+				return valueType(each(makeUnknownValue(type)));
+			} catch (error) {
+				if (!(error instanceof HclError)) throw error;
+				return ctyDynamic;
+			}
+		};
+		const plain = unwrapSensitive(computable(source.value));
+		const sensitive = plain !== source.value;
+		const mark = (value: RuntimeValue<ValueType>): RuntimeValue<ValueType> => sensitive ? makeSensitiveValue(value) : value;
+		let type = valueType(plain);
+		const autoUpgrade = !['tuple', 'list', 'set'].includes(type.kind);
+		if (plain.type === 'null') {
+			if (autoUpgrade) return { value: mark(makeArrayValue([])), diagnostics };
+			diagnostics.push(await this.diagnosticAt(scope, 'Splat of null value', 'Splat expressions (with the * symbol) cannot be applied to null sequences.', this.rangeOf(scope, baseNode!), this.rangeOf(scope, node), baseNode));
+			return { value: makeDynamicValue(), diagnostics };
+		}
+		if (type.kind === 'dynamic') return { value: mark(makeDynamicValue()), diagnostics };
+		let sourceValue = plain;
+		let upgradedUnknown = false;
+		if (autoUpgrade) {
+			upgradedUnknown = plain.type === 'unknown';
+			sourceValue = makeArrayValue([plain]);
+			type = valueType(sourceValue);
+		}
+		const resultType = (): CtyType => {
+			if (type.kind === 'list' || type.kind === 'set') return listOf(eachType(type.element));
+			if (type.kind === 'tuple') return tupleOf(type.elements.map(eachType));
+			return ctyDynamic;
+		};
+		if (sourceValue.type === 'unknown') return { value: mark(makeUnknownValue(resultType())), diagnostics };
+		const attributeRange = (): HclRange => {
+			const end = this.endOf(scope, node);
+			return this.rangeAt(scope, scope.content.lastIndexOf('.', end - String(attribute ?? '').length), end);
+		};
+		const results: RuntimeValue<ValueType>[] = [];
+		let known = true;
+		for (const element of sourceValue.value as RuntimeValue<ValueType>[]) {
+			try {
+				results.push(each(element));
+			} catch (error) {
+				if (!(error instanceof HclError)) throw error;
+				diagnostics.push(await this.diagnosticAt(scope, error.summary, error.message, attributeRange()));
+				known = false;
+				results.push(makeDynamicValue());
+			}
+		}
+		if (upgradedUnknown) return { value: mark(makeDynamicValue()), diagnostics };
+		if (!known) return { value: mark(makeUnknownValue(resultType())), diagnostics };
+		if (type.kind !== 'list' && type.kind !== 'set') return { value: mark(makeArrayValue(results)), diagnostics };
+		if (results.length === 0) return { value: mark(makeListValue(eachType(type.element), [])), diagnostics };
+		const first = valueType(results[0]);
+		if (!results.every(result => typeEquals(valueType(result), first))) {
+			diagnostics.push(await this.diagnosticAt(scope, 'Invalid nested splat expressions', "The second level of splat expression produced elements of different types, so it isn't possible to construct a valid list to represent the top-level result.\n\nConsider using a for expression instead, to produce a tuple-typed result which can therefore have non-homogenous element types.", attributeRange(), this.rangeOf(scope, node)));
+			return { value: makeDynamicValue(), diagnostics };
+		}
+		return { value: mark(makeListValue(first, results)), diagnostics };
+	}
+
+	/**
+	 * HCL's FunctionCallExpr: an unknown function, or a count of arguments the function's parameters do not allow,
+	 * refused before any argument is evaluated; then each argument evaluated and converted to its parameter's type, and
+	 * the function called only where none has errors. `try` and `can` evaluate their arguments themselves.
+	 */
+	private async tolerateCall(node: TNode, scope: Scope): Promise<Tolerated> {
+		const name = String(node.value ?? '');
+		const callRange = this.rangeOf(scope, node);
+		const written = (node.children ?? []).filter(child => child.type !== 'function_identifier');
+		if (this.findInlineFunction(scope, name) || written.some(child => child.type === 'named_argument')) {
+			// tghclp's own inline functions and named arguments, which Terragrunt does not have, are evaluated strictly.
+			try {
+				return { value: await this.evalNode(node, scope), diagnostics: [] };
+			} catch (error) {
+				return { value: makeDynamicValue(), diagnostics: [await this.faultDiagnostic(error, scope, node)] };
+			}
+		}
+		const definition = this.schema.getFunctionDefinition(name);
+		if (!definition) {
+			const identifier = (node.children ?? []).find(child => child.type === 'function_identifier');
+			const suggestion = functionNameSuggestion(name, this.schema.getFunctionRegistry().getFunctionNames());
+			return {
+				value: makeDynamicValue(),
+				diagnostics: [await this.diagnosticAt(scope, 'Call to unknown function', `There is no function named "${name}".${suggestion ? ` Did you mean "${suggestion}"?` : ''}`, identifier ? this.rangeOf(scope, identifier) : callRange, callRange, node)]
+			};
+		}
+		const diagnostics: HclDiagnostic[] = [];
+		// Each argument with where it is written, an expanded final argument as its elements.
+		let args: Array<{ expression?: TNode; value?: RuntimeValue<ValueType>; written: TNode }> = written.map(expression => ({ expression, written: expression }));
+		const final = written.at(-1);
+		if (final?.type === 'variadic_arguments') {
+			const expanding = final.children?.[0];
+			const expanded = await this.tolerate(expanding, scope);
+			diagnostics.push(...expanded.diagnostics);
+			if (expanded.diagnostics.length > 0) return { value: makeDynamicValue(), diagnostics };
+			const collection = unwrapSensitive(expanded.value);
+			const collectionType = valueType(collection);
+			const refuse = async (detail: string): Promise<Tolerated> => {
+				diagnostics.push(await this.diagnosticAt(scope, 'Invalid expanding argument value', detail, this.rangeOf(scope, expanding!), callRange, expanding));
+				return { value: makeDynamicValue(), diagnostics };
+			};
+			if (collectionType.kind === 'dynamic') {
+				if (collection.type === 'null') return refuse('The expanding argument (indicated by ...) must not be null.');
+				return { value: makeDynamicValue(), diagnostics };
+			}
+			if (!['tuple', 'list', 'set'].includes(collectionType.kind)) return refuse('The expanding argument (indicated by ...) must be of a tuple, list, or set type.');
+			if (collection.type === 'null') return refuse('The expanding argument (indicated by ...) must not be null.');
+			if (collection.type === 'unknown') return { value: makeDynamicValue(), diagnostics };
+			const sensitive = collection !== expanded.value;
+			args = [
+				...args.slice(0, -1),
+				...(collection.value as RuntimeValue<ValueType>[]).map(value => ({ value: sensitive ? makeSensitiveValue(value) : value, written: expanding! }))
+			];
+		}
+		const { params, varParam } = definition.signature;
+		if (args.length < params.length) {
+			const closing = this.rangeAt(scope, callRange.end.offset - 1, callRange.end.offset);
+			return {
+				value: makeDynamicValue(),
+				diagnostics: [await this.diagnosticAt(scope, 'Not enough function arguments', `Function "${name}" expects${varParam ? ' at least' : ''} ${params.length} argument(s). Missing value for "${params[args.length].name}".`, closing, callRange, node)]
+			};
+		}
+		if (!varParam && args.length > params.length) {
+			return {
+				value: makeDynamicValue(),
+				diagnostics: [await this.diagnosticAt(scope, 'Too many function arguments', `Function "${name}" expects only ${params.length} argument(s).`, this.startRangeOf(scope, args[params.length].written), callRange, node)]
+			};
+		}
+		if (name === 'try' || name === 'can') return this.tolerateTryOrCan(name, args.map(arg => arg.written), node, scope);
+		const values: RuntimeValue<ValueType>[] = [];
+		for (const [index, arg] of args.entries()) {
+			const parameter = parameterAt(definition.signature, index);
+			const evaluated = arg.expression ? await this.tolerate(arg.expression, scope) : { value: arg.value!, diagnostics: [] };
+			diagnostics.push(...evaluated.diagnostics);
+			try {
+				if (parameter.type === EXPRESSION_CLOSURE) throw new TypeError(`parameter "${parameter.name}" of ${name} takes an expression`);
+				convert(evaluated.value, parameter.type);
+			} catch (error) {
+				if (!(error instanceof ConversionError)) throw error;
+				diagnostics.push(await this.diagnosticAt(scope, 'Invalid function argument', `Invalid value for "${parameter.name}" parameter: ${error.message}.`, this.startRangeOf(scope, arg.written), callRange, arg.written));
+			}
+			values.push(evaluated.value);
+		}
+		if (diagnostics.length > 0) return { value: makeDynamicValue(), diagnostics };
+		// go-cty calls a function with an unknown argument only where its parameter takes one, and gives an unknown of
+		// the function's result type otherwise. An unknown argument without errors arises only where a for expression's
+		// `if` clause is checked with its variables unknown, where nothing but the result's nullness and its conversion
+		// to a bool is read, so the result is taken to be of no known type.
+		if (!values.every(isWhollyKnown)) return { value: makeDynamicValue(), diagnostics };
+		try {
+			if (name === 'deep_merge' && !this.options.experiments?.includes('deep-merge')) {
+				throw new Error('deep_merge requires the deep-merge experiment to be enabled');
+			}
+			return { value: await this.callBuiltin(name, definition, functionArguments(name, values), scope), diagnostics };
+		} catch (error) {
+			if (!(error instanceof Error) || isDefect(error) || error instanceof UnresolvedRenderValueError) throw error;
+			const startRange = this.startRangeOf(scope, node);
+			const argument = /^Invalid function argument; ([\s\S]*)$/u.exec(error.message);
+			const diagnostic = argument
+				? await this.diagnosticAt(scope, 'Invalid function argument', argument[1], startRange, callRange, node)
+				: await this.diagnosticAt(scope, 'Error in function call', `Call to function "${name}" failed: ${error.message}.`, startRange, callRange, node);
+			return { value: makeDynamicValue(), diagnostics: [diagnostic] };
+		}
+	}
+
+	/**
+	 * `try` and `can`, as HCL's tryfunc evaluates the expressions they are given: `try` gives the first without errors,
+	 * of no known type when it is not wholly known, and fails naming every diagnostic when none has none; `can` gives
+	 * whether its expression has no errors, unknown when its value is not wholly known.
+	 */
+	private async tolerateTryOrCan(name: 'try' | 'can', expressions: TNode[], node: TNode, scope: Scope): Promise<Tolerated> {
+		if (name === 'can') {
+			const result = await this.tolerate(expressions[0], scope);
+			if (result.diagnostics.length > 0) return { value: makeBooleanValue(false), diagnostics: [] };
+			return { value: isWhollyKnown(result.value) ? makeBooleanValue(true) : makeUnknownValue(ctyBool), diagnostics: [] };
+		}
+		const seen: HclDiagnostic[] = [];
+		for (const expression of expressions) {
+			const result = await this.tolerate(expression, scope);
+			seen.push(...result.diagnostics);
+			if (result.diagnostics.length > 0) continue;
+			return { value: isWhollyKnown(result.value) ? result.value : makeDynamicValue(), diagnostics: [] };
+		}
+		const failures = seen.map(diagnostic => diagnostic.subject
+			? `- ${diagnostic.summary} (at ${rangeString(diagnostic.subject)})\n  ${diagnostic.detail}\n`
+			: `- ${diagnostic.summary}\n  ${diagnostic.detail}\n`).join('');
+		const detail = expressions.length === 0
+			? 'at least one argument is required'
+			: `no expression succeeded:\n${failures}At least one expression must produce a successful result`;
+		return {
+			value: makeDynamicValue(),
+			diagnostics: [await this.diagnosticAt(scope, 'Error in function call', `Call to function "${name}" failed: ${detail}.`, this.startRangeOf(scope, node), this.rangeOf(scope, node), node)]
+		};
+	}
+
+	/**
+	 * The root and steps of a reference as HCL traverses them: the root's name, then each attribute or index step,
+	 * each with its range, an attribute step's from its `.`, an index step's its brackets.
+	 */
+	private referenceSteps(node: TNode, scope: Scope): Array<{ name: string; key?: RuntimeValue<ValueType>; range: HclRange }> {
+		const start = node.location!.start.offset;
+		const parts = this.referenceParts(node);
+		const root = parts[0] ?? '';
+		const steps: Array<{ name: string; key?: RuntimeValue<ValueType>; range: HclRange }> = [{ name: root, range: this.rangeAt(scope, start, start + root.length) }];
+		const segments: TNode[] = [];
+		for (const child of node.children ?? []) {
+			if (child.type === 'access_chain') segments.push(...(child.children ?? []));
+			else if (['dependency_name', 'module_name', 'terraform_attribute', 'provider'].includes(child.type) && child.children?.[0]) segments.push(child.children[0]);
+		}
+		if (node.type === 'dependency_reference') {
+			const name = node.children?.find(child => child.type === 'dependency_name');
+			const chain = node.children?.find(child => child.type === 'access_chain');
+			segments.length = 0;
+			if (name?.children?.[0]) segments.push(name.children[0]);
+			segments.push(...(chain?.children ?? []));
+		}
+		let offset = start + root.length;
+		for (const [index, part] of parts.slice(1).entries()) {
+			const segment = segments[index];
+			const segmentStart = segment?.location?.start.offset ?? scope.content.indexOf(part, offset);
+			const segmentEnd = segment?.location?.end.offset ?? segmentStart + part.length;
+			offset = segmentEnd;
+			if (segment?.type === 'index_identifier') {
+				const raw = segment.value;
+				const key = typeof raw === 'number' || /^\d+$/u.test(String(raw)) ? makeNumberValue(CtyNumber.parse(String(raw))) : makeStringValue(String(raw));
+				steps.push({ name: part, key, range: this.rangeAt(scope, segmentStart, segmentEnd) });
+			} else if (/^\d+$/u.test(part)) {
+				steps.push({ name: part, key: makeNumberValue(CtyNumber.parse(part)), range: this.rangeAt(scope, segmentStart - 1, segmentEnd) });
+			} else {
+				steps.push({ name: part, range: this.rangeAt(scope, segmentStart - 1, segmentEnd) });
+			}
+		}
+		return steps;
+	}
+
+	/**
+	 * A reference as HCL's ScopeTraversalExpr traverses it: the root variable, `local`, `include`, `dependency` or a
+	 * for expression's variable, then each step, the first that fails giving a value of no known type and its
+	 * diagnostic. Terragrunt has each of `local`, `include` and `dependency` as an object of what is declared, so a
+	 * name not declared there is an attribute the object does not have.
+	 */
+	private async tolerateReference(node: TNode, scope: Scope): Promise<Tolerated> {
+		const steps = this.referenceSteps(node, scope);
+		const fail = async (index: number, error: HclError): Promise<Tolerated> => ({
+			value: makeDynamicValue(),
+			diagnostics: [await this.diagnosticAt(scope, error.summary, error.message, steps[index].range)]
+		});
+		const missing = (index: number): HclError => new HclError(UNSUPPORTED_ATTRIBUTE, `This object does not have an attribute named "${steps[index].name}".`);
+		const root = steps[0].name;
+		let value: RuntimeValue<ValueType> | undefined;
+		let next = 1;
+		for (let index = scope.comprehension.length - 1; index >= 0 && value === undefined; index--) {
+			value = scope.comprehension[index].get(root);
+		}
+		if (value === undefined) {
+			try {
+				if (root === 'local' && steps.length > 1) {
+					if (!scope.locals.has(steps[1].name)) return fail(1, missing(1));
+					value = await this.resolveLocal(scope, steps[1].name);
+					next = 2;
+				} else if (root === 'include' && steps.length > 2) {
+					const include = scope.includes.get(steps[1].name);
+					if (!include?.expose) return fail(1, missing(1));
+					const result = include.result;
+					const head = steps[2].name;
+					next = 3;
+					if (head === 'locals' && steps.length > 3) {
+						if (!result.scope.locals.has(steps[3].name)) return fail(3, missing(3));
+						value = await this.resolveLocal(result.scope, steps[3].name);
+						next = 4;
+					} else if (head === 'inputs') {
+						value = result.inputs ? makeObjectValue(result.inputs) : makeNullValue(ctyDynamic);
+					} else if (head === 'terraform') {
+						value = await this.terraformObject(result.scope);
+					} else if (result.scope.rootAttrs.has(head)) {
+						value = await this.evalNode(result.scope.rootAttrs.get(head)!, result.scope);
+					} else if (head !== 'locals') {
+						return fail(2, missing(2));
+					}
+				} else if (root === 'dependency' && steps.length > 1) {
+					try {
+						value = await this.dependencyValue(steps[1].name, scope);
+					} catch (error) {
+						if (error instanceof Error && error.message.startsWith(`No dependency "${steps[1].name}" block`)) return fail(1, missing(1));
+						throw error;
+					}
+					next = 2;
+				} else if (!['local', 'include', 'dependency'].includes(root)) {
+					return fail(0, new HclError('Unknown variable', `There is no variable named "${root}".`));
+				}
+				// `local`, `include.<name>` and `include.<name>.locals` read whole, as tghclp reads them strictly.
+				value ??= await this.resolveReference(steps.map(step => step.name).slice(0, next), scope);
+			} catch (error) {
+				return { value: makeDynamicValue(), diagnostics: [await this.faultDiagnostic(error, scope, node)] };
+			}
+		}
+		if (value === undefined) throw new TypeError(`the reference ${steps.map(step => step.name).join('.')} resolved to nothing`);
+		for (let index = next; index < steps.length; index++) {
+			const step = steps[index];
+			try {
+				value = step.key === undefined ? attributeValue(value, step.name) : indexValue(value, step.key);
+			} catch (error) {
+				if (!(error instanceof HclError)) throw error;
+				return fail(index, error);
+			}
+		}
+		return { value, diagnostics: [] };
 	}
 
 	/**
@@ -3114,6 +4300,9 @@ export function runtimeValueToPlain(value: RuntimeValue<ValueType>): unknown {
 			return value.value;
 		case 'null':
 			return null;
+		case 'unknown':
+			// Unknowns are settled where a tolerant evaluation hands its value on, as Terragrunt settles them.
+			throw new TypeError('an unknown value was not settled before it was read');
 		case 'sensitive' as ValueType:
 			// Sensitivity marks how a value is shown, not what it is: Terragrunt unmarks what it decodes and renders.
 			return runtimeValueToPlain(value.value as RuntimeValue<ValueType>);
@@ -3139,4 +4328,86 @@ async function pathExists(target: string): Promise<boolean> {
 	} catch {
 		return false;
 	}
+}
+
+/** The node types a reference is, which HCL reads as a traversal from a root variable. */
+const REFERENCE_TYPES = new Set([
+	'reference', 'local_reference', 'terraform_reference', 'var_reference', 'data_reference', 'module_reference',
+	'dependency_reference', 'path_reference', 'traversal_reference'
+]);
+
+/**
+ * The references an expression reads, as HCL's Variables gives its traversals: a for expression's variables are its
+ * own, and a reference to one inside it is not among them.
+ *
+ * @param expression the expression.
+ * @returns the references, in the order they are written.
+ */
+function referencesIn(expression: TNode): TNode[] {
+	const found: TNode[] = [];
+	const walk = (node: TNode, bound: ReadonlySet<string>): void => {
+		if (REFERENCE_TYPES.has(node.type)) {
+			const root = node.type === 'dependency_reference' ? 'dependency'
+				: node.type === 'traversal_reference' ? String(node.value ?? '')
+				: String(node.children?.find(child => child.type === 'namespace')?.value ?? node.value ?? '');
+			if (!bound.has(root)) found.push(node);
+			return;
+		}
+		let inner = bound;
+		if (['list_comprehension', 'map_comprehension', 'for_expression', 'for_directive'].includes(node.type)) {
+			const children = node.children ?? [];
+			const variables = node.type === 'for_directive' ? children.slice(0, children.length - 2)
+				: node.type === 'for_expression' ? children.slice(0, 1)
+				: children[1]?.type === 'identifier' ? children.slice(0, 2) : children.slice(0, 1);
+			inner = new Set([...bound, ...variables.map(variable => String(variable.value ?? ''))]);
+			// The collection is read in the scope around the for expression.
+			const collection = children[variables.length];
+			if (collection) walk(collection, bound);
+			for (const child of children.slice(variables.length + 1)) walk(child, inner);
+			return;
+		}
+		for (const child of node.children ?? []) walk(child, inner);
+	};
+	walk(expression, new Set());
+	return found;
+}
+
+/**
+ * The top-level block a position of a file is in, as HCL's ContextString names it: its type, then each label quoted
+ * as Go quotes it; undefined outside every block.
+ *
+ * @param ast the file's syntax tree.
+ * @param offset the position.
+ */
+function topLevelBlockName(ast: TNode, offset: number): string | undefined {
+	const block = (ast.children ?? []).find(child => child.type === 'block' && child.location
+		&& offset >= child.location.start.offset && offset < child.location.end.offset);
+	if (!block) return undefined;
+	const labels = (block.children ?? []).filter(child => child.type === 'parameter').map(child => goQuoted(String(child.value)));
+	return [String(block.value), ...labels].join(' ');
+}
+
+/**
+ * A function's name close to one that is not a function, as HCL's nameSuggestion offers it: one whose Levenshtein
+ * distance from the name is less than three. HCL goes through its function table in Go's map order, so where several
+ * are that close the one it offers varies; this offers the first in byte order.
+ *
+ * @param name the name called.
+ * @param names the functions there are.
+ */
+function functionNameSuggestion(name: string, names: readonly string[]): string | undefined {
+	const distance = (left: string, right: string): number => {
+		const a = [...left];
+		const b = [...right];
+		let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+		for (let i = 1; i <= a.length; i++) {
+			const current = [i];
+			for (let j = 1; j <= b.length; j++) {
+				current[j] = Math.min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+			}
+			previous = current;
+		}
+		return previous[b.length];
+	};
+	return [...names].sort(compareStrings).find(candidate => distance(name, candidate) < 3);
 }

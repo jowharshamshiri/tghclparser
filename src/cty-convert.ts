@@ -27,13 +27,14 @@ import {
 	makeSensitiveValue,
 	makeSetValue,
 	makeStringValue,
+	makeUnknownValue,
 	unwrapSensitive,
 	valueType
 } from './functions/utils';
 import type { RuntimeValue, ValueType } from './model';
 
 /*
- * go-cty v1.19.0's convert package, for the known values a Terragrunt configuration holds: the conversions between
+ * go-cty v1.19.0's convert package, for the values a Terragrunt configuration holds: the conversions between
  * types, the unification of several types to one, and the message that says why a value does not convert.
  */
 
@@ -60,6 +61,8 @@ export function getConversion(from: CtyType, to: CtyType, unsafe: boolean): Conv
 		if (isSensitive(value)) return makeSensitiveValue(conversion(unwrapSensitive(value)));
 		if (to.kind === 'dynamic') return value;
 		if (value.type === 'null') return makeNullValue(dynamicReplace(valueType(value), to));
+		// An unknown value converts to an unknown of the type converted to, as each of go-cty's conversions gives it.
+		if (value.type === 'unknown') return makeUnknownValue(dynamicReplace(valueType(value), to));
 		return known(value);
 	};
 	return conversion;

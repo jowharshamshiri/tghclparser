@@ -164,7 +164,8 @@ export interface TerragruntConfig {
 	locals?: Record<string, Plain>;
 	terraform?: TerraformConfig;
 	remoteState?: RemoteState;
-	dependencies?: { paths: string[] };
+	/** The `dependencies` block: its paths, null where they were not known, as a Go nil slice. */
+	dependencies?: { paths: string[] | null };
 	dependencyBlocks: Dependency[];
 	/** By label. Terragrunt keeps them in a Go map, so nothing about their order is Terragrunt's. */
 	generate: Map<string, GenerateConfig>;
@@ -192,12 +193,35 @@ export interface TerragruntConfig {
 /** The value of an attribute that cannot be known yet, such as a dependency output a partial render leaves out. */
 export const UNRESOLVED = Symbol('unresolved');
 
+/**
+ * The value of an attribute that holds values HCL could not know, where a render's decode went on past an error in
+ * it. Decoded into a field of a Go type, it is not known, as gohcl reports, and leaves the field's zero value; a field
+ * Terragrunt keeps as a cty value takes it with each unknown settled, as Terragrunt settles them.
+ */
+export class UnknownAttribute {
+	/**
+	 * @param settled the value with its unknowns settled.
+	 * @param reportUnknown reports that the value is not known, as gohcl's decode into a Go type does.
+	 */
+	constructor(readonly settled: Plain, private readonly reportUnknown: () => void) {}
+
+	/** Reports that the value is not known, where it is decoded into a field of a Go type. */
+	unknown(): void {
+		this.reportUnknown();
+	}
+}
+
+/** An attribute's value as a field Terragrunt keeps as a cty value takes it. */
+function ctyField(value: Plain): Plain {
+	return value instanceof UnknownAttribute ? value.settled : value;
+}
+
 /** One body of configuration, a file or a block, as the decoder reads it. */
 export interface ConfigBody {
 	/** Where it is written, which the messages name. */
 	where: string;
 	/** Its attributes in the order they are written, each evaluated when read. */
-	attributes: Map<string, () => Promise<Plain | typeof UNRESOLVED>>;
+	attributes: Map<string, () => Promise<Plain | typeof UNRESOLVED | UnknownAttribute>>;
 	/** Its blocks in the order they are written. */
 	blocks: ConfigBlock[];
 }
@@ -230,7 +254,7 @@ export function emptyTerragruntConfig(): TerragruntConfig {
 }
 
 function isRecord(value: Plain): value is Record<string, Plain> {
-	return value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof CtyNumber);
+	return value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof CtyNumber) && !(value instanceof UnknownAttribute);
 }
 
 /** A value of the wrong type for what Terragrunt decodes it into, in HCL's words. */
@@ -244,6 +268,10 @@ function unsuitable(where: string, name: string, detail: string): Error {
  * @throws Error for null and for any other type.
  */
 function toGoString(value: Plain, where: string, name: string): string {
+	if (value instanceof UnknownAttribute) {
+		value.unknown();
+		return '';
+	}
 	if (typeof value === 'string') return value;
 	if (value instanceof CtyNumber) return value.toString();
 	if (typeof value === 'boolean') return value ? 'true' : 'false';
@@ -257,6 +285,10 @@ function toGoString(value: Plain, where: string, name: string): string {
  * @throws Error for null and for any other value.
  */
 function toGoBool(value: Plain, where: string, name: string): boolean {
+	if (value instanceof UnknownAttribute) {
+		value.unknown();
+		return false;
+	}
 	if (typeof value === 'boolean') return value;
 	if (value === 'true' || value === '1') return true;
 	if (value === 'false' || value === '0') return false;
@@ -264,14 +296,25 @@ function toGoBool(value: Plain, where: string, name: string): boolean {
 	throw unsuitable(where, name, 'bool required');
 }
 
-/** A value converted to a list of strings, each element as {@link toGoString} converts it. */
-function toStringList(value: Plain, where: string, name: string): string[] {
+/**
+ * A value converted to a list of strings, each element as {@link toGoString} converts it; undefined, a nil slice, for
+ * a value not known.
+ */
+function toStringList(value: Plain, where: string, name: string): string[] | undefined {
+	if (value instanceof UnknownAttribute) {
+		value.unknown();
+		return undefined;
+	}
 	if (!Array.isArray(value)) throw unsuitable(where, name, value === null ? 'null value is not allowed' : 'list of string required');
 	return value.map(item => toGoString(item, where, name));
 }
 
-/** A value converted to a map of strings. */
-function toStringMap(value: Plain, where: string, name: string): Record<string, string> {
+/** A value converted to a map of strings; undefined, a nil map, for a value not known. */
+function toStringMap(value: Plain, where: string, name: string): Record<string, string> | undefined {
+	if (value instanceof UnknownAttribute) {
+		value.unknown();
+		return undefined;
+	}
 	if (!isRecord(value)) throw unsuitable(where, name, value === null ? 'null value is not allowed' : 'map of string required');
 	const out: Record<string, string> = {};
 	for (const [key, item] of Object.entries(value)) out[key] = toGoString(item, where, name);
@@ -280,6 +323,10 @@ function toStringMap(value: Plain, where: string, name: string): Record<string, 
 
 /** A value converted to a whole number that fits a Go int64. */
 function toGoInt(value: Plain, where: string, name: string): CtyNumber {
+	if (value instanceof UnknownAttribute) {
+		value.unknown();
+		return CtyNumber.fromInt64(0);
+	}
 	let number: CtyNumber | undefined;
 	if (value instanceof CtyNumber) number = value;
 	else if (typeof value === 'string') number = CtyNumber.tryParse(value);
@@ -452,7 +499,11 @@ function remoteStateOf(values: Attributes, where: string, weak: boolean): Remote
 	const backend = values.get('backend');
 	const generate = values.get('generate');
 	let generateConfig: RemoteState['generate'];
-	if (generate !== undefined && generate !== null) {
+	if (generate instanceof UnknownAttribute) {
+		// gohcl gives the pointer its struct before it finds the value is not known.
+		generate.unknown();
+		generateConfig = { path: '', ifExists: '' };
+	} else if (generate !== undefined && generate !== null) {
 		if (!isRecord(generate)) throw unsuitable(where, 'generate', 'object required');
 		for (const key of Object.keys(generate)) {
 			if (key !== 'path' && key !== 'if_exists') throw unsuitable(where, 'generate', `unsupported attribute "${key}"`);
@@ -463,7 +514,7 @@ function remoteStateOf(values: Attributes, where: string, weak: boolean): Remote
 		};
 	}
 	const mapping = (name: string, nullAsEmpty: boolean): Record<string, Plain> | undefined => {
-		const value = values.get(name);
+		const value = ctyField(values.get(name));
 		if (value === undefined) return undefined;
 		if (value === null) return nullAsEmpty ? {} : undefined;
 		if (!isRecord(value)) throw unsuitable(where, name, 'object required');
@@ -505,10 +556,10 @@ async function decodeDependency(block: ConfigBlock): Promise<Dependency> {
 	const values = await readAttributes(block.body, ['config_path', 'enabled', 'skip_outputs', 'mock_outputs', 'mock_outputs_allowed_terraform_commands', 'mock_outputs_merge_with_state', 'mock_outputs_merge_strategy_with_state']);
 	return {
 		name,
-		configPath: values.has('config_path') ? values.get('config_path') : null,
+		configPath: values.has('config_path') ? ctyField(values.get('config_path')) : null,
 		enabled: optional(values, 'enabled', value => toGoBool(value, where, 'enabled')),
 		skipOutputs: optional(values, 'skip_outputs', value => toGoBool(value, where, 'skip_outputs')),
-		mockOutputs: optional(values, 'mock_outputs', value => value),
+		mockOutputs: optional(values, 'mock_outputs', ctyField),
 		mockOutputsAllowedTerraformCommands: optional(values, 'mock_outputs_allowed_terraform_commands', value => toStringList(value, where, 'mock_outputs_allowed_terraform_commands')),
 		mockOutputsMergeWithState: optional(values, 'mock_outputs_merge_with_state', value => toGoBool(value, where, 'mock_outputs_merge_with_state')),
 		mockOutputsMergeStrategyWithState: optional(values, 'mock_outputs_merge_strategy_with_state', value => toGoString(value, where, 'mock_outputs_merge_strategy_with_state'))
@@ -625,7 +676,7 @@ async function decodeFeature(block: ConfigBlock): Promise<FeatureFlag> {
 	const name = onlyLabel(block, block.body.where);
 	refuseBlocks(block.body, []);
 	const values = await readAttributes(block.body, ['default']);
-	return { name, default: optional(values, 'default', value => value) };
+	return { name, default: optional(values, 'default', ctyField) };
 }
 
 async function decodeEngine(block: ConfigBlock): Promise<EngineConfig> {
@@ -637,7 +688,7 @@ async function decodeEngine(block: ConfigBlock): Promise<EngineConfig> {
 		source: source === undefined ? '' : toGoString(source, where, 'source'),
 		version: optional(values, 'version', value => toGoString(value, where, 'version')),
 		type: optional(values, 'type', value => toGoString(value, where, 'type')),
-		meta: optional(values, 'meta', value => value)
+		meta: optional(values, 'meta', ctyField)
 	};
 }
 
@@ -661,6 +712,10 @@ async function decodeExclude(block: ConfigBlock): Promise<ExcludeConfig | undefi
 	const flag = (name: string): boolean | undefined => {
 		const value = values.get(name);
 		if (value === undefined || value === null) return undefined;
+		if (value instanceof UnknownAttribute) {
+			value.unknown();
+			return false;
+		}
 		if (typeof value === 'string') {
 			if (['1', 't', 'T', 'TRUE', 'true', 'True'].includes(value)) return true;
 			if (['0', 'f', 'F', 'FALSE', 'false', 'False'].includes(value)) return false;
@@ -701,7 +756,7 @@ async function decodeErrors(block: ConfigBlock): Promise<ErrorsConfig> {
 				sleepIntervalSec: whole('sleep_interval_sec')
 			});
 		} else {
-			const signals = values.get('signals');
+			const signals = ctyField(values.get('signals'));
 			if (signals !== undefined && signals !== null && !isRecord(signals)) throw unsuitable(where, 'signals', 'map required');
 			(errors.ignore ??= []).push({
 				label,
@@ -754,7 +809,7 @@ export async function decodeConfigFile(body: ConfigBody): Promise<TerragruntConf
 				config.dependencies = await unlessUnresolved(async () => {
 					refuseBlocks(block.body, []);
 					const paths = (await readAttributes(block.body, ['paths'], ['paths'])).get('paths');
-					return { paths: toStringList(paths, block.body.where, 'paths') };
+					return { paths: toStringList(paths, block.body.where, 'paths') ?? null };
 				});
 				break;
 			case 'dependency': {
@@ -795,11 +850,11 @@ export async function decodeConfigFile(body: ConfigBody): Promise<TerragruntConf
 	config.iamWebIdentityToken = text('iam_web_identity_token') ?? '';
 	config.preventDestroy = optional(values, 'prevent_destroy', value => toGoBool(value, where, 'prevent_destroy'));
 	config.iamAssumeRoleDuration = optional(values, 'iam_assume_role_duration', value => toGoInt(value, where, 'iam_assume_role_duration'));
-	const remoteStateAttribute = values.get('remote_state');
+	const remoteStateAttribute = ctyField(values.get('remote_state'));
 	if (remoteStateAttribute !== undefined && remoteStateAttribute !== null) {
 		config.remoteState = decodeRemoteStateAttribute(remoteStateAttribute, where);
 	}
-	const generateAttribute = values.get('generate');
+	const generateAttribute = ctyField(values.get('generate'));
 	if (generateAttribute !== undefined && generateAttribute !== null) generate.push(...decodeGenerateAttribute(generateAttribute, where));
 	config.generate = completeGenerate(generate, config.unresolvedGenerate);
 	return config;
@@ -900,8 +955,8 @@ function deepMergeValues(target: Plain, source: Plain): Plain {
 /** Appends the paths of source that target lacks, as mergeModuleDependencies does. */
 function mergeModuleDependencies(target: TerragruntConfig['dependencies'], source: TerragruntConfig['dependencies']): TerragruntConfig['dependencies'] {
 	if (!source) return target;
-	if (!target) return { paths: [...source.paths] };
-	for (const item of source.paths) if (!target.paths.includes(item)) target.paths.push(item);
+	if (!target) return { paths: source.paths && [...source.paths] };
+	for (const item of source.paths ?? []) if (!(target.paths ?? []).includes(item)) (target.paths ??= []).push(item);
 	return target;
 }
 

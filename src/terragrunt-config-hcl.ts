@@ -238,7 +238,7 @@ export function terragruntConfigAsHcl(config: TerragruntConfig): string {
 			if (remoteState.config !== undefined) block.attribute('config', attr(remoteStateAsCty, 'config'));
 		});
 	}
-	if (config.dependencies && config.dependencies.paths.length > 0) {
+	if (config.dependencies && (config.dependencies.paths ?? []).length > 0) {
 		const paths = attr(attr(asCty, 'dependencies'), 'paths');
 		root.block('dependencies', [], block => block.attribute('paths', paths));
 	}

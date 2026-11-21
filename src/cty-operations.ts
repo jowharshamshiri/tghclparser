@@ -5,10 +5,15 @@ import {
 	ctyEquals,
 	makeArrayValue,
 	makeBooleanValue,
+	makeDynamicValue,
 	makeListValue,
+	makeMapValue,
+	makeNullValue,
 	makeNumberValue,
+	makeObjectValue,
 	makeSensitiveValue,
 	makeStringValue,
+	makeUnknownValue,
 	unwrapSensitive,
 	valueType
 } from './functions/utils';
@@ -23,6 +28,16 @@ import type { RuntimeValue, ValueType } from './model';
  */
 
 type Value = RuntimeValue<ValueType>;
+
+/**
+ * A fault HCL reports as a diagnostic: its summary, and its detail as the message, which is all that is said where
+ * the fault stops the evaluation.
+ */
+export class HclError extends Error {
+	constructor(readonly summary: string, detail: string) {
+		super(detail);
+	}
+}
 
 const isSensitive = (value: Value): boolean => (value.type as string) === 'sensitive';
 
@@ -66,7 +81,7 @@ export function convertToNumber(value: Value): CtyNumber {
  */
 function numberOperand(value: Value, side: string): CtyNumber | null {
 	const converted = tryConvert(unwrapSensitive(value), ctyNumber);
-	if ('error' in converted) throw new Error(`Unsuitable value for ${side} operand: ${converted.error}.`);
+	if ('error' in converted) throw new HclError('Invalid operand', `Unsuitable value for ${side} operand: ${converted.error}.`);
 	return converted.value.type === 'null' ? null : (converted.value.value as CtyNumber);
 }
 
@@ -74,14 +89,14 @@ function operation(compute: () => Value): Value {
 	try {
 		return compute();
 	} catch (error) {
-		throw new Error(`Error during operation: ${error instanceof Error ? error.message : String(error)}.`);
+		throw new HclError('Operation failed', `Error during operation: ${error instanceof Error ? error.message : String(error)}.`);
 	}
 }
 
 function numbersOf(left: Value, right: Value): [CtyNumber, CtyNumber] {
 	const a = numberOperand(left, 'left');
 	const b = numberOperand(right, 'right');
-	if (a === null || b === null) throw new Error('Error during operation: argument must not be null.');
+	if (a === null || b === null) throw new HclError('Operation failed', 'Error during operation: argument must not be null.');
 	return [a, b];
 }
 
@@ -117,7 +132,7 @@ export function arithmetic(operator: string, left: Value, right: Value): Value {
  */
 export function negation(operand: Value): Value {
 	const number = numberOperand(operand, 'unary');
-	if (number === null) throw new Error('Error during operation: argument must not be null.');
+	if (number === null) throw new HclError('Operation failed', 'Error during operation: argument must not be null.');
 	return marked(makeNumberValue(number.negate()), [operand]);
 }
 
@@ -168,9 +183,9 @@ export function convertToBool(value: Value): boolean | null {
  */
 export function conditionValue(value: Value): boolean {
 	const plain = unwrapSensitive(value);
-	if (plain.type === 'null') throw new Error('The condition value is null. Conditions must either be true or false.');
+	if (plain.type === 'null') throw new HclError('Null condition', 'The condition value is null. Conditions must either be true or false.');
 	const converted = tryConvert(plain, ctyBool);
-	if ('error' in converted) throw new Error('The condition expression must be of type bool.');
+	if ('error' in converted) throw new HclError('Incorrect condition type', 'The condition expression must be of type bool.');
 	return Boolean(converted.value.value);
 }
 
@@ -183,7 +198,7 @@ export function conditionValue(value: Value): boolean {
  */
 export function operandBool(value: Value, side: 'left' | 'right' | 'unary'): boolean | null {
 	const converted = tryConvert(unwrapSensitive(value), ctyBool);
-	if ('error' in converted) throw new Error(`Unsuitable value for ${side} operand: ${converted.error}.`);
+	if ('error' in converted) throw new HclError('Invalid operand', `Unsuitable value for ${side} operand: ${converted.error}.`);
 	return converted.value.type === 'null' ? null : Boolean(converted.value.value);
 }
 
@@ -198,9 +213,9 @@ export function operandBool(value: Value, side: 'left' | 'right' | 'unary'): boo
  */
 export function templatePart(value: Value): { text: string; sensitive: boolean } {
 	const plain = unwrapSensitive(value);
-	if (plain.type === 'null') throw new Error('The expression result is null. Cannot include a null value in a string template.');
+	if (plain.type === 'null') throw new HclError('Invalid template interpolation value', 'The expression result is null. Cannot include a null value in a string template.');
 	const converted = tryConvert(plain, ctyString);
-	if ('error' in converted) throw new Error(`Cannot include the given value in a string template: ${converted.error}.`);
+	if ('error' in converted) throw new HclError('Invalid template interpolation value', `Cannot include the given value in a string template: ${converted.error}.`);
 	return { text: String(converted.value.value), sensitive: plain !== value };
 }
 
@@ -209,50 +224,60 @@ const INVALID_KEY = 'The given key does not identify an element in this collecti
 /**
  * `collection[key]` as HCL's Index gives it: a list's or tuple's element at a whole-number position, a map's element
  * or an object's attribute by a string key, each key converted as go-cty converts it. A set has no indices. The
- * result carries the collection's sensitivity, and for a list, tuple or map the key's too.
+ * result carries the collection's sensitivity, and for a list, tuple or map the key's too. Where the collection or the
+ * key is unknown, so is the result: of no known type where either is of the dynamic pseudo-type, the key is not known
+ * for an object, or the collection is a tuple, and else of the element's or attribute's type.
  *
- * @throws Error in HCL's words when the key selects nothing.
+ * @throws HclError in HCL's words when the key selects nothing.
  */
 export function indexValue(collection: Value, key: Value): Value {
 	const base = unwrapSensitive(collection);
 	const index = unwrapSensitive(key);
-	if (base.type === 'null') throw new Error('This value is null, so it does not have any indices.');
-	if (index.type === 'null') throw new Error("Can't use a null value as an indexing key.");
+	if (base.type === 'null') throw new HclError('Attempt to index null value', 'This value is null, so it does not have any indices.');
+	if (index.type === 'null') throw new HclError('Invalid index', "Can't use a null value as an indexing key.");
 	const type = valueType(base);
+	if (type.kind === 'dynamic' || valueType(index).kind === 'dynamic') return marked(makeDynamicValue(), [collection]);
 	switch (type.kind) {
 		case 'list':
 		case 'tuple': {
 			const converted = tryConvert(index, ctyNumber);
-			if ('error' in converted) throw new Error(`${INVALID_KEY}: ${converted.error}.`);
+			if ('error' in converted) throw new HclError('Invalid index', `${INVALID_KEY}: ${converted.error}.`);
+			if (base.type === 'unknown' || converted.value.type === 'unknown') {
+				return marked(type.kind === 'tuple' ? makeDynamicValue() : makeUnknownValue(type.element), [collection]);
+			}
 			const elements = base.value as Value[];
 			const number = converted.value.value as CtyNumber;
 			const { integer, accuracy } = number.truncate();
 			if (integer !== undefined && accuracy === 'exact' && integer >= 0n && integer < BigInt(elements.length)) {
 				return marked(elements[Number(integer)], [collection, key]);
 			}
-			throw new Error(`${INVALID_KEY}${sequenceMiss(number, elements.length)}.`);
+			throw new HclError('Invalid index', `${INVALID_KEY}${sequenceMiss(number, elements.length)}.`);
 		}
 		case 'map': {
 			const converted = tryConvert(index, ctyString);
-			if ('error' in converted) throw new Error(`${INVALID_KEY}: ${converted.error}.`);
+			if ('error' in converted) throw new HclError('Invalid index', `${INVALID_KEY}: ${converted.error}.`);
+			if (base.type === 'unknown' || converted.value.type === 'unknown') return marked(makeUnknownValue(type.element), [collection]);
 			const element = (base.value as Map<string, Value>).get(String(converted.value.value));
-			if (element === undefined) throw new Error(`${INVALID_KEY}.`);
+			if (element === undefined) throw new HclError('Invalid index', `${INVALID_KEY}.`);
 			return marked(element, [collection, key]);
 		}
 		case 'object': {
 			const converted = tryConvert(index, ctyString);
-			if ('error' in converted) throw new Error(`${INVALID_KEY}: ${converted.error}.`);
-			const attribute = (base.value as Map<string, Value>).get(String(converted.value.value));
-			if (attribute === undefined) {
+			if ('error' in converted) throw new HclError('Invalid index', `${INVALID_KEY}: ${converted.error}.`);
+			if (converted.value.type === 'unknown') return marked(makeDynamicValue(), [collection]);
+			const name = String(converted.value.value);
+			const attribute = base.type === 'unknown' ? undefined : (base.value as Map<string, Value>).get(name);
+			if (attribute !== undefined) return marked(attribute, [collection]);
+			if (!type.attributes.has(name)) {
 				const suggestion = index.type === 'number' ? ' An object only supports looking up attributes by name, not by numeric index.' : '';
-				throw new Error(`${INVALID_KEY}.${suggestion}`);
+				throw new HclError('Invalid index', `${INVALID_KEY}.${suggestion}`);
 			}
-			return marked(attribute, [collection]);
+			return marked(makeUnknownValue(type.attributes.get(name)!), [collection]);
 		}
 		case 'set':
-			throw new Error("Elements of a set are identified only by their value and don't have any separate index or key to select with, so it's only possible to perform operations across all elements of the set.");
+			throw new HclError('Invalid index', "Elements of a set are identified only by their value and don't have any separate index or key to select with, so it's only possible to perform operations across all elements of the set.");
 		default:
-			throw new Error('This value does not have any indices.');
+			throw new HclError('Invalid index', 'This value does not have any indices.');
 	}
 }
 
@@ -272,47 +297,97 @@ function sequenceMiss(number: CtyNumber, length: number): string {
 }
 
 /**
- * `value.name` as HCL's GetAttr gives it: an object's attribute, or a map's element by that key. The result carries
- * the value's sensitivity.
+ * A value with every unknown in it replaced as Terragrunt's UpdateUnknownCtyValValues replaces it: an unknown string,
+ * or one of no known type, with the empty string, and an unknown of any other type with a null of that type. Maps,
+ * objects, lists and tuples are gone through; a set, as there, is left as it is.
  *
- * @throws Error in HCL's words when the value has no such attribute or element.
+ * @param value the value.
+ * @returns the value with its unknowns replaced.
+ */
+export function settleUnknowns(value: Value): Value {
+	if (isSensitive(value)) return makeSensitiveValue(settleUnknowns(unwrapSensitive(value)));
+	if (value.type === 'unknown') {
+		const type = valueType(value);
+		return type.kind === 'string' || type.kind === 'dynamic' ? makeStringValue('') : makeNullValue(type);
+	}
+	if (value.type === 'null') return value;
+	const type = valueType(value);
+	switch (type.kind) {
+		case 'object':
+		case 'map': {
+			const entries = value.value as Map<string, Value>;
+			if (entries.size === 0) return value;
+			const settled = new Map([...entries].map(([key, entry]) => [key, settleUnknowns(entry)]));
+			if (type.kind === 'object') return { ...makeObjectValue(settled), type: value.type } as Value;
+			return makeMapValue(type.element.kind === 'dynamic' ? valueType(settled.values().next().value!) : type.element, settled);
+		}
+		case 'tuple':
+		case 'list': {
+			const elements = value.value as Value[];
+			if (elements.length === 0) return value;
+			const settled = elements.map(settleUnknowns);
+			if (type.kind === 'tuple') return makeArrayValue(settled);
+			return makeListValue(type.element.kind === 'dynamic' ? valueType(settled[0]) : type.element, settled);
+		}
+		default:
+			return value;
+	}
+}
+
+/** The summary of the diagnostic HCL's GetAttr gives for an attribute a value does not have. */
+export const UNSUPPORTED_ATTRIBUTE = 'Unsupported attribute';
+
+/**
+ * `value.name` as HCL's GetAttr gives it: an object's attribute, or a map's element by that key. The result carries
+ * the value's sensitivity. An unknown object or map gives an unknown of the attribute's or element's type, and a value
+ * of no known type gives one of no known type.
+ *
+ * @throws HclError in HCL's words when the value has no such attribute or element.
  */
 export function attributeValue(value: Value, name: string): Value {
 	const base = unwrapSensitive(value);
-	if (base.type === 'null') throw new Error('This value is null, so it does not have any attributes.');
+	if (base.type === 'null') throw new HclError('Attempt to get attribute from null value', 'This value is null, so it does not have any attributes.');
+	const unsupported = (detail: string): HclError => new HclError(UNSUPPORTED_ATTRIBUTE, detail);
 	const type = valueType(base);
+	const key = name.normalize('NFC');
 	switch (type.kind) {
 		case 'object': {
-			const attribute = (base.value as Map<string, Value>).get(name.normalize('NFC'));
-			if (attribute === undefined) throw new Error(`This object does not have an attribute named "${name}".`);
-			return marked(attribute, [value]);
+			// A known object is looked into, rather than its type: a dependency's outputs a render cannot read say so
+			// when an output is read.
+			const attribute = base.type === 'unknown' ? undefined : (base.value as Map<string, Value>).get(key);
+			if (attribute !== undefined) return marked(attribute, [value]);
+			if (!type.attributes.has(key)) throw unsupported(`This object does not have an attribute named "${name}".`);
+			return marked(makeUnknownValue(type.attributes.get(key)!), [value]);
 		}
 		case 'map': {
-			const element = (base.value as Map<string, Value>).get(name.normalize('NFC'));
-			if (element === undefined) throw new Error(`This map does not have an element with the key "${name}".`);
+			if (base.type === 'unknown') return marked(makeUnknownValue(type.element), [value]);
+			const element = (base.value as Map<string, Value>).get(key);
+			if (element === undefined) throw new HclError('Missing map element', `This map does not have an element with the key "${name}".`);
 			return marked(element, [value]);
 		}
+		case 'dynamic':
+			return marked(makeDynamicValue(), [value]);
 		case 'list':
 			if (type.element.kind === 'object') {
 				if (type.element.attributes.has(name)) {
-					throw new Error(`Can't access attributes on a list of objects. Did you mean to access attribute "${name}" for a specific element of the list, or across all elements of the list?`);
+					throw unsupported(`Can't access attributes on a list of objects. Did you mean to access attribute "${name}" for a specific element of the list, or across all elements of the list?`);
 				}
-				throw new Error("Can't access attributes on a list of objects. Did you mean to access an attribute for a specific element of the list, or across all elements of the list?");
+				throw unsupported("Can't access attributes on a list of objects. Did you mean to access an attribute for a specific element of the list, or across all elements of the list?");
 			}
 			break;
 		case 'set':
 			if (type.element.kind === 'object') {
-				throw new Error("Can't access attributes on a set of objects. Did you mean to access an attribute across all elements of the set?");
+				throw unsupported("Can't access attributes on a set of objects. Did you mean to access an attribute across all elements of the set?");
 			}
 			break;
 		case 'string':
 		case 'number':
 		case 'bool':
-			throw new Error(`Can't access attributes on a primitive-typed value (${friendlyName(type)}).`);
+			throw unsupported(`Can't access attributes on a primitive-typed value (${friendlyName(type)}).`);
 		default:
 			break;
 	}
-	throw new Error('This value does not have any attributes.');
+	throw unsupported('This value does not have any attributes.');
 }
 
 /**
@@ -334,7 +409,7 @@ export function attributeType(type: CtyType, name: string): CtyType {
  * @throws Error when the collection is null or is not a collection, in HCL's words.
  */
 export function forElements(value: Value): Array<[Value, Value]> {
-	if (value.type === 'null') throw new Error('A null value cannot be used as the collection in a \'for\' expression.');
+	if (value.type === 'null') throw new HclError('Iteration over null value', 'A null value cannot be used as the collection in a \'for\' expression.');
 	const type = valueType(value);
 	switch (type.kind) {
 		case 'list':
@@ -348,7 +423,7 @@ export function forElements(value: Value): Array<[Value, Value]> {
 			return [...entries.keys()].sort(compareKeys).map(key => [makeStringValue(key), entries.get(key)!]);
 		}
 		default:
-			throw new Error(`A value of type ${friendlyName(type)} cannot be used as the collection in a 'for' expression.`);
+			throw new HclError('Iteration over non-iterable value', `A value of type ${friendlyName(type)} cannot be used as the collection in a 'for' expression.`);
 	}
 }
 
@@ -364,9 +439,9 @@ function compareKeys(left: string, right: string): number {
  */
 export function forKey(value: Value): string {
 	const plain = unwrapSensitive(value);
-	if (plain.type === 'null') throw new Error("Key expression in 'for' expression must not produce a null value.");
+	if (plain.type === 'null') throw new HclError('Invalid object key', "Key expression in 'for' expression must not produce a null value.");
 	const converted = tryConvert(plain, ctyString);
-	if ('error' in converted) throw new Error(`The key expression produced an invalid result: ${converted.error}.`);
+	if ('error' in converted) throw new HclError('Invalid object key', `The key expression produced an invalid result: ${converted.error}.`);
 	return String(converted.value.value);
 }
 
@@ -377,9 +452,9 @@ export function forKey(value: Value): string {
  */
 export function forCondition(value: Value): boolean {
 	const plain = unwrapSensitive(value);
-	if (plain.type === 'null') throw new Error("The value of the 'if' clause must not be null.");
+	if (plain.type === 'null') throw new HclError("Invalid 'for' condition", "The value of the 'if' clause must not be null.");
 	const converted = tryConvert(plain, ctyBool);
-	if ('error' in converted) throw new Error(`The 'if' clause value is invalid: ${converted.error}.`);
+	if ('error' in converted) throw new HclError("Invalid 'for' condition", `The 'if' clause value is invalid: ${converted.error}.`);
 	return Boolean(converted.value.value);
 }
 
@@ -390,9 +465,9 @@ export function forCondition(value: Value): boolean {
  */
 export function objectKey(value: Value): string {
 	const plain = unwrapSensitive(value);
-	if (plain.type === 'null') throw new Error("Can't use a null value as a key.");
+	if (plain.type === 'null') throw new HclError('Null value as key', "Can't use a null value as a key.");
 	const converted = tryConvert(plain, ctyString);
-	if ('error' in converted) throw new Error(`Can't use this value as a key: ${converted.error}.`);
+	if ('error' in converted) throw new HclError('Incorrect key type', `Can't use this value as a key: ${converted.error}.`);
 	return String(converted.value.value);
 }
 
@@ -427,7 +502,7 @@ export function conditionalResult(whenTrue: ConditionalBranch, whenFalse: Condit
 	} else if (trueType.kind !== 'dynamic' && falseType.kind !== 'dynamic') {
 		const unified = unify([trueType, falseType], true);
 		if (!unified) {
-			throw new Error(`The true and false result expressions must have consistent types. ${describeConditionalTypeMismatch(trueType, falseType)}.`);
+			throw new HclError('Inconsistent conditional result types', `The true and false result expressions must have consistent types. ${describeConditionalTypeMismatch(trueType, falseType)}.`);
 		}
 		conversions = unified.conversions;
 	}
@@ -440,14 +515,14 @@ export function conditionalResult(whenTrue: ConditionalBranch, whenFalse: Condit
 		result = conversion ? conversion(chosen.value) : chosen.value;
 	} catch (error) {
 		if (!(error instanceof ConversionError)) throw error;
-		throw new Error(`The ${truth ? 'true' : 'false'} result value has the wrong type: ${error.message}.`);
+		throw new HclError('Inconsistent conditional result types', `The ${truth ? 'true' : 'false'} result value has the wrong type: ${error.message}.`);
 	}
 	const marks = [conditionMarks, ...[whenTrue, whenFalse].flatMap(branch => ('value' in branch ? [branch.value] : []))];
 	return marked(result, marks);
 }
 
 /** HCL's describeConditionalTypeMismatch: where two branch types part ways. */
-function describeConditionalTypeMismatch(trueType: CtyType, falseType: CtyType): string {
+export function describeConditionalTypeMismatch(trueType: CtyType, falseType: CtyType): string {
 	if (trueType.kind === 'object' && falseType.kind === 'object') {
 		for (const name of [...trueType.attributes.keys()].sort(compareKeys)) {
 			const falseAttribute = falseType.attributes.get(name);
@@ -500,7 +575,7 @@ export function splatResult(source: Value, each: (element: Value) => Value, each
 	const sequence = type.kind === 'tuple' || type.kind === 'list' || type.kind === 'set';
 	if (plain.type === 'null') {
 		if (!sequence) return marked(makeArrayValue([]), [source]);
-		throw new Error('Splat expressions (with the * symbol) cannot be applied to null sequences.');
+		throw new HclError('Splat of null value', 'Splat expressions (with the * symbol) cannot be applied to null sequences.');
 	}
 	const elements = sequence ? (plain.value as Value[]) : [plain];
 	// A value taken as a tuple of itself keeps its sensitivity as the tuple's element; a sequence's is the result's.
@@ -509,7 +584,7 @@ export function splatResult(source: Value, each: (element: Value) => Value, each
 	if (results.length === 0) return marked(makeListValue(eachType(type.element), []), [source]);
 	const first = valueType(results[0]);
 	if (!results.every(result => typeEquals(valueType(result), first))) {
-		throw new Error("The second level of splat expression produced elements of different types, so it isn't possible to construct a valid list to represent the top-level result.\n\nConsider using a for expression instead, to produce a tuple-typed result which can therefore have non-homogenous element types.");
+		throw new HclError('Invalid nested splat expressions', "The second level of splat expression produced elements of different types, so it isn't possible to construct a valid list to represent the top-level result.\n\nConsider using a for expression instead, to produce a tuple-typed result which can therefore have non-homogenous element types.");
 	}
 	return marked(makeListValue(first, results), [source]);
 }
