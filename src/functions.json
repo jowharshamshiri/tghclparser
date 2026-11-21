@@ -251,7 +251,7 @@
 		},
 		{
 			"name": "get_platform",
-			"description": "Gets the current operating system platform.\n\n* Returns the current operating system platform (e.g., 'windows', 'darwin', 'linux').\n* Useful for platform-specific configurations.",
+			"description": "Gets the current operating system platform.\n\n* Returns the platform as Go's runtime.GOOS names it (e.g., 'windows', 'darwin', 'linux'), as Terragrunt does.\n* Fails on SunOS, where Solaris and illumos have different Go names, and on Haiku, which Go does not support.\n* Useful for platform-specific configurations.",
 			"parameters": [],
 			"arity": { "params": [], "variadic": false },
 			"returnType": {
@@ -261,9 +261,14 @@
 				"description": "Current operating system platform",
 				"validation": {
 					"allowedValues": [
-						"windows",
+						"aix",
+						"android",
 						"darwin",
-						"linux"
+						"freebsd",
+						"linux",
+						"netbsd",
+						"openbsd",
+						"windows"
 					]
 				}
 			},

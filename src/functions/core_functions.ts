@@ -1,4 +1,3 @@
-import os from 'node:os';
 import path from 'node:path';
 
 import { URI } from 'vscode-uri';
@@ -109,6 +108,34 @@ function goRelative(base: string, target: string, failure: string): string {
 	if (path.isAbsolute(relative)) throw new Error(`${failure}: Rel: can't make ${target} relative to ${base}`);
 	return relative || '.';
 }
+
+// Go's runtime.GOOS for the platform Node names `platform`: what Terragrunt's
+// get_platform returns. The names agree but for Windows, which Go names
+// "windows"; Go has no Cygwin port, so under Cygwin Terragrunt is the Windows
+// build. Node names Solaris and illumos alike, and Go has no Haiku port, so
+// neither has one Go name.
+export function goosOf(platform: NodeJS.Platform): string {
+	switch (platform) {
+		case 'aix':
+		case 'android':
+		case 'darwin':
+		case 'freebsd':
+		case 'linux':
+		case 'netbsd':
+		case 'openbsd':
+			return platform;
+		case 'cygwin':
+		case 'win32':
+			return 'windows';
+		case 'sunos':
+			throw new Error('Node names both Solaris and illumos "sunos", where Go names them "solaris" and "illumos"');
+		case 'haiku':
+			throw new Error('Go has no port to Haiku, Node\'s platform "haiku", so Terragrunt does not run on it');
+		default:
+			throw new Error(`Node's platform "${platform as string}" has no Go name`);
+	}
+}
+
 export const coreFunctionGroup = {
     namespace: 'core',
     functions: {
@@ -261,7 +288,7 @@ export const coreFunctionGroup = {
             _args: RuntimeValue<ValueType>[],
             _context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
-            return makeStringValue(os.platform());
+            return makeStringValue(goosOf(process.platform));
         },
 		get_repo_root: async (
 			_args: RuntimeValue<ValueType>[],

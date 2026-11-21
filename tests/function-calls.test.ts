@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { ConfigEvaluator } from '../src/Evaluator';
+import { goosOf } from '../src/functions/core_functions';
 import { plainValue } from './plain-values';
 
 // Every expected value and message here is what Terragrunt v1.2.2 gives for the same expression in a unit's inputs.
@@ -110,6 +111,32 @@ describe('function calls as Terragrunt evaluates them', () => {
 			assert.equal(await failure('upper("a"...)'), 'Invalid expanding argument value; The expanding argument (indicated by ...) must be of a tuple, list, or set type.');
 			assert.equal(await failure('upper({ a = 1 }...)'), 'Invalid expanding argument value; The expanding argument (indicated by ...) must be of a tuple, list, or set type.');
 			assert.equal(await failure('upper(null...)'), 'Invalid expanding argument value; The expanding argument (indicated by ...) must not be null.');
+		});
+	});
+
+	describe('get_platform', () => {
+		it('names the platform the tests run on as Go\'s runtime.GOOS does', async () => {
+			const goos = ({ darwin: 'darwin', linux: 'linux', win32: 'windows' } as Partial<Record<NodeJS.Platform, string>>)[process.platform];
+			assert.ok(goos, `the tests know no Terragrunt v1.2.2 release for Node's platform "${process.platform}"`);
+			assert.equal(await value('get_platform()'), goos);
+		});
+
+		it('names every platform Node runs on as Go does, and refuses those Go has no single name for', () => {
+			const named: Array<[NodeJS.Platform, string]> = [
+				['aix', 'aix'],
+				['android', 'android'],
+				['cygwin', 'windows'],
+				['darwin', 'darwin'],
+				['freebsd', 'freebsd'],
+				['linux', 'linux'],
+				['netbsd', 'netbsd'],
+				['openbsd', 'openbsd'],
+				['win32', 'windows']
+			];
+			for (const [platform, goos] of named) assert.equal(goosOf(platform), goos, platform);
+			assert.throws(() => goosOf('sunos'), { message: 'Node names both Solaris and illumos "sunos", where Go names them "solaris" and "illumos"' });
+			assert.throws(() => goosOf('haiku'), { message: 'Go has no port to Haiku, Node\'s platform "haiku", so Terragrunt does not run on it' });
+			assert.throws(() => goosOf('plan9' as NodeJS.Platform), { message: 'Node\'s platform "plan9" has no Go name' });
 		});
 	});
 
