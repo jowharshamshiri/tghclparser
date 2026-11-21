@@ -344,17 +344,16 @@ async function inspectDocument(argv: string[]): Promise<number> {
 	const uri = pathToFileURL(realConfig).toString();
 	const workspace = new Workspace();
 	workspace.setWorkspaceRoot(pathToFileURL(workspaceRoot).toString());
+	// Run from the command line, as Terragrunt is, so trusted as Terragrunt trusts the configuration it runs.
+	workspace.setTrusted(true);
 	const insecureHosts = (process.env.TGHCLP_INSECURE_REGISTRY_HOSTS ?? '').split(',').map(host => host.trim()).filter(Boolean);
-	workspace.configureRemoteModules(
-		{ trusted: true },
-		{
-			env: process.env,
-			credentials: ambientCredentials({ env: process.env, homeDir: os.homedir() }),
-			approveHost: async () => true,
-			allowedHosts: insecureHosts,
-			registry: createRegistryResolver({ allowInsecureHosts: insecureHosts })
-		}
-	);
+	workspace.configureRemoteModules({
+		env: process.env,
+		credentials: ambientCredentials({ env: process.env, homeDir: os.homedir() }),
+		approveHost: async () => true,
+		allowedHosts: insecureHosts,
+		registry: createRegistryResolver({ allowInsecureHosts: insecureHosts })
+	});
 	const document = new ParsedDocument(workspace, uri, await fs.readFile(realConfig, 'utf8'));
 	let workspaceError: string | undefined;
 	// Where the expression that caused the error is, when the workspace can say.
@@ -516,7 +515,7 @@ async function describeConfiguration(workspace: Workspace, document: ParsedDocum
 	diagnostics: unknown[];
 	includes: string[];
 	dependencies: string[];
-	reads: unknown[];
+	reads: unknown[] | null;
 }> {
 	const keys = document.getOwnInputKeys();
 	const sourceToken = document.getTerraformSourceToken();
@@ -551,11 +550,13 @@ async function describeConfiguration(workspace: Workspace, document: ParsedDocum
  * existence.
  *
  * @param workspace the workspace configurations are loaded through.
- * @param readUris URIs of the files read.
+ * @param readUris URIs of the files read, or null where they were not evaluated.
  * @returns one entry per file, in the order given; `locals`, `inputs` and `diagnostics` are null for a file that
- *   is not an HCL configuration or does not exist, and an HCL file that cannot be loaded carries its `error`.
+ *   is not an HCL configuration or does not exist, and an HCL file that cannot be loaded carries its `error`. Null
+ *   where the files read were not evaluated.
  */
-async function inspectReads(workspace: Workspace, readUris: string[]): Promise<unknown[]> {
+async function inspectReads(workspace: Workspace, readUris: string[] | null): Promise<unknown[] | null> {
+	if (readUris === null) return null;
 	return Promise.all(readUris.map(async readUri => {
 		const file = fileURLToPath(readUri);
 		const configuration = file.endsWith('.hcl');
@@ -737,6 +738,8 @@ function printDot(components: GraphComponent[]): void {
 async function printDependencyGraph(workingDir: string, configs: DiscoveredConfig[]): Promise<void> {
 	const workspace = new Workspace();
 	workspace.setWorkspaceRoot(pathToFileURL(workingDir).toString());
+	// Run from the command line, as Terragrunt is, so trusted as Terragrunt trusts the configurations it discovers.
+	workspace.setTrusted(true);
 	if (!await workspace.refreshDependencyTree()) throw new Error(`Unable to construct a configuration graph under ${workingDir}`);
 	const components = await Promise.all(configs.map(async config => {
 		if (config.type === 'stack') return {path: config.path, dependencies: []};

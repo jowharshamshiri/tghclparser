@@ -464,7 +464,12 @@ export interface FunctionContext {
 	 * repository made while the run goes on is not seen. Without it every lookup walks afresh.
 	 */
 	repoRoots?: Map<string, string>;
-	readTerragruntConfig?: (relativePath: string) => Promise<RuntimeValue<ValueType> | undefined>;
+	/**
+	 * Told of each file a reading function reads, where Terragrunt v1.2.2 records the read for its discovery: the path
+	 * as the function resolved it, cleaned, with its symbolic links kept. Absent where nothing keeps the reads.
+	 */
+	onRead?: (filePath: string) => void;
+	readTerragruntConfig?:(relativePath: string) => Promise<RuntimeValue<ValueType> | undefined>;
 	readTFVarsFile?: (relativePath: string) => Promise<RuntimeValue<ValueType> | undefined>;
 	runCommand?: (program: string, args: string[]) => Promise<string>;
 	decryptSopsFile?: (filePath: string) => Promise<SopsRead>;

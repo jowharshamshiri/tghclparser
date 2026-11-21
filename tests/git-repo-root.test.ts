@@ -98,14 +98,16 @@ describe('the Git repository root, as Terragrunt finds it', () => {
 			const saved = process.env.GIT_CEILING_DIRECTORIES;
 			try {
 				delete process.env.GIT_CEILING_DIRECTORIES;
+				// Refused for walking outside the boundary, the call is dropped, as Terragrunt's discovery drops it.
 				const bounded = new Workspace();
+				bounded.setTrusted(true);
 				bounded.setWorkspaceRoot(URI.file(path.join(link, 'base')).toString());
-				let message = '';
-				await bounded.refreshDependencyTree().catch((error: Error) => { message = error.message; });
-				expect(message).to.include(refusal());
+				const boundedApp = (await bounded.refreshDependencyTree())?.children.find(node => node.name.endsWith(path.join('a', 'b', 'app', 'terragrunt.hcl')));
+				expect(boundedApp?.data.reading).to.deep.equal([]);
 
 				process.env.GIT_CEILING_DIRECTORIES = path.join(link, 'base', 'a');
 				const unbounded = new Workspace();
+				unbounded.setTrusted(true);
 				unbounded.setWorkspaceRoot(URI.file(path.join(link, 'base')).toString());
 				const graph = await unbounded.refreshDependencyTree();
 				const app = graph?.children.find(node => node.name.endsWith(path.join('a', 'b', 'app', 'terragrunt.hcl')));
@@ -173,17 +175,19 @@ inputs = {
 			try {
 				delete process.env.GIT_CEILING_DIRECTORIES;
 				const visible = new Workspace();
+				visible.setTrusted(true);
 				visible.setWorkspaceRoot(URI.file(path.join(link, 'base')).toString());
 				const graph = await visible.refreshDependencyTree();
 				const app = graph?.children.find(node => node.name.endsWith(path.join('a', 'b', 'app', 'terragrunt.hcl')));
 				expect(app?.data.reading?.map(uri => URI.parse(uri).fsPath)).to.deep.equal([path.join(real, 'base', 'shared.yaml')]);
 
+				// With the root hidden the local fails, and discovery drops it and the read it would make.
 				process.env.GIT_CEILING_DIRECTORIES = path.join(link, 'base', 'a');
 				const hidden = new Workspace();
+				hidden.setTrusted(true);
 				hidden.setWorkspaceRoot(URI.file(path.join(link, 'base')).toString());
-				let message = '';
-				await hidden.refreshDependencyTree().catch((error: Error) => { message = error.message; });
-				expect(message).to.include('go_repo_root: no enclosing git repository');
+				const hiddenApp = (await hidden.refreshDependencyTree())?.children.find(node => node.name.endsWith(path.join('a', 'b', 'app', 'terragrunt.hcl')));
+				expect(hiddenApp?.data.reading).to.deep.equal([]);
 			} finally {
 				if (saved === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
 				else process.env.GIT_CEILING_DIRECTORIES = saved;

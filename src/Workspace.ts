@@ -17,10 +17,9 @@ import { RemoteModuleStore } from './remote-modules';
 import { ParsedDocument } from './ParsedDocument';
 import { Schema } from './Schema';
 import { unlessUnresolved } from './unresolved';
-import { discoveryEvaluates } from './discovery-reads';
-import { fileset, filesetRoot } from './functions/fileset';
-import { expandTerragruntGlob } from './functions/terragrunt_glob';
-import { parseJsonDocument, unwrapSensitive } from './functions/utils';
+import { ConfigEvaluator } from './Evaluator';
+import type { DiscoveredReads } from './Evaluator';
+import { parseJsonDocument } from './functions/utils';
 
 /** @returns true for an error from the filesystem, such as a directory that cannot be listed or a file that cannot be read. */
 function isFileSystemError(error: unknown): error is NodeJS.ErrnoException {
@@ -82,10 +81,10 @@ export type ModuleSourceResolution =
 	};
 
 /**
- * A read path that cannot be known without evaluating the configuration, such as one interpolating a local whose value
- * comes from another file. The lineage graph drops that single edge rather than failing the whole document.
+ * A dependency's path that cannot be known without evaluating the configuration, such as one interpolating a local whose
+ * value comes from another file. The lineage graph drops that single edge rather than failing the whole document.
  */
-class UnresolvableReadPath extends Error {}
+class UnresolvablePath extends Error {}
 
 /**
  * A workspace failure caused by one expression in a configuration, so it can be reported where that expression is:
@@ -112,19 +111,60 @@ export class LocatedWorkspaceError extends Error {
 interface ConfigRelationships {
 	includes: string[];
 	dependencies: string[];
-	reads: string[];
+	/**
+	 * The files the file read, as Terragrunt's discovery records them for the unit, or null where they were not
+	 * evaluated because the workspace is not trusted.
+	 */
+	reads: string[] | null;
 	/** The reads read_terragrunt_config parses, whose own reads the file reads too; any other read is only read. */
 	configurations: string[];
 }
 
+/** The message for the files a unit reads, asked for in a workspace that is not trusted. */
+const UNTRUSTED_READS = 'The files a unit reads are known only in a trusted workspace: finding them evaluates the configuration, as Terragrunt\'s discovery does';
+
+/** One pass over the graph: the contexts it resolved, and what the units it evaluated read. */
+interface GraphPass {
+	/** The contexts resolved, by {@link contextKey}. */
+	contexts: Set<string>;
+	/** The units, stacks and read configurations evaluated for their reads, by URI. */
+	evaluated: Set<string>;
+	/** What each file of an evaluated unit read, by {@link contextKey}; a file that read nothing has none. */
+	reads: Map<string, DiscoveredReads>;
+}
+
+/** @returns the key of a unit's context for one of its files. */
+function contextKey(unitUri: string, uri: string): string {
+	return `${unitUri}\0${uri}`;
+}
+
+/** @returns a pass over the graph that has resolved and evaluated nothing yet. */
+function newGraphPass(): GraphPass {
+	return { contexts: new Set(), evaluated: new Set(), reads: new Map() };
+}
+
 /**
- * Whether the workspace fetches remote module sources. It fetches only in a trusted workspace, and asks before the
- * first contact with each host (see `RemoteModuleOptions.approveHost`). A workspace that was never given a policy does
- * not look at remote sources at all: a unit naming one has no module state and no diagnostics about it.
+ * @returns the files a context read.
+ * @throws when they were not evaluated, the workspace not being trusted.
  */
-export interface RemoteModulePolicy {
-	/** True when the workspace is trusted; nothing is fetched otherwise. */
-	trusted: boolean;
+function readsOf(relationships: ConfigRelationships): string[] {
+	if (relationships.reads === null) throw new Error(UNTRUSTED_READS);
+	return relationships.reads;
+}
+
+/**
+ * @returns the text of a file read, or nothing for a path read that holds no regular file, as one mark_as_read marks
+ *   or a directory a hashing function opens can be.
+ */
+async function readContent(filePath: string): Promise<string> {
+	try {
+		if (!(await fs.stat(filePath)).isFile()) return '';
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		if (code === 'ENOENT' || code === 'ENOTDIR') return '';
+		throw error;
+	}
+	return fs.readFile(filePath, 'utf8');
 }
 
 /** What recomputing a unit's module state needs, kept so it can be recomputed when a fetch lands. */
@@ -150,8 +190,17 @@ export class Workspace {
 	private configTreeRoot: TreeNode<TerragruntConfig> | undefined;
 	private moduleVariables = new ModuleVariableCache();
 	private remoteModules = new RemoteModuleStore();
-	/** Undefined until {@link configureRemoteModules} is called, and remote sources are then left alone. */
-	private remotePolicy: RemoteModulePolicy | undefined;
+	/** False until {@link configureRemoteModules} is called, and remote sources are then left alone. */
+	private remoteConfigured = false;
+	/** Whether the workspace is trusted; see {@link setTrusted}. */
+	private trusted = false;
+	/** Evaluates the configurations for the files they read, as Terragrunt's discovery does, in a trusted workspace. */
+	private readonly discovery = new ConfigEvaluator({
+		environmentVariables: Object.fromEntries(
+			Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
+		),
+		workspaceTrusted: false
+	});
 	private remoteEnvironment: NodeJS.ProcessEnv = process.env;
 	/** The binary Terragrunt runs when nothing names one, looked up once per configuration. */
 	private defaultBinary: Promise<string> | undefined;
@@ -171,16 +220,24 @@ export class Workspace {
 		this.workspaceRoot = null;
 	}
 
-	/** `unitUri` is the unit whose lineage is being walked; includes resolve their paths for it, not their own. */
-	private async updateConfigMap(doc: ParsedDocument, processedContexts = new Set<string>(), unitUri = doc.getUri()): Promise<void> {
+	/**
+	 * `unitUri` is the unit whose lineage is being walked; includes resolve their paths for it, not their own.
+	 * `parsedInFull` says the unit is a configuration read_terragrunt_config reads, which Terragrunt parses in full.
+	 */
+	private async updateConfigMap(doc: ParsedDocument, pass: GraphPass = newGraphPass(), unitUri = doc.getUri(), parsedInFull = false): Promise<void> {
 		const uri = doc.getUri();
-		const contextKey = `${unitUri}\0${uri}`;
-		if (processedContexts.has(contextKey)) return;
-		processedContexts.add(contextKey);
+		const key = contextKey(unitUri, uri);
+		if (pass.contexts.has(key)) return;
+		pass.contexts.add(key);
 		const resolveFrom = path.dirname(URI.parse(unitUri).fsPath);
 
 		const ast = doc.getAST();
-		if (!ast) return;
+		if (!ast) {
+			// A configuration read_terragrunt_config reads is read even when it does not parse, and reads nothing.
+			if (parsedInFull) this.setContextRelationships(unitUri, uri, { includes: [], dependencies: [], reads: this.trusted ? [] : null, configurations: [] });
+			return;
+		}
+		if (uri === unitUri) await this.evaluateReads(doc, pass, parsedInFull);
 
 		// First ensure the current config exists in the map
 		let currentConfig = this.configMap.get(uri);
@@ -302,7 +359,7 @@ export class Workspace {
 				resolvedPath = await this.resolveDependencyPath(dep.path, uri, resolveFrom);
 			} catch (error) {
 				// A config_path built from a value this file cannot see costs one graph edge, not the whole document's lineage.
-				if (error instanceof UnresolvableReadPath) continue;
+				if (error instanceof UnresolvablePath) continue;
 				if (error instanceof Error) throw new LocatedWorkspaceError(error.message, uri, pathRange, { cause: error });
 				throw error;
 			}
@@ -337,13 +394,19 @@ export class Workspace {
 			if (ownerUri === uri) dependencyPaths.push(resolvedPath);
 		}
 
-		const { reads: readPaths, configurations: readConfigurations } = await this.resolveReadPaths(doc, resolveFrom);
-		for (const readUri of readPaths) {
+		// What the file read for the unit, as discovery records it. An included file is recorded as read too, and is
+		// this file's include rather than a read of it; the unit's reading lists it all the same.
+		const discovered = pass.reads.get(key);
+		const readPaths = this.trusted
+			? (discovered?.reads ?? []).map(read => URI.file(read).toString()).filter(read => !includePaths.includes(read))
+			: null;
+		const readConfigurations = (discovered?.configurations ?? []).map(read => URI.file(read).toString());
+		for (const readUri of readPaths ?? []) {
 			let readConfig = this.configMap.get(readUri);
 			if (!readConfig) {
 				readConfig = {
 					uri: readUri,
-					content: await fs.readFile(URI.parse(readUri).fsPath, 'utf8'),
+					content: await readContent(URI.parse(readUri).fsPath),
 					includes: [],
 					dependencies: [],
 					reads: [],
@@ -373,19 +436,43 @@ export class Workspace {
 
 		// HCL files consumed with read_terragrunt_config can themselves include or
 		// read other files. Preserve that transitive lineage instead of flattening it.
-		// A file only marked read, or listed by fileset, is not parsed.
+		// Any other file read is only read, not parsed.
 		// Only includes inherit this unit; a read or dependency target is a config in its own right.
 		for (const refUri of includePaths) {
-			if (refUri && !processedContexts.has(`${unitUri}\0${refUri}`)) {
+			if (refUri && !pass.contexts.has(contextKey(unitUri, refUri))) {
 				const refDoc = await this.getParsedDocument(refUri);
-				if (refDoc) await this.updateConfigMap(refDoc, processedContexts, unitUri);
+				if (refDoc) await this.updateConfigMap(refDoc, pass, unitUri);
 			}
 		}
-		for (const refUri of [...dependencyPaths, ...readConfigurations]) {
-			if (refUri && !processedContexts.has(`${refUri}\0${refUri}`)) {
+		for (const [refUri, readInFull] of [...dependencyPaths.map(ref => [ref, false] as const), ...readConfigurations.map(ref => [ref, true] as const)]) {
+			if (refUri && !pass.contexts.has(contextKey(refUri, refUri))) {
 				const refDoc = await this.getParsedDocument(refUri);
-				if (refDoc) await this.updateConfigMap(refDoc, processedContexts, refUri);
+				if (refDoc) await this.updateConfigMap(refDoc, pass, refUri, readInFull);
 			}
+		}
+	}
+
+	/**
+	 * Evaluates a unit, stack or read configuration for the files it reads, as Terragrunt's discovery does, keeping
+	 * what each of its files read, and each configuration it reads in turn, in the pass. Nothing is evaluated in a
+	 * workspace that is not trusted, or for a unit the pass already evaluated, as it evaluates a read configuration
+	 * with the unit that reads it.
+	 *
+	 * @param doc the unit, stack or read configuration.
+	 * @param pass the pass over the graph.
+	 * @param parsedInFull whether it is a configuration read_terragrunt_config reads, which Terragrunt parses in full.
+	 */
+	private async evaluateReads(doc: ParsedDocument, pass: GraphPass, parsedInFull: boolean): Promise<void> {
+		const uri = doc.getUri();
+		if (!this.trusted || pass.evaluated.has(uri)) return;
+		const filePath = URI.parse(uri).fsPath;
+		const workDir = this.workspaceRoot ? URI.parse(this.workspaceRoot).fsPath : path.dirname(filePath);
+		const entries = await this.discovery.discoveryReads(filePath, doc.getContent(), workDir, parsedInFull);
+		pass.evaluated.add(uri);
+		for (const entry of entries) {
+			const unitUri = URI.file(entry.unitPath).toString();
+			pass.evaluated.add(unitUri);
+			pass.reads.set(contextKey(unitUri, URI.file(entry.filePath).toString()), entry);
 		}
 	}
 
@@ -402,7 +489,7 @@ export class Workspace {
 		unitContexts.set(sourceUri, {
 			includes: [...new Set(relationships.includes)].sort(),
 			dependencies: [...new Set(relationships.dependencies)].sort(),
-			reads: [...new Set(relationships.reads)].sort(),
+			reads: relationships.reads && [...new Set(relationships.reads)].sort(),
 			configurations: [...new Set(relationships.configurations)].sort()
 		});
 	}
@@ -430,7 +517,7 @@ export class Workspace {
 				for (const targetUri of [
 					...relationships.includes,
 					...relationships.dependencies,
-					...relationships.reads
+					...relationships.reads ?? []
 				]) activeUris.add(targetUri);
 			}
 		}
@@ -467,7 +554,7 @@ export class Workspace {
 				if (!source) throw new Error(`Missing configuration data for workspace context ${sourceUri}`);
 				for (const target of relationships.includes) connect(source, target, 'includes', 'includedBy');
 				for (const target of relationships.dependencies) connect(source, target, 'dependencies', 'dependedOnBy');
-				for (const target of relationships.reads) connect(source, target, 'reads', 'readBy');
+				for (const target of relationships.reads ?? []) connect(source, target, 'reads', 'readBy');
 			}
 		}
 
@@ -745,7 +832,7 @@ export class Workspace {
 		let moduleDir: string;
 		if (resolution.kind === 'local') moduleDir = resolution.moduleDir;
 		else if (resolution.kind === 'remote') {
-			if (!this.remotePolicy?.trusted) return undefined;
+			if (!this.remoteConfigured || !this.trusted) return undefined;
 			const source = classifyModuleSource(resolution.sourceText, { defaultRegistryHost: await this.registryHostFor(found.configurations), origin: 'authored' });
 			if (source.kind !== 'registry' && source.kind !== 'git') return undefined;
 			try {
@@ -790,16 +877,30 @@ export class Workspace {
 	}
 
 	/**
-	 * Sets whether remote module sources are fetched and how. Until this is called a unit naming a remote source has
-	 * no module state, so a host that does not offer remote modules reports nothing about them. Memoised failures
-	 * and host decisions are forgotten, since new settings may change them; documents already added keep their
-	 * state until they are added again.
+	 * Sets whether the workspace is trusted, which is what lets it evaluate a configuration. In a trusted workspace a
+	 * remote module source is fetched, once remote modules are configured, and each configuration is evaluated for the
+	 * files it reads, as Terragrunt's discovery evaluates it, running `run_cmd`, sops and the rest as it goes. In one
+	 * that is not trusted nothing is fetched or evaluated: a remote source is reported `untrusted`, and the files a
+	 * unit reads are not known, so the graph is refused. Documents already added keep their state until they are added
+	 * again.
 	 *
-	 * @param policy whether fetching is on and the workspace trusted.
+	 * @param trusted whether the workspace is trusted.
+	 */
+	public setTrusted(trusted: boolean): void {
+		this.trusted = trusted;
+		this.discovery.setWorkspaceTrusted(trusted);
+	}
+
+	/**
+	 * Sets how remote module sources are fetched, which they are only in a trusted workspace (see {@link setTrusted}).
+	 * Until this is called a unit naming a remote source has no module state, so a host that does not offer remote
+	 * modules reports nothing about them. Memoised failures and host decisions are forgotten, since new settings may
+	 * change them; documents already added keep their state until they are added again.
+	 *
 	 * @param options how the store fetches; omitted fields keep the store's defaults.
 	 */
-	public configureRemoteModules(policy: RemoteModulePolicy, options: RemoteModuleOptions = {}): void {
-		this.remotePolicy = { ...policy };
+	public configureRemoteModules(options: RemoteModuleOptions = {}): void {
+		this.remoteConfigured = true;
 		this.remoteEnvironment = options.env ?? process.env;
 		this.defaultBinary = undefined;
 		this.remoteModules.configure(options);
@@ -830,7 +931,7 @@ export class Workspace {
 	 *
 	 * Every outcome is explicit: a remote source yields no state until {@link configureRemoteModules} has been
 	 * called; after that it is fetched in the background and reported as `loading` until it lands, `untrusted` while
-	 * fetching is off, `fetchFailed` when it fails and `unsupported` when its form is not fetched; a configuration
+	 * the workspace is not trusted, `fetchFailed` when it fails and `unsupported` when its form is not fetched; a configuration
 	 * or source that cannot be determined, or a module that cannot be read, yields `unavailable` with the reason.
 	 * Anything else that goes wrong is a defect and propagates.
 	 */
@@ -848,8 +949,8 @@ export class Workspace {
 
 		const resolution = await this.resolveModuleSource(this.findTerraformSourceToken(owner)!, owner.getUri(), unitDir);
 		if (resolution.kind === 'remote') {
-			if (this.remotePolicy === undefined) return undefined;
-			return this.remoteModuleVariablesFor(this.remotePolicy, resolution.sourceText, sourceInThisFile, configurations, { doc, includes, includePaths, unitDir });
+			if (!this.remoteConfigured) return undefined;
+			return this.remoteModuleVariablesFor(resolution.sourceText, sourceInThisFile, configurations, { doc, includes, includePaths, unitDir });
 		}
 		if (resolution.kind === 'unresolvable') {
 			return { status: 'unavailable', reason: `the module source could not be resolved: ${resolution.reason}`, sourceInThisFile };
@@ -937,7 +1038,6 @@ export class Workspace {
 	 * when it lands, and the state is `loading` meanwhile. Fetching only happens in a trusted workspace.
 	 */
 	private async remoteModuleVariablesFor(
-		policy: RemoteModulePolicy,
 		sourceText: string,
 		sourceInThisFile: boolean,
 		configurations: ParsedDocument[],
@@ -947,7 +1047,7 @@ export class Workspace {
 		const source = classifyModuleSource(sourceText, { defaultRegistryHost: await this.registryHostFor(configurations), origin: 'authored' });
 		if (source.kind === 'other') return { status: 'unsupported', reason: source.reason, sourceText: shown, sourceInThisFile };
 		if (source.kind === 'local') return { status: 'unsupported', reason: `${shown} is not a form the language service recognises`, sourceText: shown, sourceInThisFile };
-		if (!policy.trusted) return { status: 'untrusted', sourceText: shown, sourceInThisFile };
+		if (!this.trusted) return { status: 'untrusted', sourceText: shown, sourceInThisFile };
 		this.remoteUnits.set(unit.doc.getUri(), unit);
 		const request = requestKey(source);
 		const known = this.remoteModules.peek(request);
@@ -1225,18 +1325,16 @@ export class Workspace {
 				return String(token.value);
 			}
 			case 'local_reference': {
-				return this.evaluateReadPath(token, sourceDir, sourceUri, seen);
+				return this.evaluateStaticPath(token, sourceDir, sourceUri, seen);
 			}
 			default: throw new Error(`Unsupported path interpolation expression: ${token.type}`);
 		}
 	}
-	/** `reveal` takes a sensitive result as the string it holds, as a read path does. */
 	private async evaluatePathFunction(
 		token: Token,
 		sourceDir: string,
 		sourceUri = URI.file(sourceDir).toString(),
-		seen: ReadonlySet<string> = new Set(),
-		reveal = false
+		seen: ReadonlySet<string> = new Set()
 	): Promise<string> {
 		const functionIdentifier = token.children.find(c => c.type === 'function_identifier');
 		const funcName = functionIdentifier?.value as string;
@@ -1265,109 +1363,14 @@ export class Workspace {
 			.filter(child => child.type !== 'function_identifier')
 			.map(async argument => ({
 				type: 'string' as const,
-				value: await this.evaluateReadPath(argument, sourceDir, sourceUri, seen)
+				value: await this.evaluateStaticPath(argument, sourceDir, sourceUri, seen)
 			})));
 
 		const result = await this.schema.getFunctionRegistry().evaluateFunction(funcName, args, context);
-		// A read path may be sensitive: Terragrunt still reads the file, and records it read.
-		const value = reveal ? unwrapSensitive(result) : result;
-		if (value.type !== 'string' || typeof value.value !== 'string') {
+		if (result.type !== 'string' || typeof result.value !== 'string') {
 			throw new Error(`Path function ${funcName} did not return a string`);
 		}
-		return value.value;
-	}
-
-	/**
-	 * The files a configuration reads, and of those the configurations read_terragrunt_config parses, which can
-	 * themselves include and read other files.
-	 */
-	private async resolveReadPaths(document: ParsedDocument, unitDir?: string): Promise<{ reads: string[]; configurations: string[] }> {
-		const trackedFunctions = new Set([
-			'mark_as_read',
-			'mark_glob_as_read',
-			'read_terragrunt_config',
-			'read_tfvars_file',
-			'sops_decrypt_file'
-		]);
-		const kind = this.schema.getFileKind(document.getUri());
-		const calls: Token[] = [];
-		const isInsideLocals = (token: Token): boolean => {
-			let ancestor = token.parent;
-			while (ancestor) {
-				if (ancestor.type === 'block' && ancestor.value === 'locals') return true;
-				ancestor = ancestor.parent;
-			}
-			return false;
-		};
-		const visit = (token: Token): void => {
-			const name = token.value?.toString() ?? '';
-			const queueMarker = name === 'mark_as_read' || name === 'mark_glob_as_read';
-			if (token.type === 'function_call') {
-				if (name === 'fileset') {
-					if (discoveryEvaluates(token, kind)) calls.push(token);
-				} else if (trackedFunctions.has(name) && (!queueMarker || isInsideLocals(token))) calls.push(token);
-			}
-			for (const child of token.children) visit(child);
-		};
-		for (const token of document.getTokens()) visit(token);
-
-		const sourceUri = document.getUri();
-		const sourceDir = path.dirname(URI.parse(sourceUri).fsPath);
-		// Terragrunt evaluates tracked read paths in the unit context, including
-		// bare relative paths authored in an included configuration.
-		const resolveFrom = unitDir ?? sourceDir;
-		const reads = new Set<string>();
-		const configurations = new Set<string>();
-		for (const call of calls) {
-			const arguments_ = call.children.filter(child => child.type !== 'function_identifier');
-			const argument = arguments_[0];
-			if (!argument) throw new Error(`${call.value} requires a file path argument`);
-			if (call.value === 'fileset') {
-				if (arguments_.length !== 2) throw new Error(`fileset requires a path and a pattern, got ${arguments_.length} arguments`);
-				let directory: string;
-				let pattern: string;
-				try {
-					[directory, pattern] = await Promise.all(arguments_.map(value => this.evaluateReadPath(value, resolveFrom, sourceUri)));
-				} catch (error) {
-					if (error instanceof UnresolvableReadPath) continue;
-					throw error;
-				}
-				// Terragrunt's fileset resolves from the directory of the file it is called in, and records each
-				// match read joined to the directory it searched. A read path is evaluated without its sensitive
-				// mark, so a refusal here names the path; the evaluator reports the call's own refusal redacted.
-				const root = filesetRoot(directory, sourceDir);
-				for (const match of await fileset(directory, pattern, sourceDir, false)) reads.add(URI.file(path.join(root, match)).toString());
-				continue;
-			}
-			if (call.value === 'mark_glob_as_read') {
-				let values: string[];
-				try {
-					values = await Promise.all(arguments_.map(value => this.evaluateReadPath(value, resolveFrom, sourceUri)));
-				} catch (error) {
-					if (error instanceof UnresolvableReadPath) continue;
-					throw error;
-				}
-				for (const match of await expandTerragruntGlob(values, resolveFrom, process.env)) reads.add(URI.file(match).toString());
-				continue;
-			}
-			let configuredPath: string;
-			try {
-				configuredPath = await this.evaluateReadPath(argument, resolveFrom, sourceUri);
-			} catch (error) {
-				if (error instanceof UnresolvableReadPath) continue;
-				throw error;
-			}
-			if (call.value === 'mark_as_read' && !path.isAbsolute(configuredPath)) {
-				throw new Error(`mark_as_read requires an absolute path, got ${configuredPath}`);
-			}
-			// Both a bare relative read and a path built by a unit-relative
-			// function resolve from the originating unit.
-			const resolvedPath = path.isAbsolute(configuredPath) ? configuredPath : path.resolve(resolveFrom, configuredPath);
-			if (!await this.fileExists(resolvedPath)) throw new Error(`${call.value} target not found: ${resolvedPath}`);
-			reads.add(URI.file(resolvedPath).toString());
-			if (call.value === 'read_terragrunt_config' && path.extname(resolvedPath) === '.hcl') configurations.add(URI.file(resolvedPath).toString());
-		}
-		return { reads: [...reads].sort(), configurations: [...configurations].sort() };
+		return result.value;
 	}
 
 	/** The value token of `local.<name>`, found in the locals block of the file the reference sits in. */
@@ -1391,56 +1394,58 @@ export class Workspace {
 		return found;
 	}
 
-	private async evaluateReadPath(
+	private async evaluateStaticPath(
 		token: Token,
 		sourceDir: string,
 		sourceUri: string,
 		seen: ReadonlySet<string> = new Set()
 	): Promise<string> {
 		if (token.type === 'string_lit') return String(token.value);
-		if (token.type === 'function_call') return this.evaluatePathFunction(token, sourceDir, sourceUri, seen, true);
+		if (token.type === 'function_call') return this.evaluatePathFunction(token, sourceDir, sourceUri, seen);
 		if (token.type === 'local_reference') {
 			const name = token.children
 				.find(child => child.type === 'access_chain')?.children
 				.find(child => child.type === 'reference_identifier')?.value;
-			if (typeof name !== 'string') throw new Error('Malformed local reference in a read path');
-			if (seen.has(name)) throw new Error(`Local ${name} refers to itself in a read path`);
+			if (typeof name !== 'string') throw new Error('Malformed local reference in a path');
+			if (seen.has(name)) throw new Error(`Local ${name} refers to itself in a path`);
 			// An access chain past the name (`local.stage_vars.stage`) indexes into a value, which is not something a path walk
 			// can produce.
 			const chain = token.children.find(child => child.type === 'access_chain')?.children ?? [];
 			if (chain.filter(child => child.type === 'reference_identifier').length > 1) {
-				throw new UnresolvableReadPath(`local.${name} is indexed in a read path`);
+				throw new UnresolvablePath(`local.${name} is indexed in a path`);
 			}
 			const definition = this.findLocalDefinition(token, name);
-			if (!definition) throw new Error(`Undefined local.${name} in a read path`);
-			return this.evaluateReadPath(definition, sourceDir, sourceUri, new Set([...seen, name]));
+			if (!definition) throw new Error(`Undefined local.${name} in a path`);
+			return this.evaluateStaticPath(definition, sourceDir, sourceUri, new Set([...seen, name]));
 		}
 		if (token.type === 'interpolated_string') {
 			const parts = await Promise.all(token.children.map(async child => {
 				if (child.type === 'string_lit') return String(child.value);
 				if (child.type === 'interpolation' && child.children[0]) {
-					return this.evaluateReadPath(child.children[0], sourceDir, sourceUri, seen);
+					return this.evaluateStaticPath(child.children[0], sourceDir, sourceUri, seen);
 				}
-				throw new UnresolvableReadPath(`a ${child.type} in a read path needs the configuration evaluated`);
+				throw new UnresolvablePath(`a ${child.type} in a path needs the configuration evaluated`);
 			}));
 			return parts.join('');
 		}
 		// A conditional, a for expression, a reference other than a local and the like have a value only once the
 		// configuration is evaluated.
-		throw new UnresolvableReadPath(`a ${token.type} in a read path needs the configuration evaluated`);
+		throw new UnresolvablePath(`a ${token.type} in a path needs the configuration evaluated`);
 	}
 
 	private async buildDependencyTree(): Promise<void> {
 		if (!this.workspaceRoot) return;
+		if (!this.trusted) throw new Error(UNTRUSTED_READS);
 
 		// Discover both unit and explicit stack entrypoints.
 		const configs = await this.findTerragruntConfigs(this.workspaceRoot);
 
 		// First pass: Load and parse all configs
+		const pass = newGraphPass();
 		for (const uri of configs) {
 			const doc = await this.getParsedDocument(uri);
 			if (doc) {
-				await this.updateConfigMap(doc);
+				await this.updateConfigMap(doc, pass);
 			}
 		}
 		this.syncConfigRelationships();
@@ -1498,25 +1503,30 @@ export class Workspace {
 			...config,
 			includes: [...relationships.includes],
 			dependencies: [...relationships.dependencies],
-			reads: [...relationships.reads],
+			reads: [...readsOf(relationships)],
 			reading: this.collectReading(unitUri, config.uri, new Set()),
 			external: this.isExternal(config.uri)
 		};
 	}
 
+	/**
+	 * Everything a file reads for a unit, as Terragrunt's discovery lists it: what it reads, the files it includes and
+	 * what they read, and what each configuration it reads with read_terragrunt_config reads in turn.
+	 */
 	private collectReading(unitUri: string, uri: string, ancestry: Set<string>): string[] {
-		const contextKey = `${unitUri}\0${uri}`;
-		if (ancestry.has(contextKey)) throw new Error(`Reading cycle detected at ${uri}`);
+		const key = contextKey(unitUri, uri);
+		if (ancestry.has(key)) throw new Error(`Reading cycle detected at ${uri}`);
 		const config = this.configMap.get(uri);
 		if (!config) throw new Error(`Cannot collect reading lineage for missing configuration ${uri}`);
 		const relationships = this.relationshipsFor(unitUri, config);
+		const reads = readsOf(relationships);
 		const nextAncestry = new Set(ancestry);
-		nextAncestry.add(contextKey);
-		const reading = new Set(relationships.reads);
+		nextAncestry.add(key);
+		const reading = new Set([...reads, ...relationships.includes]);
 		for (const includeUri of relationships.includes) {
 			for (const transitiveUri of this.collectReading(unitUri, includeUri, nextAncestry)) reading.add(transitiveUri);
 		}
-		for (const readUri of relationships.reads) {
+		for (const readUri of reads) {
 			if (!this.configMap.has(readUri)) throw new Error(`Reading lineage references missing file ${readUri}`);
 		}
 		for (const readUri of relationships.configurations) {
@@ -1712,11 +1722,15 @@ export class Workspace {
 			const previous = this.configContexts.get(unitUri);
 			if (previous) previousContexts.set(unitUri, previous);
 		}
+		// A configuration another reads with read_terragrunt_config is parsed in full, as Terragrunt parses it.
+		const readConfigurations = new Set([...this.configContexts.values()]
+			.flatMap(contexts => [...contexts.values()].flatMap(relationships => relationships.configurations)));
 		for (const unitUri of affectedUnits) this.configContexts.delete(unitUri);
 		try {
+			const pass = newGraphPass();
 			for (const unitUri of affectedUnits) {
 				const unitDocument = unitUri === uri ? document : await this.getParsedDocument(unitUri);
-				if (unitDocument) await this.updateConfigMap(unitDocument, new Set(), unitUri);
+				if (unitDocument) await this.updateConfigMap(unitDocument, pass, unitUri, readConfigurations.has(unitUri));
 			}
 			this.syncConfigRelationships();
 		} catch (error) {
@@ -1790,12 +1804,6 @@ export class Workspace {
 	}
 
 	/**
-	 * The include, dependency and read edges recorded for a configuration once it has been added.
-	 *
-	 * @param uri URI of the configuration.
-	 * @returns copies of the three URI lists, or undefined when the configuration has not been added.
-	 */
-	/**
 	 * The configurations Terragrunt merges into a unit, highest priority first, by the same rules the unit's module
 	 * inputs are checked with: the sibling `terragrunt.autoinclude.hcl`, the unit, then its direct includes from
 	 * the last to the first, leaving out any with `merge_strategy = "no_merge"`.
@@ -1814,10 +1822,17 @@ export class Workspace {
 		return 'reason' in merged ? merged : { configurations: merged.configurations.map(configuration => configuration.getUri()) };
 	}
 
-	getRelationships(uri: string): { includes: string[]; dependencies: string[]; reads: string[] } | undefined {
+	/**
+	 * The include, dependency and read edges recorded for a configuration once it has been added.
+	 *
+	 * @param uri URI of the configuration.
+	 * @returns copies of the three URI lists, the reads null in a workspace that is not trusted, where they are not
+	 *   evaluated; or undefined when the configuration has not been added.
+	 */
+	getRelationships(uri: string): { includes: string[]; dependencies: string[]; reads: string[] | null } | undefined {
 		const config = this.configMap.get(uri);
 		if (!config) return undefined;
-		return { includes: [...config.includes], dependencies: [...config.dependencies], reads: [...config.reads] };
+		return { includes: [...config.includes], dependencies: [...config.dependencies], reads: this.trusted ? [...config.reads] : null };
 	}
 
 	getEvaluationContext(uri: string): { referencingConfigs: TerragruntConfig[] } {

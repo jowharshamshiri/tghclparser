@@ -10,7 +10,7 @@ import type { FunctionContext, RuntimeValue, ValueType } from '../model';
 import { assumeFunctions, markedLike } from './assume_functions';
 import { addressRange, contains, type IP, type IPNet, parseCIDR, parseIP, to4 } from './ipaddr';
 import { renderTemplate } from './template';
-import { fileset } from './fileset';
+import { fileset, filesetRoot } from './fileset';
 import { expandTerragruntGlob } from './terragrunt_glob';
 import { formatFunction, formatListFunction } from './format';
 import {
@@ -26,6 +26,7 @@ import {
 	makeStringValue,
 	markEncrypted,
 	parseJsonDocument,
+	unitWorkingDirectory,
 	unwrapSensitive
 } from './utils';
 
@@ -928,12 +929,12 @@ export const builtinFunctionGroup = {
 			// Terragrunt takes a sensitive directory or pattern, and marks the files it answers sensitive.
 			const sensitive = args.some(argument => (argument.type as string) === 'sensitive');
 			const plain = args.map(unwrapSensitive);
-			const files = arrayValue((await fileset(
-				stringArgument(plain, 0, 'fileset'),
-				stringArgument(plain, 1, 'fileset'),
-				context.workingDirectory,
-				sensitive
-			)).map(stringValue));
+			const directory = stringArgument(plain, 0, 'fileset');
+			const matches = await fileset(directory, stringArgument(plain, 1, 'fileset'), context.workingDirectory, sensitive);
+			// Each file answered is read, joined to the directory searched.
+			const root = filesetRoot(directory, context.workingDirectory);
+			for (const match of matches) context.onRead?.(path.join(root, match));
+			const files = arrayValue(matches.map(stringValue));
 			return sensitive ? makeSensitiveValue(files) : files;
 		},
 		distinct: async (args: RuntimeValue<ValueType>[]) => {
@@ -1020,17 +1021,23 @@ export const builtinFunctionGroup = {
 			throw new Error(`lookup key ${JSON.stringify(key)} not found in object`);
 		},
 		lower: async (args: RuntimeValue<ValueType>[]) => stringValue(stringArgument(args, 0, 'lower').toLocaleLowerCase()),
-		mark_as_read: async (args: RuntimeValue<ValueType>[]) => {
+		// Marks any path read, whether a file is there or not, a relative one being the unit's, and answers it as written.
+		mark_as_read: async (args: RuntimeValue<ValueType>[], context: FunctionContext) => {
 			expectParams(args, [1], 'mark_as_read');
 			const value = stringArgument(args, 0, 'mark_as_read');
+			context.onRead?.(path.resolve(unitWorkingDirectory(context), value));
 			return stringValue(value);
 		},
-		mark_glob_as_read: async (args: RuntimeValue<ValueType>[], context: FunctionContext) => arrayValue((await expandTerragruntGlob(
-			args.map((_, index) => stringArgument(args, index, 'mark_glob_as_read')),
-			context.workingDirectory,
-			context.environmentVariables,
-			context.repoRoots
-		)).map(stringValue)),
+		mark_glob_as_read: async (args: RuntimeValue<ValueType>[], context: FunctionContext) => {
+			const matches = await expandTerragruntGlob(
+				args.map((_, index) => stringArgument(args, index, 'mark_glob_as_read')),
+				unitWorkingDirectory(context),
+				context.environmentVariables,
+				context.repoRoots
+			);
+			for (const match of matches) context.onRead?.(match);
+			return arrayValue(matches.map(stringValue));
+		},
 		matchkeys: async (args: RuntimeValue<ValueType>[]) => {
 			const values = arrayArgument(args, 0, 'matchkeys');
 			const keys = arrayArgument(args, 1, 'matchkeys');

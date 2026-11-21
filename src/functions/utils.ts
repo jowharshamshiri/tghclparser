@@ -1,5 +1,18 @@
+import path from 'node:path';
+
+import { URI } from 'vscode-uri';
+
 import { CtyNumber } from '../cty-number';
-import type { RuntimeValue, ValueType } from '../model';
+import type { FunctionContext, RuntimeValue, ValueType } from '../model';
+
+/**
+ * The directory Terragrunt's own functions resolve a relative path from and its repository-root functions answer for,
+ * its WorkingDir: the unit's, in a configuration the unit includes as well, and a configuration read_terragrunt_config
+ * reads its own.
+ */
+export function unitWorkingDirectory(context: FunctionContext): string {
+	return context.terragruntDir ?? path.dirname(URI.parse(context.document.uri).fsPath);
+}
 
 // A string value is NFC-normalized as it is made, as go-cty normalizes every string on entry, so two spellings of
 // one character are one string wherever strings are compared, counted or written out.

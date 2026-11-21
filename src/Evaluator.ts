@@ -2,9 +2,11 @@ import { execFileSync } from 'node:child_process';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { CtyNumber, NUMBER_OUT_OF_RANGE } from './cty-number';
 import { arithmetic, comparison, negation, sequencePosition } from './cty-operations';
+import { discoveryExpressions } from './discovery-reads';
 import { FunctionOperation, invokeFunctionOperation, readArgs, FUNCTION_CONTEXT_KEY } from './function-ops';
 import type { InlineFunctionDefinition } from './inline-functions';
 import { checkTypeConstraint, readInlineFunction, readTypeConstraint, synthesizeDefinition } from './inline-functions';
@@ -12,7 +14,7 @@ import { parseHclSyntax } from './syntax';
 import { Schema } from './Schema';
 import { encryptedSopsDocument } from './sops';
 import { goRepoRoot, RepoRootError } from './functions/git_repo_root';
-import type { FunctionArity, FunctionContext, FunctionDefinition, RuntimeValue, ValueType } from './model';
+import type { FunctionArity, FunctionContext, FunctionDefinition, RuntimeValue, TerragruntFileKind, ValueType } from './model';
 import {
 	coerceToString,
 	compareStrings,
@@ -436,6 +438,76 @@ interface UnitContext {
 	structuralScopes: Map<string, Scope>;
 	/** The run's Git repository roots by the directories walked to them, shared with the configurations it reads. */
 	repoRoots: Map<string, string>;
+	/** Where the files read are kept while the evaluation records discovery's reads, shared with the configurations it reads. */
+	reads?: DiscoveryReadRecord;
+}
+
+/**
+ * The files a unit or stack reads as Terragrunt v1.2.2's discovery records them, from the expressions of one file
+ * evaluated for one unit, stack, or configuration read_terragrunt_config reads.
+ */
+export interface DiscoveredReads {
+	/** Absolute path of the unit, stack or read configuration the file was evaluated for. */
+	unitPath: string;
+	/** Absolute path of the file whose expressions read them: the unit itself, with its autoinclude, or a file it includes. */
+	filePath: string;
+	/** Each file read, as the function that read it resolved it, sorted. */
+	reads: string[];
+	/** Of those, the configurations read_terragrunt_config parsed, whose own reads are under their own `unitPath`. */
+	configurations: string[];
+}
+
+/** The files read while an evaluation records discovery's reads, by the unit and file whose expressions read each. */
+class DiscoveryReadRecord {
+	private readonly kept = new Map<string, { unitPath: string; filePath: string; reads: Set<string>; configurations: Set<string> }>();
+
+	private entry(unitPath: string, filePath: string) {
+		const key = `${unitPath}\0${filePath}`;
+		let entry = this.kept.get(key);
+		if (!entry) {
+			entry = { unitPath, filePath, reads: new Set(), configurations: new Set() };
+			this.kept.set(key, entry);
+		}
+		return entry;
+	}
+
+	/** Records that a unit, stack or read configuration is evaluated, so it is listed even when it reads nothing. */
+	begin(unitPath: string): void {
+		this.entry(unitPath, unitPath);
+	}
+
+	/**
+	 * @param unitPath the unit, stack or read configuration evaluated.
+	 * @param filePath the file whose expression read it.
+	 * @param read the file read.
+	 * @param configuration whether read_terragrunt_config parsed it.
+	 */
+	record(unitPath: string, filePath: string, read: string, configuration = false): void {
+		const entry = this.entry(unitPath, filePath);
+		entry.reads.add(read);
+		if (configuration) entry.configurations.add(read);
+	}
+
+	/** Credits what one file of a unit read to another, as a stack's values file's reads are the stack's, and an autoinclude's the file beside it. */
+	credit(unitPath: string, from: string, to: string): void {
+		const source = this.kept.get(`${unitPath}\0${from}`);
+		if (!source) return;
+		this.kept.delete(`${unitPath}\0${from}`);
+		const target = this.entry(unitPath, to);
+		for (const read of source.reads) target.reads.add(read);
+		for (const configuration of source.configurations) target.configurations.add(configuration);
+	}
+
+	entries(): DiscoveredReads[] {
+		return [...this.kept.values()]
+			.map(entry => ({
+				unitPath: entry.unitPath,
+				filePath: entry.filePath,
+				reads: [...entry.reads].sort(),
+				configurations: [...entry.configurations].sort()
+			}))
+			.sort((left, right) => left.unitPath.localeCompare(right.unitPath) || left.filePath.localeCompare(right.filePath));
+	}
 }
 
 type MergeStrategy = 'no_merge' | 'shallow' | 'deep';
@@ -844,6 +916,82 @@ export class ConfigEvaluator {
 		return this.readConfigObject(result);
 	}
 
+	/**
+	 * The files a configuration reads as Terragrunt v1.2.2's discovery records them for `find --reading` and the
+	 * reading filters, by the file whose expressions read each.
+	 *
+	 * Discovery evaluates every local and include block of a unit and the files it includes, and what its partial
+	 * parse decodes (see {@link discoveryExpressions}); of a stack, its values file, locals, includes, unit and stack
+	 * blocks. A configuration read_terragrunt_config reads is parsed in full, as one given with `parsedInFull` is. HCL
+	 * evaluates both results of a conditional, so what either reads is recorded. Each expression is evaluated on its
+	 * own and a fault in it, or in the configuration, is dropped, as discovery drops them: what was read before it
+	 * stays recorded.
+	 *
+	 * @param configPath absolute path of the unit, stack or configuration.
+	 * @param content its text.
+	 * @param workDir the directory the workspace root is found from.
+	 * @param parsedInFull whether Terragrunt parses it in full, as it does a configuration read_terragrunt_config reads.
+	 * @returns what each file read, for the configuration and for each configuration read_terragrunt_config read.
+	 */
+	async discoveryReads(configPath: string, content: string, workDir: string, parsedInFull = false): Promise<DiscoveredReads[]> {
+		this.assertTrusted('Discovery evaluation');
+		const workspaceRoot = await this.resolveWorkspaceRoot(workDir);
+		const record = new DiscoveryReadRecord();
+		const kind = this.schema.getFileKind(pathToFileURL(configPath).href);
+		record.begin(path.resolve(configPath));
+		await this.unitContext.run({ ...this.newUnitContext(configPath), reads: record }, async () => {
+			// Terragrunt reads a stack's values before its stack file, and what they read is the stack's.
+			const valuesPath = path.join(path.dirname(configPath), 'terragrunt.values.hcl');
+			if (kind === 'stack' && !parsedInFull && await pathExists(valuesPath)) {
+				await this.assertPathAllowed(valuesPath, workspaceRoot);
+				const values = await this.settle(async () => this.evaluateFile(valuesPath, await fs.readFile(valuesPath, 'utf8'), workspaceRoot, undefined, true));
+				if ('value' in values) await this.evaluateDiscoveryExpressions(values.value, 'values', false);
+				record.credit(path.resolve(configPath), valuesPath, configPath);
+			}
+			const result = await this.settle(() => this.evaluateFile(configPath, content, workspaceRoot, undefined, true));
+			if ('value' in result) await this.evaluateDiscoveryExpressions(result.value, kind, parsedInFull);
+		});
+		return record.entries();
+	}
+
+	/**
+	 * Evaluates, for the reads they make, the locals and the expressions discovery evaluates of a file and of every
+	 * file merged into it, each on its own, dropping its value and any fault. An exposed include is parsed in full, as
+	 * Terragrunt parses it to expose it.
+	 */
+	private async evaluateDiscoveryExpressions(result: FileResult, kind: TerragruntFileKind, parsedInFull: boolean): Promise<void> {
+		const scope = result.scope;
+		for (const name of scope.locals.keys()) await this.settle(() => this.resolveLocal(scope, name));
+		for (const expression of discoveryExpressions(scope.ast, kind, parsedInFull)) await this.settle(() => this.evalNode(expression, scope));
+		// Nothing is merged into a values file.
+		if (kind === 'values') return;
+		for (const include of scope.includes.values()) await this.evaluateDiscoveryExpressions(include.result, kind, parsedInFull || include.expose);
+		if (scope.autoinclude) {
+			await this.evaluateDiscoveryExpressions(scope.autoinclude, kind, parsedInFull);
+			// An autoinclude is merged into the file beside it as part of it, so what it reads that file reads.
+			const unit = scope.unit!;
+			unit.reads?.credit(unit.unitPath, scope.autoinclude.filePath, scope.filePath);
+		}
+	}
+
+	/** Whether evaluation in the scope records discovery's reads; never inside an inline function, which HCL does not have. */
+	private recordsReads(scope: Scope): boolean {
+		return scope.unit?.reads !== undefined && (this.inlineCallDepth.getStore() ?? 0) === 0;
+	}
+
+	/**
+	 * Runs an evaluation and keeps its value or its fault, as discovery does with an expression it evaluates. A defect
+	 * in this code still throws.
+	 */
+	private async settle<T>(evaluate: () => Promise<T>): Promise<{ value: T } | { fault: unknown }> {
+		try {
+			return { value: await evaluate() };
+		} catch (error) {
+			if (error instanceof Error && isDefect(error)) throw error;
+			return { fault: error };
+		}
+	}
+
 	async evaluateAtPosition(
 		configPath: string,
 		content: string,
@@ -1075,7 +1223,8 @@ export class ConfigEvaluator {
 			unitDir: unitDir ?? path.dirname(unitPath),
 			resolved: new Map(),
 			structuralScopes: new Map(),
-			repoRoots: this.unitContext.getStore()?.repoRoots ?? new Map()
+			repoRoots: this.unitContext.getStore()?.repoRoots ?? new Map(),
+			reads: this.unitContext.getStore()?.reads
 		};
 	}
 
@@ -1208,7 +1357,10 @@ export class ConfigEvaluator {
 			this.assertTrusted('Included configuration evaluation');
 			await this.assertPathAllowed(includePath, scope.workspaceRoot);
 			const includeContent = await fs.readFile(includePath, 'utf8');
-			const includeResult = await this.evaluateFile(includePath, includeContent, workDir, scope.unitDir ?? dir);
+			// Discovery records an included file as read, whether it is merged or not; an autoinclude is not.
+			unit.reads?.record(unit.unitPath, filePath, includePath);
+			// An include's inputs are left as the unit's are, unless it is exposed, which Terragrunt parses it in full for.
+			const includeResult = await this.evaluateFile(includePath, includeContent, workDir, scope.unitDir ?? dir, skipInputs && !expose);
 			if (blocks.some(block => block.value === 'remote_state') && includeResult.scope.blocks.some(block => block.value === 'remote_state')) {
 				throw new Error(`remote_state is defined in both ${filePath} and included configuration ${includePath}`);
 			}
@@ -1359,6 +1511,11 @@ export class ConfigEvaluator {
 	}
 
 	private async makeContext(scope: Scope): Promise<FunctionContext> {
+		// While discovery's reads are recorded, a file read is the unit's this file was evaluated for, read by this file.
+		const unit = scope.unit;
+		const recordRead = unit?.reads
+			? (read: string, configuration = false) => unit.reads!.record(unit.unitPath, scope.filePath, read, configuration)
+			: undefined;
 		return {
 			workingDirectory: scope.dir,
 			environmentVariables: this.options.environmentVariables,
@@ -1391,6 +1548,7 @@ export class ConfigEvaluator {
 				named: new Map([...scope.includes].map(([name, include]) => [name, include.dir]))
 			},
 			repoRoots: this.unitContext.getStore()?.repoRoots,
+			onRead: recordRead ? read => recordRead(read) : undefined,
 			readTerragruntConfig: async (relativePath: string) => {
 				this.assertTrusted('read_terragrunt_config');
 				const target = path.isAbsolute(relativePath)
@@ -1398,13 +1556,16 @@ export class ConfigEvaluator {
 					: path.resolve(scope.unitDir ?? scope.dir, relativePath);
 				await this.assertPathAllowed(target, scope.workspaceRoot);
 				if (!(await pathExists(target))) return undefined;
+				recordRead?.(target, true);
 				const fileContent = await fs.readFile(target, 'utf8');
+				unit?.reads?.begin(path.resolve(target));
 				// The configuration read is a unit of its own: its dependency blocks are its, not the reader's.
-				const result = await this.unitContext.run(
-					this.newUnitContext(target),
-					() => this.evaluateFile(target, fileContent, scope.workspaceRoot)
-				);
-				return this.readConfigObject(result);
+				return this.unitContext.run(this.newUnitContext(target), async () => {
+					const result = await this.evaluateFile(target, fileContent, scope.workspaceRoot);
+					// Terragrunt parses the configuration in full, so discovery records everything it reads.
+					if (recordRead) await this.evaluateDiscoveryExpressions(result, this.schema.getFileKind(pathToFileURL(target).href), true);
+					return this.readConfigObject(result);
+				});
 			},
 			readTFVarsFile: async (relativePath: string) => {
 				this.assertTrusted('read_tfvars_file');
@@ -1413,8 +1574,9 @@ export class ConfigEvaluator {
 					: path.resolve(scope.unitDir ?? scope.dir, relativePath);
 				await this.assertPathAllowed(target, scope.workspaceRoot);
 				if (!(await pathExists(target))) return undefined;
+				recordRead?.(target);
 				const fileContent = await fs.readFile(target, 'utf8');
-					return this.readTFVars(target, fileContent);
+				return this.readTFVars(target, fileContent);
 			},
 			runCommand: async (program: string, args: string[]) => {
 				this.assertTrusted('run_cmd');
@@ -2132,8 +2294,18 @@ export class ConfigEvaluator {
 				return this.evalTemplateFor(node, scope);
 			case 'ternary_expression': {
 				const [condition, whenTrue, whenFalse] = node.children ?? [];
+				// HCL evaluates both results before the condition. Discovery records what either reads, so while its reads
+				// are recorded both are evaluated, and the one not chosen is dropped with its fault.
+				const results = this.recordsReads(scope)
+					? [await this.settle(() => this.evalNode(whenTrue, scope)), await this.settle(() => this.evalNode(whenFalse, scope))]
+					: undefined;
 				const value = computable(await this.evalNode(condition, scope));
 				const truth = this.atNode(condition, scope, () => conditionValue(value));
+				if (results) {
+					const chosen = truth ? results[0] : results[1];
+					if ('fault' in chosen) throw chosen.fault;
+					return chosen.value;
+				}
 				return truth ? this.evalNode(whenTrue, scope) : this.evalNode(whenFalse, scope);
 			}
 			case 'logical_expression':

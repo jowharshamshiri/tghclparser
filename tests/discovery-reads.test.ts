@@ -1,36 +1,31 @@
 import { expect } from 'chai';
 
-import { discoveryEvaluates } from '../src/discovery-reads';
-import type { TerragruntFileKind, Token } from '../src/model';
-import { ParsedDocument } from '../src/ParsedDocument';
-import { Workspace } from '../src/Workspace';
+import type { ConfigurationNode } from '../src/discovery-reads';
+import { discoveryExpressions } from '../src/discovery-reads';
+import type { TerragruntFileKind } from '../src/model';
+import { parseHclSyntax } from '../src/syntax';
 
-// Where Terragrunt v1.2.2's discovery evaluates an expression, so that a file a
+// Which expressions Terragrunt v1.2.2's discovery evaluates, so that a file a
 // function reads there counts as read: each call below names its place in its
-// pattern argument.
+// pattern argument. Locals and include blocks are evaluated as a file's scope is
+// built, so they are not among them and these files have none.
 describe('discovery evaluation', () => {
-	const places = (filename: string, kind: TerragruntFileKind, content: string) => {
-		const document = new ParsedDocument(new Workspace(), `file:///repo/live/app/${filename}`, content);
-		const calls: Token[] = [];
-		const visit = (token: Token): void => {
-			if (token.type === 'function_call' && token.value === 'fileset') calls.push(token);
-			for (const child of token.children) visit(child);
-		};
-		for (const token of document.getTokens()) visit(token);
-		const place = (call: Token) => String(call.children.filter(child => child.type !== 'function_identifier')[1].value);
+	const places = (kind: TerragruntFileKind, content: string, parsedInFull = false) => {
+		const root = parseHclSyntax(content, 'terragrunt.hcl', 'terragrunt.hcl') as ConfigurationNode;
+		const calls = (node: ConfigurationNode): ConfigurationNode[] => [
+			...(node.type === 'function_call' && node.value === 'fileset' ? [node] : []),
+			...(node.children ?? []).flatMap(calls)
+		];
+		const place = (call: ConfigurationNode) => String(call.children!.filter(child => child.type !== 'function_identifier')[1].value);
+		const selected = new Set(discoveryExpressions(root, kind, parsedInFull).flatMap(calls));
+		const all = calls(root);
 		return {
-			evaluated: calls.filter(call => discoveryEvaluates(call, kind)).map(place),
-			skipped: calls.filter(call => !discoveryEvaluates(call, kind)).map(place)
+			evaluated: all.filter(call => selected.has(call)).map(place),
+			skipped: all.filter(call => !selected.has(call)).map(place)
 		};
 	};
 
-	const unit = `locals {
-  a = fileset(".", "locals")
-}
-include "root" {
-  path = fileset(".", "include")
-}
-feature "f" {
+	const unit = `feature "f" {
   default = fileset(".", "feature")
 }
 dependencies {
@@ -83,24 +78,25 @@ inputs = {
 }
 `;
 	const unitEvaluated = [
-		'locals', 'include', 'feature', 'dependencies', 'dependency', 'engine', 'exclude', 'errors', 'terraform.source',
+		'feature', 'dependencies', 'dependency', 'engine', 'exclude', 'errors', 'terraform.source',
 		'prevent_destroy', 'iam_role', 'iam_web_identity_token', 'terragrunt_version_constraint',
 		'terraform_version_constraint', 'terraform_binary'
 	];
 	const unitSkipped = ['terraform.extra_arguments', 'download_dir', 'remote_state', 'generate', 'inputs'];
 
 	it('evaluates what a unit configuration\'s partial parse decodes', () => {
-		expect(places('terragrunt.hcl', 'unit', unit)).to.deep.equal({ evaluated: unitEvaluated, skipped: unitSkipped });
+		expect(places('unit', unit)).to.deep.equal({ evaluated: unitEvaluated, skipped: unitSkipped });
 	});
 
 	it('evaluates the same in the autoinclude beside a unit', () => {
-		expect(places('terragrunt.autoinclude.hcl', 'unit-autoinclude', unit)).to.deep.equal({ evaluated: unitEvaluated, skipped: unitSkipped });
+		expect(places('unit-autoinclude', unit)).to.deep.equal({ evaluated: unitEvaluated, skipped: unitSkipped });
 	});
 
-	const stack = `locals {
-  a = fileset(".", "locals")
-}
-unit "app" {
+	it('evaluates everything in a configuration Terragrunt parses in full', () => {
+		expect(places('unit', unit, true)).to.deep.equal({ evaluated: [...unitEvaluated.slice(0, 7), 'terraform.extra_arguments', ...unitEvaluated.slice(7), ...unitSkipped.slice(1)], skipped: [] });
+	});
+
+	const stack = `unit "app" {
   source = "../units/app"
   path   = "app"
   values = { files = fileset(".", "unit") }
@@ -108,6 +104,9 @@ unit "app" {
     dependency "vpc" {
       config_path  = join("", fileset(".", "autoinclude.dependency.config_path"))
       mock_outputs = { files = fileset(".", "autoinclude.dependency.mock_outputs") }
+      expansion {
+        prefix = join("", fileset(".", "autoinclude.dependency.expansion"))
+      }
     }
     inputs = {
       files = fileset(".", "autoinclude.inputs")
@@ -121,14 +120,14 @@ stack "nested" {
 }
 `;
 
-	it('evaluates a stack file\'s locals and components, and only each autoinclude dependency\'s path', () => {
-		expect(places('terragrunt.stack.hcl', 'stack', stack)).to.deep.equal({
-			evaluated: ['locals', 'unit', 'autoinclude.dependency.config_path', 'stack'],
+	it('evaluates a stack file\'s components, and only each autoinclude dependency\'s path and expansion', () => {
+		expect(places('stack', stack)).to.deep.equal({
+			evaluated: ['unit', 'autoinclude.dependency.config_path', 'autoinclude.dependency.expansion', 'stack'],
 			skipped: ['autoinclude.dependency.mock_outputs', 'autoinclude.inputs']
 		});
 	});
 
 	it('evaluates a values file whole', () => {
-		expect(places('terragrunt.values.hcl', 'values', 'files = fileset(".", "values")\n')).to.deep.equal({ evaluated: ['values'], skipped: [] });
+		expect(places('values', 'files = fileset(".", "values")\n')).to.deep.equal({ evaluated: ['values'], skipped: [] });
 	});
 });

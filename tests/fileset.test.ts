@@ -134,6 +134,7 @@ describe('fileset', () => {
 	// The files the unit reads, as the workspace reports them.
 	const reading = async () => {
 		const workspace = new Workspace();
+		workspace.setTrusted(true);
 		workspace.setWorkspaceRoot(URI.file(repository).toString());
 		const graph = await workspace.refreshDependencyTree();
 		const app = graph?.children.find(node => node.name.endsWith(path.join('live', 'app', 'terragrunt.hcl')));

@@ -6,7 +6,7 @@ import { URI } from 'vscode-uri';
 import { base64GzipCompat } from '../gzip-compat';
 import type { FunctionContext, RuntimeValue, ValueType } from '../model';
 import { goRepoRoot } from './git_repo_root';
-import { expectParams, makeArrayValue, makeBooleanValue, makeObjectValue, makeSensitiveValue, makeStringValue, unwrapSensitive } from './utils';
+import { expectParams, makeArrayValue, makeBooleanValue, makeObjectValue, makeSensitiveValue, makeStringValue, unitWorkingDirectory, unwrapSensitive } from './utils';
 
 const defaultRetryableErrors = [
 	'(?s).*Failed to load state.*tcp.*timeout.*',
@@ -86,12 +86,6 @@ async function findParentWithFile(
             currentDir = parentDir;
         }
     }
-}
-
-// The directory Terragrunt's repository-root functions answer for: the unit's,
-// in a configuration the unit includes as well.
-function repositoryWorkingDirectory(context: FunctionContext): string {
-	return context.terragruntDir ?? path.dirname(URI.parse(context.document.uri).fsPath);
 }
 
 async function topLevelDirectory(workingDirectory: string, context: FunctionContext): Promise<string> {
@@ -266,24 +260,24 @@ export const coreFunctionGroup = {
 		get_repo_root: async (
 			_args: RuntimeValue<ValueType>[],
 			context: FunctionContext
-		): Promise<RuntimeValue<ValueType>> => makeStringValue(await goRepoRoot(repositoryWorkingDirectory(context), context.environmentVariables, context.repoRoots)),
+		): Promise<RuntimeValue<ValueType>> => makeStringValue(await goRepoRoot(unitWorkingDirectory(context),context.environmentVariables, context.repoRoots)),
 		// The root comes with its links resolved and the working directory as
 		// written, so a unit reached through a link answers a path through it.
 		get_path_from_repo_root: async (
 			_args: RuntimeValue<ValueType>[],
 			context: FunctionContext
 		): Promise<RuntimeValue<ValueType>> => {
-			const workingDirectory = repositoryWorkingDirectory(context);
+			const workingDirectory = unitWorkingDirectory(context);
 			const repoRoot = await topLevelDirectory(workingDirectory, context);
-			return makeStringValue(goRelative(repoRoot, workingDirectory, 'computing path relative to repo root'));
+			return makeStringValue(goRelative(repoRoot, workingDirectory,'computing path relative to repo root'));
 		},
 		get_path_to_repo_root: async (
 			_args: RuntimeValue<ValueType>[],
 			context: FunctionContext
 		): Promise<RuntimeValue<ValueType>> => {
-			const workingDirectory = repositoryWorkingDirectory(context);
+			const workingDirectory = unitWorkingDirectory(context);
 			const repoRoot = await topLevelDirectory(workingDirectory, context);
-			return makeStringValue(goRelative(workingDirectory, repoRoot, 'computing path to repo root'));
+			return makeStringValue(goRelative(workingDirectory,repoRoot, 'computing path to repo root'));
 		},
 
         get_working_dir: async (

@@ -8,6 +8,13 @@ import { URI } from 'vscode-uri';
 import { ParsedDocument } from '../src/ParsedDocument';
 import { LocatedWorkspaceError, Workspace } from '../src/Workspace';
 
+/** A workspace trusted to evaluate its configurations, as finding the files each unit reads needs. */
+function trustedWorkspace(): Workspace {
+	const workspace = new Workspace();
+	workspace.setTrusted(true);
+	return workspace;
+}
+
 describe('current Terragrunt workspace graph', () => {
 	let directory: string;
 
@@ -37,7 +44,7 @@ describe('current Terragrunt workspace graph', () => {
 		const childContent = 'include "root" { path = find_in_parent_folders("root.hcl") }';
 		await fs.writeFile(childPath, childContent);
 
-		const workspace = new Workspace();
+		const workspace = trustedWorkspace();
 		workspace.setWorkspaceRoot(URI.file(directory).toString());
 		await workspace.addDocument(new ParsedDocument(workspace, URI.file(childPath).toString(), childContent));
 		const graph = await workspace.refreshDependencyTree();
@@ -59,7 +66,7 @@ stack "services" {
 }`;
 		await fs.writeFile(stackPath, content);
 
-		const workspace = new Workspace();
+		const workspace = trustedWorkspace();
 		workspace.setWorkspaceRoot(URI.file(directory).toString());
 		await workspace.addDocument(new ParsedDocument(workspace, URI.file(stackPath).toString(), content));
 		const graph = await workspace.refreshDependencyTree();
@@ -88,7 +95,7 @@ unit "app" {
 }`;
 		await fs.writeFile(stackPath, content);
 
-		const workspace = new Workspace();
+		const workspace = trustedWorkspace();
 		workspace.setWorkspaceRoot(URI.file(directory).toString());
 		const document = new ParsedDocument(workspace, URI.file(stackPath).toString(), content);
 		await workspace.addDocument(document);
@@ -105,7 +112,7 @@ unit "app" {
 	it('does not take a defect in resolving a path for a path that does not resolve', async () => {
 		await fs.mkdir(path.join(directory, 'app'), { recursive: true });
 		const content = 'dependency "network" {\n  config_path = "../network"\n}';
-		const workspace = new Workspace();
+		const workspace = trustedWorkspace();
 		workspace.setWorkspaceRoot(URI.file(directory).toString());
 		workspace.resolveDependencyPath = async () => {
 			throw new TypeError('Cannot read properties of undefined');
@@ -121,7 +128,7 @@ unit "app" {
 		await fs.writeFile(path.join(directory, 'network', 'terragrunt.hcl'), '');
 		const content = 'dependency "partial" {\n  config_path = "../ne"\n}\ndependency "network" {\n  config_path = "../network"\n}';
 
-		const workspace = new Workspace();
+		const workspace = trustedWorkspace();
 		workspace.setWorkspaceRoot(URI.file(directory).toString());
 		const document = new ParsedDocument(workspace, URI.file(path.join(directory, 'app', 'terragrunt.hcl')).toString(), content);
 		const links = await document.getLinks();
@@ -140,7 +147,7 @@ unit "app" {
 		const content = 'dependency "target" { config_path = "../target" }';
 		await fs.writeFile(appPath, content);
 
-		const workspace = new Workspace();
+		const workspace = trustedWorkspace();
 		workspace.setWorkspaceRoot(URI.file(directory).toString());
 		const message = await rejectionMessage(workspace.addDocument(
 			new ParsedDocument(workspace, URI.file(appPath).toString(), content)
@@ -161,7 +168,7 @@ dependency "empty" {
 }`;
 		await fs.writeFile(appPath, content);
 
-		const workspace = new Workspace();
+		const workspace = trustedWorkspace();
 		workspace.setWorkspaceRoot(URI.file(directory).toString());
 		const error = await workspace.addDocument(new ParsedDocument(workspace, URI.file(appPath).toString(), content))
 			.then(() => undefined, (reason: unknown) => reason);
@@ -180,7 +187,7 @@ dependency "empty" {
 		const content = 'inputs = {}\n\ninclude "root" {\n  path = "../root.hcl"\n}';
 		await fs.writeFile(appPath, content);
 
-		const workspace = new Workspace();
+		const workspace = trustedWorkspace();
 		workspace.setWorkspaceRoot(URI.file(directory).toString());
 		const error = await workspace.addDocument(new ParsedDocument(workspace, URI.file(appPath).toString(), content))
 			.then(() => undefined, (reason: unknown) => reason);
@@ -206,7 +213,7 @@ dependency "empty" {
 }`;
 		await fs.writeFile(unitPath, content);
 
-		const workspace = new Workspace();
+		const workspace = trustedWorkspace();
 		workspace.setWorkspaceRoot(URI.file(directory).toString());
 		const error = await workspace.addDocument(new ParsedDocument(workspace, URI.file(unitPath).toString(), content))
 			.then(() => undefined, (reason: unknown) => reason);
@@ -225,7 +232,7 @@ dependency "empty" {
 		await fs.writeFile(path.join(firstDirectory, 'terragrunt.hcl'), 'dependency "second" { config_path = "../second" }');
 		await fs.writeFile(path.join(secondDirectory, 'terragrunt.hcl'), 'dependency "first" { config_path = "../first" }');
 
-		const workspace = new Workspace();
+		const workspace = trustedWorkspace();
 		workspace.setWorkspaceRoot(URI.file(directory).toString());
 		const message = await rejectionMessage(workspace.refreshDependencyTree());
 
@@ -260,7 +267,7 @@ dependency "network" {
   config_path = "../../network"
 }`);
 
-		const workspace = new Workspace();
+		const workspace = trustedWorkspace();
 		workspace.setWorkspaceRoot(URI.file(directory).toString());
 		const discovered = await workspace.findTerragruntConfigs(URI.file(directory).toString());
 		const graph = await workspace.refreshDependencyTree();
@@ -284,6 +291,7 @@ dependency "network" {
 			'account.hcl',
 			'direct.yaml',
 			'policy.yaml',
+			'root.hcl',
 			'service.yaml'
 		]);
 		expect(account.children.map(node => [node.type, path.basename(node.name)])).to.deep.equal([
@@ -291,26 +299,47 @@ dependency "network" {
 		]);
 	});
 
-	it('fails when an authored read target does not exist', async () => {
+	// Terragrunt v1.2.2 records any path mark_as_read is given, a file there or not.
+	it('reads a path mark_as_read marks where no file is', async () => {
 		const unitPath = path.join(directory, 'terragrunt.hcl');
 		await fs.writeFile(unitPath, 'locals { policy = mark_as_read("${get_terragrunt_dir()}/required-policy.yaml") }');
-		const workspace = new Workspace();
+		const workspace = trustedWorkspace();
 		workspace.setWorkspaceRoot(URI.file(directory).toString());
 
-		const message = await rejectionMessage(workspace.refreshDependencyTree());
-		expect(message).to.include('mark_as_read target not found');
+		const graph = await workspace.refreshDependencyTree();
+		expect(graph?.children.find(node => node.name === 'terragrunt.hcl')?.data.reading)
+			.to.deep.equal([URI.file(path.join(directory, 'required-policy.yaml')).toString()]);
 	});
 
-	it('enforces an explicit mark_glob_as_read boundary before walking', async () => {
-		const unitPath = path.join(directory, 'terragrunt.hcl');
-		await fs.writeFile(unitPath, `locals {
+	// Terragrunt v1.2.2's discovery drops a call that fails, a glob refused for walking outside its boundary among
+	// them, and reads the rest.
+	it('drops a mark_glob_as_read that walks outside its boundary, and reads the rest', async () => {
+		await fs.mkdir(path.join(directory, 'app'));
+		await fs.writeFile(path.join(directory, 'x.yaml'), 'x: 1');
+		await fs.writeFile(path.join(directory, 'app', 'k.txt'), 'k');
+		await fs.writeFile(path.join(directory, 'app', 'terragrunt.hcl'), `locals {
   files = mark_glob_as_read("--terragrunt-boundary=.", "../*.yaml")
+  k     = file("k.txt")
 }`);
+		const workspace = trustedWorkspace();
+		workspace.setWorkspaceRoot(URI.file(directory).toString());
+
+		const graph = await workspace.refreshDependencyTree();
+		expect(graph?.children.find(node => node.name === path.join('app', 'terragrunt.hcl'))?.data.reading)
+			.to.deep.equal([URI.file(path.join(directory, 'app', 'k.txt')).toString()]);
+	});
+
+	it('refuses the graph in a workspace that is not trusted, since finding what a unit reads evaluates it', async () => {
+		await fs.writeFile(path.join(directory, 'terragrunt.hcl'), 'locals { a = file("a.txt") }');
 		const workspace = new Workspace();
 		workspace.setWorkspaceRoot(URI.file(directory).toString());
 
-		const message = await rejectionMessage(workspace.refreshDependencyTree());
-		expect(message).to.include(`mark_glob_as_read pattern "../*.yaml" resolves outside the boundary ${JSON.stringify(directory)}`);
+		expect(await rejectionMessage(workspace.refreshDependencyTree())).to.equal(
+			'The files a unit reads are known only in a trusted workspace: finding them evaluates the configuration, as Terragrunt\'s discovery does'
+		);
+		const unitUri = URI.file(path.join(directory, 'terragrunt.hcl')).toString();
+		await workspace.addDocument(new ParsedDocument(workspace, unitUri, 'locals { a = file("a.txt") }'));
+		expect(workspace.getRelationships(unitUri)).to.deep.equal({ includes: [], dependencies: [], reads: null });
 	});
 
 	it('resolves repository path functions in reading expressions', async () => {
@@ -321,7 +350,7 @@ dependency "network" {
 		await fs.writeFile(path.join(unitDirectory, 'terragrunt.hcl'), `locals {
   shared = mark_as_read("\${get_repo_root()}/shared.yaml")
 }`);
-		const workspace = new Workspace();
+		const workspace = trustedWorkspace();
 		workspace.setWorkspaceRoot(URI.file(directory).toString());
 
 		const graph = await workspace.refreshDependencyTree();
@@ -337,7 +366,7 @@ dependency "network" {
   secrets_file = "secrets.yaml"
   secrets      = read_terragrunt_config(find_in_parent_folders(local.secrets_file))
 }`);
-		const workspace = new Workspace();
+		const workspace = trustedWorkspace();
 		workspace.setWorkspaceRoot(URI.file(directory).toString());
 
 		const graph = await workspace.refreshDependencyTree();
@@ -355,7 +384,7 @@ dependency "network" {
 		await fs.writeFile(path.join(unitDirectory, 'terragrunt.hcl'), `include "root" {
   path = find_in_parent_folders("root.hcl")
 }`);
-		const workspace = new Workspace();
+		const workspace = trustedWorkspace();
 		workspace.setWorkspaceRoot(URI.file(directory).toString());
 
 		const graph = await workspace.refreshDependencyTree();
@@ -376,7 +405,7 @@ dependency "network" {
   path = find_in_parent_folders("root.hcl")
 }`);
 		}
-		const workspace = new Workspace();
+		const workspace = trustedWorkspace();
 		workspace.setWorkspaceRoot(URI.file(directory).toString());
 
 		const graph = await workspace.refreshDependencyTree();
@@ -388,7 +417,8 @@ dependency "network" {
 				path.join('live', environment, 'account.hcl')
 			]);
 			expect(unit?.data.reading?.map(uri => path.relative(directory, URI.parse(uri).fsPath))).to.deep.equal([
-				path.join('live', environment, 'account.hcl')
+				path.join('live', environment, 'account.hcl'),
+				'root.hcl'
 			]);
 		}
 		expect(graph?.children.filter(node => node.name.endsWith('account.hcl'))).to.have.length(0);
@@ -405,11 +435,11 @@ dependency "network" {
 			path.join('live', 'prod', 'app', 'terragrunt.hcl')
 		]);
 
-		const invalidUpdate = new ParsedDocument(workspace, rootUri, `locals {
-  missing = read_terragrunt_config(find_in_parent_folders("missing.hcl"))
+		const invalidUpdate = new ParsedDocument(workspace, rootUri, `dependency "missing" {
+  config_path = "missing"
 }`);
 		const message = await rejectionMessage(workspace.addDocument(invalidUpdate));
-		expect(message).to.include('Could not find missing.hcl in parent folders');
+		expect(message).to.match(/^Dependency path .*missing contains neither terragrunt.hcl nor terragrunt.stack.hcl$/);
 		expect((await workspace.getDependents(rootUri)).map(config =>
 			path.relative(directory, URI.parse(config.uri).fsPath))).to.deep.equal([
 			path.join('live', 'dev', 'app', 'terragrunt.hcl'),
@@ -430,7 +460,7 @@ dependency "network" {
 		await fs.writeFile(path.join(unitDirectory, 'terragrunt.hcl'), `include "env" {
   path = "../../../_env/app.hcl"
 }`);
-		const workspace = new Workspace();
+		const workspace = trustedWorkspace();
 		workspace.setWorkspaceRoot(URI.file(directory).toString());
 
 		const graph = await workspace.refreshDependencyTree();
@@ -456,7 +486,7 @@ dependency "network" {
 		await fs.writeFile(path.join(unitDirectory, 'terragrunt.hcl'), `include "root" {
   path = find_in_parent_folders("root.hcl")
 }`);
-		const workspace = new Workspace();
+		const workspace = trustedWorkspace();
 		workspace.setWorkspaceRoot(URI.file(deepRoot).toString());
 
 		const graph = await workspace.refreshDependencyTree();
@@ -477,7 +507,7 @@ dependency "network" {
 		await fs.writeFile(path.join(unitDirectory, 'terragrunt.hcl'), `include "root" {
   path = "../../../root.hcl"
 }`);
-		const workspace = new Workspace();
+		const workspace = trustedWorkspace();
 		workspace.setWorkspaceRoot(URI.file(directory).toString());
 
 		const graph = await workspace.refreshDependencyTree();
@@ -501,7 +531,7 @@ dependency "network" {
 dependency "other" {
   config_path = "../\${local.stage_vars.stage}/other"
 }`);
-		const workspace = new Workspace();
+		const workspace = trustedWorkspace();
 		workspace.setWorkspaceRoot(URI.file(directory).toString());
 
 		const graph = await workspace.refreshDependencyTree();
@@ -511,16 +541,17 @@ dependency "other" {
 		expect(read).to.include('shared.yaml');
 	});
 
-	it('rejects a local read-path cycle even when it crosses a function call', async () => {
+	// Terragrunt v1.2.2's discovery drops locals that read themselves, and reads nothing through them.
+	it('reads nothing through a local that refers to itself, even across a function call', async () => {
 		await fs.writeFile(path.join(directory, 'terragrunt.hcl'), `locals {
   path = find_in_parent_folders(local.path)
   data = read_terragrunt_config(local.path)
 }`);
-		const workspace = new Workspace();
+		const workspace = trustedWorkspace();
 		workspace.setWorkspaceRoot(URI.file(directory).toString());
 
-		const message = await rejectionMessage(workspace.refreshDependencyTree());
-		expect(message).to.equal('Local path refers to itself in a read path');
+		const graph = await workspace.refreshDependencyTree();
+		expect(graph?.children.find(node => node.name === 'terragrunt.hcl')?.data.reading).to.deep.equal([]);
 	});
 
 	describe('concurrent changes', () => {
@@ -539,7 +570,7 @@ dependency "other" {
 
 		it('records every unit when units are added at the same time', async () => {
 			const uris = await writeUnits(Array.from({ length: 8 }, (_, index) => `app${index}`));
-			const workspace = new Workspace();
+			const workspace = trustedWorkspace();
 			workspace.setWorkspaceRoot(URI.file(directory).toString());
 
 			await Promise.all(uris.map(uri => workspace.addDocument(new ParsedDocument(workspace, uri, unitContent))));
@@ -554,7 +585,7 @@ dependency "other" {
 		it('completes a refresh started while units are being added', async () => {
 			const names = Array.from({ length: 4 }, (_, index) => `app${index}`);
 			const uris = await writeUnits(names);
-			const workspace = new Workspace();
+			const workspace = trustedWorkspace();
 			workspace.setWorkspaceRoot(URI.file(directory).toString());
 			const add = (uri: string) => workspace.addDocument(new ParsedDocument(workspace, uri, unitContent));
 
@@ -571,7 +602,7 @@ dependency "other" {
 
 		it('registers a document when it is added, not when its turn comes', async () => {
 			const [first, second] = await writeUnits(['app0', 'app1']);
-			const workspace = new Workspace();
+			const workspace = trustedWorkspace();
 			workspace.setWorkspaceRoot(URI.file(directory).toString());
 			const edited = `${unitContent}\ninputs = { edited = true }`;
 
@@ -585,7 +616,7 @@ dependency "other" {
 
 		it('does not bring back a document closed while its change was waiting', async () => {
 			const [first, second] = await writeUnits(['app0', 'app1']);
-			const workspace = new Workspace();
+			const workspace = trustedWorkspace();
 			workspace.setWorkspaceRoot(URI.file(directory).toString());
 			const edited = `${unitContent}\ninputs = { edited = true }`;
 
@@ -601,7 +632,7 @@ dependency "other" {
 
 		it('still applies a change queued behind one that failed', async () => {
 			const [uri] = await writeUnits(['app']);
-			const workspace = new Workspace();
+			const workspace = trustedWorkspace();
 			workspace.setWorkspaceRoot(URI.file(directory).toString());
 			const brokenUri = URI.file(path.join(directory, 'broken', 'terragrunt.hcl')).toString();
 			const brokenContent = 'dependency "missing" {\n  config_path = "../missing"\n}';

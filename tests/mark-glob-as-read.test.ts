@@ -131,6 +131,7 @@ describe('mark_glob_as_read argument forms', () => {
   shared = mark_glob_as_read("--terragrunt-boundary", "../..", "../../shared/*.yaml")
 }`);
 		const workspace = new Workspace();
+		workspace.setTrusted(true);
 		workspace.setWorkspaceRoot(URI.file(repository).toString());
 
 		const graph = await workspace.refreshDependencyTree();

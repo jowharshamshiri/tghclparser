@@ -67,7 +67,7 @@ Declarations are inherited through `include`, so shared helpers live in `root.hc
 - File-kind-aware diagnostics and completion
 - Reference completion for locals, includes, dependencies, features, values, units, and stacks
 - Exact include resolution using the filename passed to `find_in_parent_folders`
-- Workspace graphs for includes, dependencies, explicit stacks, and generated component targets
+- Workspace graphs for includes, dependencies, explicit stacks, and generated component targets, and the files each unit reads as Terragrunt's `find --reading` lists them, which needs a trusted workspace (`Workspace.setTrusted(true)`): finding them evaluates each configuration as Terragrunt's discovery does, running `run_cmd`, decrypting sops files and calling the other functions in what discovery evaluates
 - Dependency output discovery from state
 - Hover and document-link providers
 - Go to definition for `local.*`, `include.<label>.*` and `dependency.<name>.*`, a dependency found in the configurations Terragrunt merges into the unit
@@ -79,7 +79,7 @@ Declarations are inherited through `include`, so shared helpers live in `root.hc
 
 A local `terraform { source }` is read in place. A registry source (`tfr:///namespace/name/provider?version=…`) is fetched, so its variables drive the same completion, hover and checks.
 
-- **Enabling:** `Workspace.configureRemoteModules({ trusted }, options)`. Fetching starts once the workspace is trusted, and each host is approved through `approveHost` before it is first contacted. A fetch runs in the background: the unit reports `loading`, then `onModuleVariablesChanged` listeners are told to republish its diagnostics. A workspace that never calls it leaves remote sources alone: a unit naming one has no module state and no diagnostics about it.
+- **Enabling:** `Workspace.configureRemoteModules(options)`. Fetching starts once the workspace is trusted (`Workspace.setTrusted(true)`), and each host is approved through `approveHost` before it is first contacted. A fetch runs in the background: the unit reports `loading`, then `onModuleVariablesChanged` listeners are told to republish its diagnostics. A workspace that never calls it leaves remote sources alone: a unit naming one has no module state and no diagnostics about it.
 - **Failures:** a fetch that fails is a warning on the source whose `code` is the failure's (`RegistryAuth`, `HostNotApproved`, …). When the user can act on a host -- store a token for the registry that refused, or approve the host -- the diagnostic's `data.host` names it, also for a `tfr:///` source, which names none.
 - **What is fetched:** the top-level `.tf` files of the module, read straight from the git repository or tar.gz archive the registry points to.
 - **Cache:** `TGHCLPARSER_CACHE_DIR`, else the platform cache directory under `tghclparser`, owner-only and keyed by the resolved version, so each version is fetched once. Clear it with `Workspace.clearRemoteModuleCache()`, which also refetches open units, or `tghclp cache clear`. The cache is shared by every process using it, so a module another process cleared is fetched again the next time a unit naming it is added.
