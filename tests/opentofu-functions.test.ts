@@ -177,6 +177,102 @@ describe('OpenTofu functions of Terragrunt v1.2.2', () => {
 			await fs.rm(directory, { recursive: true, force: true });
 		}
 	});
+
+	// A template a function renders converts its interpolations as a quoted string does: one that is a single
+	// interpolation passes its value through, and any other refuses null and collections in HCL's words.
+	describe('template values', () => {
+		const nullValue = 'The expression result is null. Cannot include a null value in a string template.';
+		const tuple = 'Cannot include the given value in a string template: string required, but have tuple.';
+		const object = 'Cannot include the given value in a string template: string required, but have object.';
+
+		it('refuses null and collections in a longer template string', async () => {
+			for (const [call, message] of [
+				['templatestring("a$${x}", { x = null })', nullValue],
+				['templatestring("a$${x}", { x = ["b"] })', tuple],
+				['templatestring("a$${x}", { x = { b = 1 } })', object],
+				['templatestring(" $${~ x }", { x = ["b"] })', tuple]
+			]) {
+				expect(await failureOf(call), call).to.include(message);
+			}
+		});
+
+		it('refuses them in a directive\'s branch or loop, each a template of its own', async () => {
+			for (const [call, message] of [
+				['templatestring("%%{ if true }$${x}%%{ endif }", { x = ["b"] })', tuple],
+				['templatestring("%%{ if true }$${x}%%{ endif }", { x = null })', nullValue],
+				['templatestring("%%{ for v in x }$${v}%%{ endfor }", { x = [null] })', nullValue],
+				['templatestring("%%{ for v in x }$${v}%%{ endfor }", { x = [["a"]] })', tuple]
+			]) {
+				expect(await failureOf(call), call).to.include(message);
+			}
+			expect(await inputsOf({
+				branch: 'templatestring("%%{ if true }$${x}%%{ endif }", { x = 2 })',
+				loop: 'templatestring("%%{ for v in x }$${v}%%{ endfor }", { x = ["a", 1] })'
+			})).to.deep.equal({ branch: '2', loop: 'a1' });
+		});
+
+		it('converts numbers and bools, and passes a lone interpolation\'s value through', async () => {
+			expect(await inputsOf({
+				longer: 'templatestring("a$${x}b$${y}", { x = 2, y = true })',
+				tuple: 'templatestring("$${x}", { x = ["b"] })',
+				nothing: 'templatestring("$${x}", { x = null })',
+				stripped: 'templatestring("$${~ x ~}", { x = ["b"] })'
+			})).to.deep.equal({ longer: 'a2btrue', tuple: ['b'], nothing: null, stripped: ['b'] });
+		});
+
+		it('takes a strip marker on either side of an interpolation or directive out of its expression', async () => {
+			expect(await inputsOf({
+				interpolation: 'templatestring("a $${~ x ~} b", { x = "c" })',
+				branch: 'templatestring("a %%{~ if true ~} b %%{~ endif ~} c", {})',
+				loop: 'templatestring("[ %%{~ for v in x ~} $${v} %%{~ endfor ~} ]", { x = ["a", "b"] })'
+			})).to.deep.equal({ interpolation: 'acb', branch: 'abc', loop: '[ab]' });
+		});
+
+		it('keeps a sensitive value sensitive, passed through or rendered into a string', async () => {
+			expect(await inputsOf({
+				rendered: 'issensitive(templatestring("a$${x}", { x = sensitive("b") }))',
+				passed: 'issensitive(templatestring("$${x}", { x = sensitive(["b"]) }))',
+				looped: 'issensitive(templatestring("%%{ for v in x }$${v}%%{ endfor }", { x = [sensitive("a")] }))'
+			})).to.deep.equal({ rendered: true, passed: true, looped: true });
+		});
+
+		it('holds a template file to the same, and reads $${ and %%{ in it as a literal ${ and %{', async () => {
+			const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-template-'));
+			try {
+				await fs.writeFile(path.join(directory, 't.tpl'), 'a${x}b');
+				await fs.writeFile(path.join(directory, 'lone.tpl'), '${x}');
+				await fs.writeFile(path.join(directory, 'if.tpl'), '%{ if true }${x}%{ endif }');
+				await fs.writeFile(path.join(directory, 'for.tpl'), '%{ for v in x }${v}%{ endfor }');
+				await fs.writeFile(path.join(directory, 'escaped.tpl'), 'a$${x}%%{ if true }');
+				const evaluateIn = (expression: string) => new ConfigEvaluator({ environmentVariables: {}, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true })
+					.evaluateUnit(path.join(directory, 'terragrunt.hcl'), `inputs = {\n  x = ${expression}\n}\n`, directory);
+				for (const [call, message] of [
+					['templatefile("t.tpl", { x = null })', nullValue],
+					['templatefile("t.tpl", { x = ["b"] })', tuple],
+					['templatefile("t.tpl", { x = { b = 1 } })', object],
+					['templatefile("if.tpl", { x = null })', nullValue],
+					['templatefile("if.tpl", { x = ["b"] })', tuple],
+					['templatefile("for.tpl", { x = [{ a = 1 }] })', object],
+					['templatefile("for.tpl", { x = [null] })', nullValue]
+				]) {
+					const result = await evaluateIn(call);
+					expect(result.error, call).to.be.a('string').and.include(message);
+				}
+				for (const [call, value] of [
+					['templatefile("lone.tpl", { x = ["b"] })', ['b']],
+					['templatefile("lone.tpl", { x = null })', null],
+					['templatefile("lone.tpl", { x = { b = 1 } })', { b: 1 }],
+					['templatefile("escaped.tpl", { x = "b" })', 'a${x}%{ if true }']
+				] as const) {
+					const result = await evaluateIn(call);
+					expect(result.error, call).to.equal(undefined);
+					expect((plainValue(result.inputs!) as Record<string, unknown>).x, call).to.deep.equal(value);
+				}
+			} finally {
+				await fs.rm(directory, { recursive: true, force: true });
+			}
+		});
+	});
 });
 
 describe('base64gzip_compat of Terragrunt v1.2.2', () => {

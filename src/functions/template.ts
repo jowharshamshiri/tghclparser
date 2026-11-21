@@ -3,7 +3,7 @@ import { CtyNumber } from '../cty-number';
 import { arithmetic, comparison, negation, sequencePosition } from '../cty-operations';
 import { isDefect } from '../unresolved';
 import type { LogicalOperand } from './utils';
-import { coerceToString, conditionValue, logicalOperation, makeBooleanValue, makeNullValue, makeNumberValue, makeStringValue, NULL_OPERAND, operandBool } from './utils';
+import { conditionValue, logicalOperation, makeBooleanValue, makeNullValue, makeNumberValue, makeSensitiveValue, makeStringValue, NULL_OPERAND, operandBool, templatePart } from './utils';
 
 /** An HCL identifier, as the scanner reads one: the names a template's variables may have. */
 const templateVariableName = /^[\p{ID_Start}_][\p{ID_Continue}-]*$/u;
@@ -12,6 +12,7 @@ const templateVariableName = /^[\p{ID_Start}_][\p{ID_Continue}-]*$/u;
 // semantics of the upstream template language:
 //   - "%{~" / "${~" openers trim trailing whitespace from the previous literal
 //   - "~}" closers trim leading whitespace from the next literal
+//   - "$${" and "%%{" are a literal "${" and "%{"
 // Literals, interpolations, and %{ if } / %{ for } directives are the only
 // constructs; expressions inside ${...} and %{ ... } are parsed by a
 // self-contained evaluator because bare identifiers are not part of the HCL
@@ -36,7 +37,8 @@ export async function renderTemplate(
 	}
 	const [only] = tree;
 	if (tree.length === 1 && only.kind === 'interp') return evaluateTemplateExpression(only.expr, scope, context);
-	return makeStringValue(await renderTemplateNodes(tree, scope, context));
+	const { text, sensitive } = await renderTemplateNodes(tree, scope, context);
+	return sensitive ? makeSensitiveValue(makeStringValue(text)) : makeStringValue(text);
 }
 
 type TemplateToken =
@@ -57,35 +59,34 @@ function tokenizeTemplate(template: string): TemplateToken[] {
 	const length = template.length;
 
 	while (index < length) {
-		if (template.startsWith('%{', index)) {
+		const directive = template.startsWith('%{', index);
+		if (directive || template.startsWith('${', index)) {
 			const openerTilde = template[index + 2] === '~';
 			if (openerTilde && canTrimPrev) trimLastLiteral();
 			const end = findClosingMarker(template, index + 2, '}');
-			const inner = template.slice(index + 2, end);
+			const inner = template.slice(index + (openerTilde ? 3 : 2), end);
 			const closerTilde = inner.endsWith('~');
-			tokens.push({ kind: 'dir', text: (closerTilde ? inner.slice(0, -1) : inner).trim() });
-			index = end + 1;
-			ltrimNext = closerTilde;
-			canTrimPrev = false;
-		} else if (template.startsWith('${', index)) {
-			const openerTilde = template[index + 2] === '~';
-			if (openerTilde && canTrimPrev) trimLastLiteral();
-			const end = findClosingMarker(template, index + 2, '}');
-			const inner = template.slice(index + 2, end);
-			const closerTilde = inner.endsWith('~');
-			tokens.push({ kind: 'interp', expr: (closerTilde ? inner.slice(0, -1) : inner).trim() });
+			const text = (closerTilde ? inner.slice(0, -1) : inner).trim();
+			tokens.push(directive ? { kind: 'dir', text } : { kind: 'interp', expr: text });
 			index = end + 1;
 			ltrimNext = closerTilde;
 			canTrimPrev = false;
 		} else {
-			let end = index;
-			while (end < length && !template.startsWith('%{', end) && !template.startsWith('${', end)) end++;
-			let text = template.slice(index, end);
+			// $${ and %%{ are a literal ${ and %{.
+			let text = '';
+			while (index < length && !template.startsWith('%{', index) && !template.startsWith('${', index)) {
+				if (template.startsWith('$${', index) || template.startsWith('%%{', index)) {
+					text += template.slice(index + 1, index + 3);
+					index += 3;
+				} else {
+					text += template[index];
+					index++;
+				}
+			}
 			if (ltrimNext) text = text.replace(/^\s+/u, '');
 			ltrimNext = false;
 			tokens.push({ kind: 'lit', text });
 			canTrimPrev = true;
-			index = end;
 		}
 	}
 
@@ -198,27 +199,39 @@ function parseForDirective(text: string): { key: string | null; val: string; col
 	return { key: null, val: key, coll: text.slice(index).trim() };
 }
 
+/**
+ * Renders template nodes to a string as HCL's TemplateExpr does, each interpolation's value converted as
+ * {@link templatePart} converts it, even where the nodes are one interpolation: a directive's branch or loop is a
+ * template of its own that HCL never passes through.
+ *
+ * @returns the rendered text, and whether any value rendered into it was sensitive.
+ * @throws Error where a value is interpolated that does not convert, in HCL's words.
+ */
 async function renderTemplateNodes(
 	nodes: TemplateNode[],
 	scope: Map<string, RuntimeValue<ValueType>>,
 	context: FunctionContext
-): Promise<string> {
-	let output = '';
+): Promise<{ text: string; sensitive: boolean }> {
+	let text = '';
+	let sensitive = false;
+	const include = (part: { text: string; sensitive: boolean }): void => {
+		text += part.text;
+		sensitive ||= part.sensitive;
+	};
 	for (const node of nodes) {
 		switch (node.kind) {
 			case 'lit': {
-				output += node.text;
+				text += node.text;
 				break;
 			}
 			case 'interp': {
-				const value = await evaluateTemplateExpression(node.expr, scope, context);
-				output += coerceToString(value);
+				include(templatePart(await evaluateTemplateExpression(node.expr, scope, context)));
 				break;
 			}
 			case 'if': {
 				const condition = await evaluateTemplateExpression(node.cond, scope, context);
 				const branch = conditionValue(condition) ? node.then : (node.else ?? []);
-				output += await renderTemplateNodes(branch, scope, context);
+				include(await renderTemplateNodes(branch, scope, context));
 				break;
 			}
 			case 'for': {
@@ -227,13 +240,13 @@ async function renderTemplateNodes(
 					const childScope = new Map(scope);
 					if (node.key !== null) childScope.set(node.key, makeStringValue(key));
 					childScope.set(node.val, item);
-					output += await renderTemplateNodes(node.body, childScope, context);
+					include(await renderTemplateNodes(node.body, childScope, context));
 				}
 				break;
 			}
 		}
 	}
-	return output;
+	return { text, sensitive };
 }
 
 function templateIterate(value: RuntimeValue<ValueType>): Array<[string, RuntimeValue<ValueType>]> {
