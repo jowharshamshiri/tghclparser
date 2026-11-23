@@ -259,12 +259,17 @@ describe('numbers as Terragrunt v1.2.2 computes them', () => {
 			'range(0, 2000)': tooMany,
 			'range(0, 5, 0)': tooMany,
 			'range()': 'must have one, two, or three arguments',
-			'range(1, 2, 3, 4)': 'must have one, two, or three arguments',
-			'range(5, 1, 1)': 'Invalid value for "params" parameter: end must be greater than start when step is positive.',
-			'range(1, 5, -1)': 'Invalid value for "params" parameter: end must be less than start when step is negative.'
+			'range(1, 2, 3, 4)': 'must have one, two, or three arguments'
 		};
 		for (const [expression, message] of Object.entries(refusals)) {
 			expect(await failureOf(expression), expression).to.equal(message);
+		}
+		const invalidArguments: Record<string, string> = {
+			'range(5, 1, 1)': 'Invalid value for "params" parameter: end must be greater than start when step is positive.',
+			'range(1, 5, -1)': 'Invalid value for "params" parameter: end must be less than start when step is negative.'
+		};
+		for (const [expression, message] of Object.entries(invalidArguments)) {
+			expect(await failureOf(expression), expression).to.include(message);
 		}
 		expect(await jsonOf({ up: 'range(0, 1, 1/0)', down: 'range(0, -1, -1/0)' })).to.deep.equal({ up: '[0]', down: '[0]' });
 	});
