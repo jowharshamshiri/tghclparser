@@ -209,6 +209,47 @@ describe('numbers as Terragrunt v1.2.2 computes them', () => {
 		});
 	});
 
+	it('takes an infinity modulo zero as the infinity itself, as go-cty does any number', async () => {
+		expect(await jsonOf({
+			positive: 'tostring((1/0) % 0)',
+			negative: 'tostring((-1/0) % -0)'
+		})).to.deep.equal({
+			positive: '"+Inf"',
+			negative: '"-Inf"'
+		});
+	});
+
+	it('refuses a remainder with an infinity', async () => {
+		// Terragrunt v1.2.2 refuses an infinity modulo a finite number with "Error during operation: panic in function
+		// implementation: runtime error: invalid memory address or nil pointer dereference" and a goroutine stack: go-cty
+		// truncates the infinite quotient to a nil big.Int and dereferences it. That is a defect showing through HCL's
+		// panic recovery, not a message to copy, so the parser refuses the same operation saying what it refuses.
+		const refusals: Record<string, string> = {
+			'(1/0) % 2': "Error during operation: can't take an infinity modulo a finite number.",
+			'(-1/0) % 0.5': "Error during operation: can't take an infinity modulo a finite number.",
+			'(1/0) % (1/0)': "Error during operation: can't use modulo with zero and infinity.",
+			'(-1/0) % (1/0)': "Error during operation: can't use modulo with zero and infinity.",
+			'0 % (1/0)': "Error during operation: can't use modulo with zero and infinity.",
+			'-5 % (-1/0)': "Error during operation: can't use modulo with zero and infinity."
+		};
+		for (const [expression, message] of Object.entries(refusals)) {
+			expect(await failureOf(expression), expression).to.include(message);
+		}
+	});
+
+	it('refuses to format an infinity as JSON', async () => {
+		const refusals: Record<string, string> = {
+			'format("%#v", 1/0)': 'unsupported value for "%#v" at 0: cannot serialize infinity as JSON',
+			'format("%v", [1/0])': 'unsupported value for "%v" at 0: cannot serialize infinity as JSON',
+			'format("%v", {a = [-1/0]})': 'unsupported value for "%v" at 0: cannot serialize infinity as JSON',
+			'format("%5v", [1/0])': 'unsupported value for "%5v" at 0: cannot serialize infinity as JSON',
+			'formatlist("%#v", [1, 1/0])': 'error on format iteration 1: unsupported value for "%#v" at 0: cannot serialize infinity as JSON'
+		};
+		for (const [expression, message] of Object.entries(refusals)) {
+			expect(await failureOf(expression), expression).to.include(message);
+		}
+	});
+
 	it('refuses what Terragrunt refuses, in its words', async () => {
 		const refusals: Record<string, string> = {
 			'format("%d", 1.5)': 'unsupported value for "%d" at 0: an integer is required',

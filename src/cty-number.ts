@@ -226,14 +226,15 @@ export class CtyNumber {
 
 	/**
 	 * The remainder, as go-cty's Modulo computes it: this number less the other times the truncated quotient, each
-	 * step rounded to this number's precision. A number modulo zero is the number itself.
+	 * step rounded to this number's precision. A number modulo zero is the number itself, an infinity among them; a
+	 * quotient or product that is not a number fails as go-cty's modulo does. go-cty takes an infinity modulo a finite
+	 * number by dereferencing the nil integer its quotient truncates to, so that is refused saying what it refuses.
 	 */
 	modulo(other: CtyNumber): CtyNumber {
-		if (this.form === 'inf') throw new Error("can't use modulo with infinity");
 		if (other.form === 'zero') return this;
 		return nanAs("can't use modulo with zero and infinity", () => {
-			const quotient = this.divide(other).truncate();
-			if (quotient.integer === undefined) throw new Error("can't use modulo with infinity");
+			const quotient = quoTo(this, other, Math.max(this.precision, other.precision)).truncate();
+			if (quotient.integer === undefined) throw new Error("can't take an infinity modulo a finite number");
 			const whole = setInteger(quotient.integer, this.precision);
 			return addTo(this, mulTo(other, whole, this.precision).negate(), this.precision);
 		});

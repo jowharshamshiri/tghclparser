@@ -160,7 +160,11 @@ function formatVerb(verb: Verb, args: RuntimeValue<ValueType>[]): string {
 		case 'v':
 			if (!verb.sharp && arg.type === 'string') return padWidth(verb, String(arg.value));
 			if (!verb.sharp && arg.type === 'number') return padWidth(verb, (arg.value as CtyNumber).text('g', -1));
-			return padWidth(verb, ctyJson(arg));
+			try {
+				return padWidth(verb, ctyJson(arg));
+			} catch (error) {
+				throw unsupported(error instanceof Error ? error.message : String(error));
+			}
 		case 't':
 			return toBool(arg, unsupported) ? 'true' : 'false';
 		case 'b': case 'd': case 'o': case 'x': case 'X': {
@@ -241,7 +245,7 @@ function ctyJson(value: RuntimeValue<ValueType>): string {
 		case 'string':
 			return jsonString(String(plain.value));
 		case 'number':
-			return (plain.value as CtyNumber).toString();
+			return JSON.stringify(plain.value as CtyNumber);
 		case 'boolean':
 			return plain.value ? 'true' : 'false';
 		case 'array':
