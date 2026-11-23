@@ -1109,20 +1109,20 @@ export const builtinFunctionGroup = {
 		// and meets the 1024 limit. Each value is the one before plus the step, and the limit is reached when a value
 		// passes it or equals it as go-cty's equality decides.
 		range: async (args: RuntimeValue<ValueType>[]) => {
-			if (args.length < 1 || args.length > 3) throw new Error('range must have one, two, or three arguments');
+			if (args.length < 1 || args.length > 3) throw new Error('must have one, two, or three arguments');
 			const numbers = args.map((_, index) => numberArgument(args, index, 'params'));
 			const zero = CtyNumber.fromInt64(0);
 			const [start, limit] = numbers.length === 1 ? [zero, numbers[0]] : [numbers[0], numbers[1]];
 			const step = numbers.length === 3 ? numbers[2] : CtyNumber.fromInt64(limit.compare(start) < 0 ? -1 : 1);
 			const down = step.compare(zero) < 0;
-			if (down && limit.compare(start) > 0) throw new Error('range end must be less than start when step is negative');
-			if (!down && limit.compare(start) < 0) throw new Error('range end must be greater than start when step is positive');
+			if (down && limit.compare(start) > 0) throw new Error('Invalid value for "params" parameter: end must be less than start when step is negative.');
+			if (!down && limit.compare(start) < 0) throw new Error('Invalid value for "params" parameter: end must be greater than start when step is positive.');
 			const values: RuntimeValue<ValueType>[] = [];
 			for (let value = start; ; value = value.add(step)) {
 				const order = value.compare(limit);
 				if (down ? order < 0 || value.equals(limit) : order > 0 || value.equals(limit)) break;
 				if (values.length >= 1024) {
-					throw new Error('range failed: more than 1024 values were generated; either decrease the difference between start and end or use a smaller step');
+					throw new Error('more than 1024 values were generated; either decrease the difference between start and end or use a smaller step');
 				}
 				values.push(numberValue(value));
 			}

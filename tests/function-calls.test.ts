@@ -75,8 +75,8 @@ describe('function calls as Terragrunt evaluates them', () => {
 
 		it('keeps the messages of functions that count their own arguments', async () => {
 			const calls: Array<[string, string]> = [
-				['range()', 'range must have one, two, or three arguments'],
-				['range(1, 2, 3, 4)', 'range must have one, two, or three arguments'],
+				['range()', 'must have one, two, or three arguments'],
+				['range(1, 2, 3, 4)', 'must have one, two, or three arguments'],
 				['lookup({ a = 1 }, "a", 2, 3)', 'lookup() takes two or three arguments, got 4'],
 				['bcrypt("a", 4, 5)', 'bcrypt() takes no more than two arguments'],
 				['constraint_check("1.0.0")', 'Expected 2 params for function constraint_check, but got 1'],
