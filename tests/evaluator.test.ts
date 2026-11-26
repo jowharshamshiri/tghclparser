@@ -1770,6 +1770,53 @@ describe('semantic configuration evaluation', () => {
 			});
 		});
 
+		it('leaves the values beside one computed from it readable, in a literal and through read_terragrunt_config', async () => {
+			const fs = await import('node:fs/promises');
+			const root = await sopsWorkspace();
+			try {
+				await fs.writeFile(path.join(root, 'rules.hcl'), [
+					'locals {',
+					`  secrets = ${secrets}`,
+					'  whole   = "token ${local.secrets.token}"',
+					'  rules   = { private = ["open", "token ${local.secrets.token}"], public = "open" }',
+					'}'
+				].join('\n'));
+				const read = 'read_terragrunt_config("${get_terragrunt_dir()}/rules.hcl").locals';
+				const readable: Record<string, [string, unknown]> = {
+					literal: ['{ a = "plain", b = "token ${local.secrets.token}" }.a', 'plain'],
+					listed: ['["plain", "token ${local.secrets.token}"][0]', 'plain'],
+					read_public: [`${read}.rules.public`, 'open'],
+					read_element: [`${read}.rules.private[0]`, 'open'],
+					read_splat: [`[${read}.rules][*].public`, ['open']]
+				};
+				for (const [name, [expression, expected]] of Object.entries(readable)) {
+					const result = await evaluateWithoutKey(root, [`locals { secrets = ${secrets} }`, `inputs = { ${name} = ${expression} }`].join('\n'));
+					assert.equal(result.valid, true, `${name}: ${result.error}`);
+					assert.deepEqual(runtimeValueToPlain(result.inputs!), { [name]: expected });
+				}
+
+				const unknown: Record<string, string> = {
+					element: `${read}.rules.private[1]`,
+					whole_local: `${read}.whole`,
+					into_unknown: `${read}.whole.x`,
+					containing: `${read}.rules`,
+					computed: `jsonencode(${read}.rules)`,
+					all_locals: `${read}`
+				};
+				for (const [name, expression] of Object.entries(unknown)) {
+					const result = await evaluateWithoutKey(root, [`locals { secrets = ${secrets} }`, `inputs = { ${name} = ${expression} }`].join('\n'));
+					assert.equal(result.valid, false, `${name}: ${JSON.stringify(result.inputs ? runtimeValueToPlain(result.inputs) : null)}`);
+					assert.equal(result.unresolved, true, `${name}: ${result.error}`);
+				}
+
+				const missing = await evaluateWithoutKey(root, [`locals { secrets = ${secrets} }`, `inputs = { missing = ${read}.rules.nope }`].join('\n'));
+				assert.equal(missing.unresolved, undefined, missing.error);
+				assert.match(missing.error ?? '', /Missing attribute "nope"/);
+			} finally {
+				await fs.rm(root, { recursive: true, force: true });
+			}
+		});
+
 		it('renders no generate block or remote_state that would write it to a file', async () => {
 			const fs = await import('node:fs/promises');
 			const root = await sopsWorkspace();
