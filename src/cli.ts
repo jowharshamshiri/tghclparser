@@ -11,7 +11,7 @@ import { URI } from 'vscode-uri';
 import { DiagnosticSeverity } from 'vscode-languageserver';
 
 import { ConfigEvaluator, UnresolvedDependencyOutputError, runtimeValueToPlain } from './Evaluator';
-import type { DependencyRequest } from './Evaluator';
+import type { DependencyRequest, EvaluationProblem } from './Evaluator';
 import { convertToRuntimeValue, makeObjectValue } from './functions/utils';
 import type { RuntimeValue, ValueType } from './model';
 import type { FunctionDefinition } from './model';
@@ -2310,6 +2310,58 @@ function offsetAt(content: string, line: number, character: number): number {
 	return offset + Buffer.byteLength((lines[line] ?? '').slice(0, character), 'utf8');
 }
 
+/**
+ * A zero-based range in a file, as a diagnostic gives it: one-based, with byte offsets.
+ *
+ * @param filename the file.
+ * @param content its content.
+ * @param start where the range starts, zero-based.
+ * @param end where it ends, zero-based.
+ * @returns the diagnostic's range.
+ */
+function diagnosticRange(
+	filename: string,
+	content: string,
+	start: { line: number; character: number },
+	end: { line: number; character: number }
+): DiagnosticOutput['range'] {
+	return {
+		filename,
+		start: { line: start.line + 1, column: start.character + 1, byte: offsetAt(content, start.line, start.character) },
+		end: { line: end.line + 1, column: end.character + 1, byte: offsetAt(content, end.line, end.character) }
+	};
+}
+
+/**
+ * One finding for each fault evaluation found, placed where the expression at fault is written, which may be a file
+ * the unit includes or reads rather than the unit.
+ *
+ * @param problems the faults.
+ * @param detail what a finding says, given its fault's message.
+ * @returns the findings, in the order of the faults.
+ */
+async function problemDiagnostics(
+	problems: EvaluationProblem[],
+	detail: (message: string) => string = message => message
+): Promise<DiagnosticOutput[]> {
+	const contents = new Map<string, string>();
+	const findings: DiagnosticOutput[] = [];
+	for (const problem of problems) {
+		let content = contents.get(problem.filePath);
+		if (content === undefined) {
+			content = await fs.readFile(problem.filePath, 'utf8');
+			contents.set(problem.filePath, content);
+		}
+		findings.push({
+			range: diagnosticRange(problem.filePath, content, problem.range.start, problem.range.end),
+			summary: 'HCL validation error',
+			detail: detail(problem.message),
+			severity: 'error'
+		});
+	}
+	return findings;
+}
+
 function diagnostic(filename: string, content: string, item: any): DiagnosticOutput {
 	const start = item.range?.start ?? { line: 0, character: 0 };
 	const end = item.range?.end ?? start;
@@ -2319,11 +2371,7 @@ function diagnostic(filename: string, content: string, item: any): DiagnosticOut
 		item.message.startsWith('Inline function') ? 'Invalid inline function' :
 		(item.message.startsWith('Missing required argument') || item.message.startsWith('Missing required attribute')) ? 'Missing required argument' : 'HCL validation error';
 	return {
-		range: {
-			filename,
-			start: { line: start.line + 1, column: start.character + 1, byte: offsetAt(content, start.line, start.character) },
-			end: { line: end.line + 1, column: end.character + 1, byte: offsetAt(content, end.line, end.character) }
-		},
+		range: diagnosticRange(filename, content, start, end),
 		summary,
 		detail: item.message,
 		severity: 'error'
@@ -2414,6 +2462,7 @@ async function validateFile(
 	// one computed from a secret read as written: neither is a fault in the
 	// configuration.
 	if (result.valid || (skipOutputs && result.unresolved)) return [];
+	if (result.problems !== undefined && result.problems.length > 0) return problemDiagnostics(result.problems);
 	return [{
 		range: { filename: filePath, start: { line: 1, column: 1, byte: 0 }, end: { line: 1, column: 1, byte: 0 } },
 		summary: 'HCL validation error',

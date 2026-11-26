@@ -1286,6 +1286,33 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(made.root, {recursive: true, force: true});
 	});
 
+	it('reports each fault found when validating where it is written, in the file the unit includes', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-validate-located-')));
+		await fs.mkdir(path.join(root, '.git'));
+		const parent = path.join(root, 'parent.hcl');
+		await fs.writeFile(parent, 'inputs = {\n  region = local.nope\n  zone   = local.missing\n}\n');
+		const unitDir = path.join(root, 'live', 'app');
+		await fs.mkdir(unitDir, {recursive: true});
+		await fs.writeFile(path.join(unitDir, 'terragrunt.hcl'), 'include "root" {\n  path = find_in_parent_folders("parent.hcl")\n}\n');
+
+		const json = spawnSync(process.execPath, [cli, 'hcl', 'validate', '--json', '--working-dir', root], {cwd: root, encoding: 'utf8'});
+		expect(json.status).to.equal(1, json.stderr);
+		expect(JSON.parse(json.stdout).map((item: {range: {filename: string; start: {line: number; column: number}}; detail: string}) =>
+			[item.range.filename, item.range.start.line, item.range.start.column, item.detail])).to.deep.equal([
+			[parent, 2, 12, 'Undefined local value "nope"'],
+			[parent, 3, 12, 'Undefined local value "missing"']
+		]);
+
+		const text = spawnSync(process.execPath, [cli, 'hcl', 'validate', '--working-dir', root], {cwd: root, encoding: 'utf8'});
+		expect(text.stderr).to.equal([
+			`${parent}: HCL validation error: Undefined local value "nope"`,
+			`${parent}: HCL validation error: Undefined local value "missing"`,
+			''
+		].join('\n'));
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
 	it('reports a fault written beside a dependency output when validating', async () => {
 		const cli = path.resolve('dist/cli.cjs');
 		const body = dependencyBlock([]);
