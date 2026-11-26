@@ -385,6 +385,12 @@ export interface RuntimeValue<T extends ValueType> {
 	value: RuntimeValueType<T>;
 	/** Set on a value sops stored encrypted, read from a file that could not be decrypted: there, but not to be shown. */
 	encrypted?: true;
+	/**
+	 * Set on a placeholder for an element of a list or object, or a local read by `read_terragrunt_config`, whose value
+	 * cannot be known yet: what it holds is why. Its siblings stay readable; reading it, or computing from anything
+	 * holding it, raises that error.
+	 */
+	unresolved?: Error;
 }
 
 /** What a sops read gives back: the decrypted document, or the encrypted one when the decrypt failed and the caller asked for it. */

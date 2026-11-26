@@ -561,7 +561,7 @@ export class ConfigEvaluator {
 		evaluate: () => Promise<RuntimeValue<ValueType>>
 	): Promise<RuntimeValue<ValueType> | undefined> {
 		try {
-			return await evaluate();
+			return wholeValue(await evaluate());
 		} catch (error) {
 			if (!this.options.partialRender || !(error instanceof UnresolvedRenderValueError)) throw error;
 			this.renderUnresolved.push({file, field, reason: error.message});
@@ -1396,7 +1396,7 @@ export class ConfigEvaluator {
 					this.newUnitContext(target),
 					() => this.evaluateFile(target, fileContent, scope.workspaceRoot)
 				);
-				return this.readConfigObject(result);
+				return this.readConfigObject(result, true);
 			},
 			readTFVarsFile: async (relativePath: string) => {
 				this.assertTrusted('read_tfvars_file');
@@ -1518,15 +1518,36 @@ export class ConfigEvaluator {
 		return blocks;
 	}
 
-	private async readConfigObject(result: FileResult): Promise<RuntimeValue<ValueType>> {
-		for (const [name, issue] of result.unresolvedInputs) {
-			this.renderUnresolved.push({file: issue.file, field: `inputs.${name}`, reason: issue.reason});
+	/**
+	 * A configuration as one object, as `render` writes it and `read_terragrunt_config` gives it.
+	 *
+	 * @param result the evaluated configuration.
+	 * @param read whether `read_terragrunt_config` is reading it. Where an unknown value is not a failure (a partial
+	 *   render or a sops file read as written), its `locals` and `inputs` then hold placeholders for the values that
+	 *   cannot be known yet, so the reader can read the rest and only what reads a placeholder is unknown. Otherwise a
+	 *   field that cannot be known is left out and reported.
+	 * @returns the configuration object.
+	 */
+	private async readConfigObject(result: FileResult, read = false): Promise<RuntimeValue<ValueType>> {
+		const placeholders = read && (this.options.partialRender === true || this.options.readEncryptedSops === true);
+		if (!placeholders) {
+			for (const [name, issue] of result.unresolvedInputs) {
+				this.renderUnresolved.push({file: issue.file, field: `inputs.${name}`, reason: issue.reason});
+			}
 		}
 		const output = new Map<string, RuntimeValue<ValueType>>();
-		const locals = new Map<string, RuntimeValue<ValueType>>();
-		for (const name of result.scope.locals.keys()) {
-			const value = await this.renderField(result.filePath, `locals.${name}`, () => this.resolveLocal(result.scope, name));
-			if (value !== undefined) locals.set(name, value);
+		let locals = new Map<string, RuntimeValue<ValueType>>();
+		if (placeholders) {
+			locals = await this.localsMap(result.scope);
+		} else {
+			for (const name of result.scope.locals.keys()) {
+				const value = await this.renderField(result.filePath, `locals.${name}`, () => this.resolveLocal(result.scope, name));
+				if (value !== undefined) locals.set(name, value);
+			}
+		}
+		const inputs = new Map(result.inputs ?? []);
+		if (placeholders) {
+			for (const [name, issue] of result.unresolvedInputs) inputs.set(name, unresolvedPlaceholder(new UnresolvedRenderValueError(issue.reason)));
 		}
 		output.set('dependencies', makeNullValue());
 		output.set('dependency', makeObjectValue(new Map()));
@@ -1541,7 +1562,7 @@ export class ConfigEvaluator {
 		output.set('terraform_version_constraint', makeStringValue(''));
 		output.set('terragrunt_version_constraint', makeStringValue(''));
 		output.set('locals', locals.size > 0 ? makeObjectValue(locals) : makeNullValue());
-		output.set('inputs', result.inputs !== null ? makeObjectValue(result.inputs) : makeObjectValue(new Map()));
+		output.set('inputs', makeObjectValue(inputs));
 		const terraform = new Map<string, RuntimeValue<ValueType>>();
 		for (const [name, node] of result.scope.terraform) {
 			const value = await this.renderField(result.filePath, `terraform.${name}`, () => this.evalNode(node, result.scope));
@@ -1666,6 +1687,15 @@ export class ConfigEvaluator {
 		}
 	}
 
+	/**
+	 * Evaluates a local once per scope, sharing the evaluation with concurrent readers.
+	 *
+	 * @param scope the scope declaring it.
+	 * @param name its name.
+	 * @returns its value, which may hold placeholders for values that cannot be known yet: a reader selects from it,
+	 *   and checks it with {@link wholeValue} before using it whole.
+	 * @throws a fault in it, a cycle through it, or why it cannot be known when its whole value cannot.
+	 */
 	private async resolveLocal(scope: Scope, name: string): Promise<RuntimeValue<ValueType>> {
 		const cached = scope.localCache.get(name);
 		if (cached !== undefined) return cached;
@@ -1685,7 +1715,7 @@ export class ConfigEvaluator {
 		assertLocalReadsOnlyLocalsRoots(node, scope.filePath);
 		const evaluation = this.localResolutionPath.run(
 			[...activePath, { scope, name }],
-			() => this.evalNode(node, scope)
+			() => this.evalPartial(node, scope)
 		);
 		scope.localPending.set(name, evaluation);
 		try {
@@ -1895,6 +1925,27 @@ export class ConfigEvaluator {
 		return scope;
 	}
 
+	/**
+	 * A scope's locals as one object, as `include.<name>.locals` and `read_terragrunt_config(…).locals` give them. A local
+	 * whose value cannot be known yet is a placeholder, so the locals beside it can still be read.
+	 *
+	 * @param scope the scope declaring them.
+	 * @returns the locals by name.
+	 * @throws a fault in any of them.
+	 */
+	private async localsMap(scope: Scope): Promise<Map<string, RuntimeValue<ValueType>>> {
+		const locals = new Map<string, RuntimeValue<ValueType>>();
+		for (const name of scope.locals.keys()) {
+			try {
+				locals.set(name, await this.resolveLocal(scope, name));
+			} catch (error) {
+				if (!(error instanceof UnresolvedRenderValueError)) throw error;
+				locals.set(name, unresolvedPlaceholder(error));
+			}
+		}
+		return locals;
+	}
+
 	private async resolveIncludePath(include: IncludeRef, parts: string[]): Promise<RuntimeValue<ValueType>> {
 		if (parts.length === 0) throw new Error('include reference requires a path');
 		const head = parts[0];
@@ -1902,11 +1953,7 @@ export class ConfigEvaluator {
 		if (head === 'locals') {
 			// `include.<name>.locals` with no trailing name is the whole map.
 			if (parts.length < 2) {
-				const all = new Map<string, RuntimeValue<ValueType>>();
-				for (const name of result.scope.locals.keys()) {
-					all.set(name, await this.resolveLocal(result.scope, name));
-				}
-				return makeObjectValue(all);
+				return makeObjectValue(await this.localsMap(result.scope));
 			}
 			const value = await this.resolveLocal(result.scope, parts[1]);
 			return this.traverse(value, parts.slice(2), parts[1]);
@@ -1935,6 +1982,7 @@ export class ConfigEvaluator {
 	private traverse(value: RuntimeValue<ValueType>, parts: string[], base: string): RuntimeValue<ValueType> {
 		let current = unwrapSensitive(value);
 		for (const part of parts) {
+			current = selectable(current);
 			if (current.type === 'object' || current.type === 'block') {
 				const map = current.value as Map<string, RuntimeValue<ValueType>>;
 				const next = map.get(part);
@@ -1955,7 +2003,7 @@ export class ConfigEvaluator {
 	}
 
 	private getAttribute(value: RuntimeValue<ValueType>, name: string): RuntimeValue<ValueType> {
-		const current = unwrapSensitive(value);
+		const current = selectable(value);
 		if (current.type !== 'object' && current.type !== 'block') {
 			throw new Error(`Cannot access attribute "${name}" on value of type ${current.type}`);
 		}
@@ -1966,7 +2014,7 @@ export class ConfigEvaluator {
 	}
 
 	private indexValue(base: RuntimeValue<ValueType>, index: RuntimeValue<ValueType>): RuntimeValue<ValueType> {
-		const current = unwrapSensitive(base);
+		const current = selectable(base);
 		if (current.type === 'array') {
 			if (index.type !== 'number') throw new Error('List index must be a number');
 			const items = current.value as RuntimeValue<ValueType>[];
@@ -1994,9 +2042,22 @@ export class ConfigEvaluator {
 	 *
 	 * @param node the expression.
 	 * @param scope the scope of the file it is written in.
-	 * @returns its value.
+	 * @returns its value, holding no placeholder for a value that cannot be known yet.
+	 * @throws why such a value cannot be known, when the expression's value is or holds one.
 	 */
 	private async evalNode(node: TNode | undefined, scope: Scope): Promise<RuntimeValue<ValueType>> {
+		return wholeValue(await this.evalPartial(node, scope));
+	}
+
+	/**
+	 * Evaluates an expression as {@link evalNode} does, but gives back a value that holds placeholders for values that
+	 * cannot be known yet, so a reader can still select what is beside them.
+	 *
+	 * @param node the expression.
+	 * @param scope the scope of the file it is written in.
+	 * @returns its value, which may be or hold such a placeholder.
+	 */
+	private async evalPartial(node: TNode | undefined, scope: Scope): Promise<RuntimeValue<ValueType>> {
 		if (!node) throw new Error('Cannot evaluate an empty expression');
 		try {
 			return await this.evalExpression(node, scope);
@@ -2088,6 +2149,24 @@ export class ConfigEvaluator {
 	}
 
 	/**
+	 * Evaluates an element of a list or object literal. One that cannot be known yet is given a placeholder rather than
+	 * making the whole literal unknown, so a reader can still select the elements beside it.
+	 *
+	 * @param node the element.
+	 * @param scope the scope of the file it is written in.
+	 * @returns its value, or a placeholder when it cannot be known yet.
+	 * @throws a fault in it.
+	 */
+	private async evalElement(node: TNode | undefined, scope: Scope): Promise<RuntimeValue<ValueType>> {
+		try {
+			return await this.evalPartial(node, scope);
+		} catch (error) {
+			if (error instanceof UnresolvedRenderValueError) return unresolvedPlaceholder(error);
+			throw error;
+		}
+	}
+
+	/**
 	 * Runs every step, carrying on past one that cannot be known yet and stopping at the first fault.
 	 *
 	 * @param steps the steps, in the order they are written.
@@ -2131,7 +2210,7 @@ export class ConfigEvaluator {
 			case 'null_lit':
 				return makeNullValue();
 			case 'array_lit':
-				return makeArrayValue(await this.evalOperands(node.children ?? [], scope, true));
+				return makeArrayValue(await this.settleOperands((node.children ?? []).map(child => () => this.evalElement(child, scope)), true));
 			case 'object':
 				return this.evalObject(node, scope);
 			case 'interpolated_string':
@@ -2160,10 +2239,13 @@ export class ConfigEvaluator {
 			}
 			case 'member_access': {
 				const member = String(node.children?.[1]?.value ?? '');
-				return this.traverse(await this.evalNode(node.children?.[0], scope), member.split('.'), member);
+				return this.traverse(await this.evalPartial(node.children?.[0], scope), member.split('.'), member);
 			}
 			case 'index_expression': {
-				const [collection, index] = await this.evalOperands([node.children?.[0], node.children?.[1]], scope);
+				const [collection, index] = await this.settleOperands([
+					() => this.evalPartial(node.children?.[0], scope),
+					() => this.evalNode(node.children?.[1], scope)
+				]);
 				return this.indexValue(collection, computable(index));
 			}
 			case 'range_expression': {
@@ -2251,8 +2333,11 @@ export class ConfigEvaluator {
 				return [async () => {
 					const keyNode = child.children?.find(c => c.type === 'object_key');
 					const valueNode = child.children?.find(c => c.type !== 'attribute_identifier' && c.type !== 'object_key');
-					if (!keyNode) return [{ key: String(child.value), value: await this.evalNode(valueNode, scope), inherited: false }];
-					const [key, value] = await this.evalOperands([keyNode.children?.[0], valueNode], scope);
+					if (!keyNode) return [{ key: String(child.value), value: await this.evalElement(valueNode, scope), inherited: false }];
+					const [key, value] = await this.settleOperands([
+						() => this.evalNode(keyNode.children?.[0], scope),
+						() => this.evalElement(valueNode, scope)
+					]);
 					return [{ key: coerceToString(computable(key)), value, inherited: false }];
 				}];
 			}
@@ -2458,7 +2543,7 @@ export class ConfigEvaluator {
 	}
 
 	private async evalSplat(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
-		const base = await this.evalNode(node.children?.[0], scope);
+		const base = selectable(await this.evalPartial(node.children?.[0], scope));
 		const attribute = node.children?.[1] ? String(node.children[1].value ?? '') : null;
 		if (base.type !== 'array') throw new Error('Splat requires a list');
 		const items = base.value as RuntimeValue<ValueType>[];
@@ -2750,7 +2835,7 @@ export class ConfigEvaluator {
 			// is being resolved. Do not eagerly recurse into that one merely to
 			// build the binding; guardedNamespace still fails if the body reads it.
 			if (activePath.some(entry => entry.scope === scope && entry.name === name)) continue;
-			resolved[name] = runtimeToPlain(await this.resolveLocal(scope, name));
+			resolved[name] = runtimeToPlain(wholeValue(await this.resolveLocal(scope, name)));
 		}
 		return resolved;
 	}
@@ -3079,6 +3164,60 @@ function holdsEncrypted(value: RuntimeValue<ValueType>): boolean {
 function computable(value: RuntimeValue<ValueType>): RuntimeValue<ValueType> {
 	if (holdsEncrypted(value)) throw new EncryptedSopsValueError();
 	return value;
+}
+
+/**
+ * A placeholder for a value that cannot be known yet, standing where it is written so the values beside it can still
+ * be read.
+ *
+ * @param error why it cannot be known.
+ * @returns the placeholder.
+ */
+function unresolvedPlaceholder(error: UnresolvedRenderValueError): RuntimeValue<ValueType> {
+	return { ...makeNullValue(), unresolved: error };
+}
+
+/**
+ * The first placeholder for a value that cannot be known yet in a value, searching depth first.
+ *
+ * @param value the value.
+ * @returns why the placeholder's value cannot be known, or undefined when the value holds none.
+ */
+function firstUnresolved(value: RuntimeValue<ValueType>): Error | undefined {
+	if (value.unresolved) return value.unresolved;
+	const inner = value.value;
+	const items = Array.isArray(inner) ? inner : inner instanceof Map ? inner.values() : [];
+	for (const item of items) {
+		const found = firstUnresolved(item);
+		if (found) return found;
+	}
+	return undefined;
+}
+
+/**
+ * A value about to be used whole, rather than selected from.
+ *
+ * @param value the value.
+ * @returns the value, when it holds no placeholder.
+ * @throws why a placeholder's value cannot be known, when it is or holds one.
+ */
+function wholeValue(value: RuntimeValue<ValueType>): RuntimeValue<ValueType> {
+	const unresolved = firstUnresolved(value);
+	if (unresolved) throw unresolved;
+	return value;
+}
+
+/**
+ * A value about to be selected from by attribute, key or index.
+ *
+ * @param value the value.
+ * @returns the value with any sensitive wrapper removed.
+ * @throws why its value cannot be known, when it is a placeholder: its shape is not known either.
+ */
+function selectable(value: RuntimeValue<ValueType>): RuntimeValue<ValueType> {
+	const current = unwrapSensitive(value);
+	if (current.unresolved) throw current.unresolved;
+	return current;
 }
 
 /**
